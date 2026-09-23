@@ -219,8 +219,11 @@ if(OPENADS_WITH_TLS)
     set(MBEDTLS_INSTALL            OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         mbedtls
-        URL      https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v3.6.2.tar.gz
-        URL_HASH SHA256=f4a876b1f6921ad0aefb445f974ef62414d33928640b2c45555c5e64a196a1a8
+        GIT_REPOSITORY      https://github.com/Mbed-TLS/mbedtls.git
+        GIT_TAG             v3.6.2
+        GIT_SHALLOW         TRUE
+        GIT_SUBMODULES      framework
+        GIT_SUBMODULES_RECURSE TRUE
     )
     FetchContent_MakeAvailable(mbedtls)
     message(STATUS "OpenADS: TLS enabled via vendored mbedtls 3.6.2 (statically linked)")

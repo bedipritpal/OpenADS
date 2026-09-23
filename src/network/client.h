@@ -46,6 +46,19 @@ struct AggregateBatch {
 
 struct RemoteTable;
 
+// Diagnostics only: optional per-frame hook, called after every
+// completed request/reply round trip (wire_trace). nullptr = off, which
+// is the default; the request path then pays one relaxed atomic load.
+// Arguments: connection, request opcode, first u32 of the request
+// payload (the table id for table-scoped opcodes; meaningless for
+// Hello/Connect/OpenTable), request payload bytes, reply opcode, reply
+// payload bytes, microseconds spent in send+receive.
+using FrameTraceHook = void (*)(const void* conn, std::uint8_t op,
+                                std::uint32_t tid, std::size_t req_bytes,
+                                std::uint8_t rep_op, std::size_t rep_bytes,
+                                long long us);
+void set_frame_trace_hook(FrameTraceHook hook) noexcept;
+
 // M12.5 — wire client used by ace64.dll's dual-mode dispatch.
 // `RemoteConnection` opens a TCP socket to an OpenADS server,
 // sends a Connect frame for the data_dir, and exposes a small
@@ -604,6 +617,8 @@ public:
                       std::vector<std::unique_ptr<RemoteTable>>& evicted);
     // Drain everything (disconnect). Caller really-closes each entry.
     void parked_flush(std::vector<std::unique_ptr<RemoteTable>>& out);
+    // Diagnostics (wire_trace): is an unexpired entry parked under key?
+    bool parked_contains(const std::string& key) const;
 
 private:
     std::vector<ParkedTable> parked_;

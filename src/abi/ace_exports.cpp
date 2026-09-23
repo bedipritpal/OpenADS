@@ -1483,11 +1483,15 @@ bool remote_table_has_index(const openads::network::RemoteTable* rt) {
 //
 // Same-ms runs read as locally served calls; an RTT-sized jump between
 // adjacent lines is exactly one wire round-trip.
-static void cli_trace_line(long long ms, const char* who, const char* op,
-                           const char* detail) {
+static bool cli_trace_on() {
     static const bool on = openads::util::client_setting_truthy(
         "OPENADS_WIRE_TRACE", "wire_trace");
-    if (!on) return;
+    return on;
+}
+
+static void cli_trace_line(long long ms, const char* who, const char* op,
+                           const char* detail) {
+    if (!cli_trace_on()) return;
     FILE* hf = std::fopen("C:/tmp/cli_trace.log", "a");
     if (hf == nullptr) return;
     std::fprintf(hf, "[+%9lldms]   [%-12.12s]   [%-20.20s]   %s\n", ms,
@@ -1533,6 +1537,27 @@ static void cli_trace_tbl(const openads::network::RemoteTable* rt,
     va_end(ap);
     buf[sizeof(buf) - 1] = 0;
     cli_trace_line(cli_trace_ms(), who.c_str(), op, buf);
+}
+
+// wire_trace: one grid line per completed wire round trip, so opens,
+// closes, seeks, locks and writes show up next to the nav lines above.
+// op/ack are wire opcodes (hex, see src/network/wire.h); tid is the
+// table id for table-scoped ops (match it to the "opened id=" line);
+// conn tells session-pool lanes apart.
+static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
+                                 std::uint32_t tid, std::size_t req_bytes,
+                                 std::uint8_t rep_op, std::size_t rep_bytes,
+                                 long long us) {
+    char buf[200];
+    std::snprintf(buf, sizeof(buf),
+                  "op=0x%02X tid=%u req=%lu ack=0x%02X ackb=%lu us=%lld conn=%04X",
+                  static_cast<unsigned>(op), static_cast<unsigned>(tid),
+                  static_cast<unsigned long>(req_bytes),
+                  static_cast<unsigned>(rep_op),
+                  static_cast<unsigned long>(rep_bytes), us,
+                  static_cast<unsigned>(
+                      reinterpret_cast<std::uintptr_t>(conn) & 0xFFFFu));
+    cli_trace_line(cli_trace_ms(), "wire", "frame", buf);
 }
 
 void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
@@ -6698,6 +6723,9 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
                         UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {
     arc2_trace("AdsConnect60");
+    if (cli_trace_on()) {
+        openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
+    }
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                           "phConnect is null");
     auto path = openads::abi::to_internal(pucServer, 0);
@@ -7388,6 +7416,26 @@ bool remote_table_has_relations(ADSHANDLE hTable) {
 // so no peer can invalidate them behind our back — an active order
 // resumes exactly (Vouch keeps IndexOrd()=1 across USEs; excluding it
 // would empty the pool).
+// wire_trace only: first rule (in remote_table_poolable order, then
+// relations) that keeps a closing table out of the park. Mirrors the
+// checks below; it never decides anything itself.
+const char* remote_table_unpoolable_reason(
+        openads::network::RemoteTable* rt, ADSHANDLE hTable) {
+    if (rt == nullptr || rt->conn == nullptr) return "no_connection";
+    if (!rt->close_counted) return "sql_cursor";
+    if (rt->open_exclusive) return "exclusive";
+    if (!rt->pending_sets.empty()) return "pending_sets";
+    if (rt->ever_locked) return "ever_locked";
+    if (rt->scope_touched) return "scope";
+    if (!rt->aof_expr.empty()) return "aof";
+    if (!rt->filter_expr.empty()) return "filter";
+    if (rt->flush_file_pending || rt->close_all_indexes_pending)
+        return "teardown_pending";
+    if (rt->pending_order) return "pending_order";
+    if (remote_table_has_relations(hTable)) return "relations";
+    return "none";
+}
+
 bool remote_table_poolable(openads::network::RemoteTable* rt) {
     if (rt == nullptr || rt->conn == nullptr) return false;
     if (!rt->close_counted) return false;   // SQL cursors etc.
@@ -7831,6 +7879,39 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                 adopted = std::move(hit);
             }
         }
+        if (cli_trace_on()) {
+            // Park diagnostics: hit/miss for this lane, plus whether
+            // another lane of the same session pool holds it parked.
+            char pbuf[320];
+            if (adopted) {
+                std::snprintf(pbuf, sizeof(pbuf), "park hit id=%u %.200s",
+                              static_cast<unsigned>(adopted->id),
+                              name.c_str());
+            } else {
+                const std::string pk = remote_pool_key(name, alias, usMode);
+                bool other_lane = false;
+                auto pit = remote_lane_pool_of().find(rc);
+                if (pit != remote_lane_pool_of().end() &&
+                    pit->second != nullptr) {
+                    for (auto* ln : pit->second->lanes) {
+                        if (ln != nullptr && ln != rc &&
+                            ln->parked_contains(pk)) {
+                            other_lane = true;
+                            break;
+                        }
+                    }
+                }
+                std::snprintf(pbuf, sizeof(pbuf),
+                              "park miss%s conn=%04X %.200s",
+                              other_lane ? " (parked on other lane)" : "",
+                              static_cast<unsigned>(
+                                  reinterpret_cast<std::uintptr_t>(rc) &
+                                  0xFFFFu),
+                              name.c_str());
+            }
+            cli_trace_line(cli_trace_ms(), alias.c_str(), "AdsOpenTable",
+                           pbuf);
+        }
         if (adopted) {
             adopted->row_valid = false;
             adopted->rec_count_cached = false;
@@ -7907,6 +7988,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         rt->open_mode_raw = usMode;
         rt->open_exclusive =
             (map_open_mode(usMode) == openads::engine::OpenMode::Exclusive);
+        cli_trace_tbl(rt.get(), "AdsOpenTable", "opened id=%u mode=%u",
+                      static_cast<unsigned>(rt->id),
+                      static_cast<unsigned>(usMode));
         rc->deferred_open_tables += 1;
         Handle gh = s.registry.register_object(
             HandleKind::RemoteTable, rt.get());
@@ -10849,7 +10933,19 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
                 // reading its members is use-after-move (it crashed).
                 std::string pkey = remote_pool_key(owned->name, owned->alias,
                                                    owned->open_mode_raw);
+                openads::network::RemoteTable* traced = owned.get();
+                if (cli_trace_on()) {
+                    cli_trace_tbl(traced, "AdsCloseTable", "parked id=%u",
+                                  static_cast<unsigned>(traced->id));
+                }
                 rc->parked_store(std::move(pkey), std::move(owned), evicted);
+                if (cli_trace_on()) {
+                    for (auto& e : evicted) {
+                        cli_trace_tbl(e.get(), "AdsCloseTable",
+                                      "evicted from park id=%u",
+                                      e ? static_cast<unsigned>(e->id) : 0u);
+                    }
+                }
                 for (auto& e : evicted) remote_close_table_live(0, e.get());
                 return ok();
             }
@@ -10858,6 +10954,11 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
         // server close flushes data via its shadow handle and purges
         // the table's index bindings, so these frames would be waste.
         // A parked index snapshot dies with the handle (same purge).
+        if (cli_trace_on()) {
+            cli_trace_tbl(rt, "AdsCloseTable", "real close id=%u reason=%s",
+                          static_cast<unsigned>(rt->id),
+                          remote_table_unpoolable_reason(rt, hTable));
+        }
         rt->flush_file_pending = false;
         rt->close_all_indexes_pending = false;
         rt->indexes_parked = false;

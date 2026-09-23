@@ -330,6 +330,7 @@ add_executable(openads_unit_tests
     unit/network_version_test.cpp
     unit/network_nav_batch_test.cpp
     unit/network_use_budget_test.cpp
+    unit/network_frame_trace_test.cpp
     unit/network_teardown_batch_test.cpp
     unit/network_pool_mt_test.cpp
     unit/network_mutex_release_test.cpp

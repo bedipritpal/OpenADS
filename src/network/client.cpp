@@ -5,6 +5,7 @@
 #include "openads/error.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -233,8 +234,21 @@ bool parse_tls_uri(const std::string& uri,
     return parse_scheme_uri(uri, "tls://", host, port, data_dir);
 }
 
+namespace {
+std::atomic<FrameTraceHook> g_frame_trace_hook{nullptr};
+} // namespace
+
+void set_frame_trace_hook(FrameTraceHook hook) noexcept {
+    g_frame_trace_hook.store(hook, std::memory_order_relaxed);
+}
+
 util::Result<Frame> RemoteConnection::request(const Frame& f) {
     std::lock_guard<std::mutex> lk(mu_);
+    const FrameTraceHook trace_hook =
+        g_frame_trace_hook.load(std::memory_order_relaxed);
+    const auto trace_t0 = trace_hook != nullptr
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point{};
     // Fail fast on a disconnected handle. rddads hands us connection
     // handles that AdsDisconnect already tore down (its "current
     // connection" can point at a handle another thread just closed);
@@ -264,6 +278,17 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
         // Poison instead: fail fast with 5036 like a dropped connection.
         transport_->close();
         return rep.error();
+    }
+    if (trace_hook != nullptr) {
+        const long long us = static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - trace_t0).count());
+        const std::uint32_t tid =
+            f.payload.size() >= 4 ? read_u32_le(f.payload.data()) : 0u;
+        trace_hook(this, static_cast<std::uint8_t>(f.opcode), tid,
+                   f.payload.size(),
+                   static_cast<std::uint8_t>(rep.value().opcode),
+                   rep.value().payload.size(), us);
     }
     // M12.10 — Error frame payload prefixed with [u32 LE ace_code].
     // Parse it back into the util::Error so callers see the real ACE
@@ -445,6 +470,18 @@ void RemoteConnection::parked_store(std::string key,
         evicted.push_back(std::move(parked_.front().table));
         parked_.erase(parked_.begin());
     }
+}
+
+bool RemoteConnection::parked_contains(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(park_mu_);
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& e : parked_) {
+        const auto age =
+            std::chrono::duration_cast<std::chrono::seconds>(now - e.parked_at);
+        if (age.count() > static_cast<long long>(kParkedTtlSec)) continue;
+        if (e.key == key && e.table) return true;
+    }
+    return false;
 }
 
 void RemoteConnection::parked_flush(

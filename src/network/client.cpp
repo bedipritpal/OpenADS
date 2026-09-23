@@ -244,6 +244,7 @@ void set_frame_trace_hook(FrameTraceHook hook) noexcept {
 
 util::Result<Frame> RemoteConnection::request(const Frame& f) {
     std::lock_guard<std::mutex> lk(mu_);
+    frame_seq_.fetch_add(1, std::memory_order_relaxed);
     const FrameTraceHook trace_hook =
         g_frame_trace_hook.load(std::memory_order_relaxed);
     const auto trace_t0 = trace_hook != nullptr

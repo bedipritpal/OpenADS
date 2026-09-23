@@ -1669,10 +1669,58 @@ void remote_sync_keyno_gototop(openads::network::RemoteTable* rt) {
     }
 }
 
+// True when the server itself certified, on the latest cursor-affecting
+// frame, that this table's cursor sits on no row with BOTH limits set
+// (the xBase empty-cursor state), and nothing client-side could have
+// changed what that means since. Filters are excluded on purpose: the
+// server key/record counts do not apply them, so an empty filtered
+// cursor says nothing about the counts.
+bool remote_cursor_proven_empty(const openads::network::RemoteTable* rt) {
+    return rt != nullptr && rt->conn != nullptr &&
+           !rt->row_valid &&
+           rt->bound_bof_ok && rt->bound_bof &&
+           rt->bound_eof_ok && rt->bound_eof &&
+           rt->bound_seq == rt->conn->nav_seq() &&
+           !rt->pending_order &&
+           rt->pending_sets.empty() &&
+           rt->filter_expr.empty() && rt->aof_expr.empty();
+}
+
+// Memo key for AdsGetRecordLength re-opens: lowercased table name plus
+// the whole schema. Empty (= no memo) when the schema is not known.
+std::string remote_record_length_key(const openads::network::RemoteTable* rt) {
+    if (rt == nullptr || !rt->fields_cached || rt->fields.empty() ||
+        rt->name.empty()) {
+        return {};
+    }
+    std::string k = rt->name;
+    for (auto& c : k)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (const auto& fd : rt->fields) {
+        k.push_back('\x1f');
+        k += fd.name;
+        k.push_back('\x1e');
+        k += std::to_string(fd.type) + "," + std::to_string(fd.length) +
+             "," + std::to_string(fd.decimals);
+    }
+    return k;
+}
+
 void remote_sync_keyno_gotobottom(openads::network::RemoteTable* rt) {
     if (rt == nullptr) return;
     remote_clear_nav_boundaries(rt);
     if (remote_table_has_index(rt)) {
+        // An ordered GotoBottom that the server certified empty (no row,
+        // BOF+EOF) proves the order holds no visible keys in its scope:
+        // the server key count (scope + SET DELETED aware, filter-blind)
+        // is 0. Seed it instead of asking — the empty tables of a USE
+        // otherwise pay one GetKeyCount frame each here.
+        if (rt->active_index_id != 0 && !rt->key_count_cached &&
+            remote_cursor_proven_empty(rt)) {
+            rt->cached_key_count = 0;
+            rt->key_count_cached = true;
+            rt->key_counts[rt->active_index_id] = 0;
+        }
         // Bottom of the ORDER, not of the file: with a scope active the
         // last key is key #scoped_key_count, not #physical_rec_count.
         const std::uint32_t kc = remote_ensure_key_count(rt);
@@ -7988,6 +8036,21 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         rt->open_mode_raw = usMode;
         rt->open_exclusive =
             (map_open_mode(usMode) == openads::engine::OpenMode::Exclusive);
+        // Table type is decided by the server from the opened file's
+        // extension alone (.adt -> ADS_ADT, anything else -> ADS_CDX;
+        // see the GetTableType handler). The name we just opened carries
+        // that extension, so answer it locally. No extension -> leave it
+        // to the wire (the server may have resolved one).
+        {
+            std::string ext = std::filesystem::path(name).extension().string();
+            for (auto& c : ext)
+                c = static_cast<char>(std::tolower(
+                        static_cast<unsigned char>(c)));
+            if (!ext.empty()) {
+                rt->cached_table_type = (ext == ".adt") ? ADS_ADT : ADS_CDX;
+                rt->table_type_cached = true;
+            }
+        }
         cli_trace_tbl(rt.get(), "AdsOpenTable", "opened id=%u mode=%u",
                       static_cast<unsigned>(rt->id),
                       static_cast<unsigned>(usMode));
@@ -8652,11 +8715,23 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordLength(ADSHANDLE hTable, UNSIGNED32* pulLen) {
             *pulLen = rt->cached_record_length;
             return ok();
         }
+        // Re-open of a table already measured on this connection with
+        // the identical schema: same file layout, same length.
+        const std::string memo_key = remote_record_length_key(rt);
+        if (!memo_key.empty() &&
+            rt->conn->recall_record_length(memo_key,
+                                           rt->cached_record_length)) {
+            rt->record_length_cached = true;
+            *pulLen = rt->cached_record_length;
+            return ok();
+        }
         auto r = rt->conn->get_record_length(rt->id);
         if (!r) return fail(r.error());
         *pulLen = r.value();
         rt->cached_record_length = r.value();
         rt->record_length_cached = true;
+        if (!memo_key.empty())
+            rt->conn->remember_record_length(memo_key, r.value());
         return ok();
     }
     Table* t = get_table(hTable);
@@ -10041,6 +10116,24 @@ UNSIGNED32 ENTRYPOINT AdsRefreshRecord(ADSHANDLE hTable) {
     arc2_trace("AdsRefreshRecord");
     if (auto* rt = get_remote_table(hTable)) {
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
+        // Refresh right after a GotoRecord on this handle, with nothing
+        // at all sent to the server in between (no lock, write, nav or
+        // read frame) and the cursor still on the row that ack carried:
+        // the server's GotoRecord had just re-read that row from disk,
+        // which is all a refresh does. Serve it from that ack.
+        if (rt->goto_row_fresh && rt->row_valid && rt->conn != nullptr &&
+            rt->goto_row_frame_seq == rt->conn->frame_seq() &&
+            rt->current_recno == rt->goto_row_recno &&
+            rt->cursor_lag == 0 && rt->pending_sets.empty()) {
+            rt->goto_row_fresh = false;
+            cli_trace_tbl(rt, "AdsRefreshRecord", "served from GotoRecord ack");
+            rt->invalidate_prefetch();
+            rt->rec_count_cached = false;
+            rt->key_count_cached = false;
+            rt->key_counts.clear();
+            return ok();
+        }
+        rt->goto_row_fresh = false;
         remote_settle_cursor(rt);                   // M12.21 option C
         rt->row_valid = false;                      // M12.17 cache invalidation
         rt->rec_count_cached = false;
@@ -10113,8 +10206,34 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         // walk on the very next AdsGetRelKeyPos call (~22 sec for 9500 records).
         const std::uint32_t prev_recno =
             rt->row_valid ? rt->current_recno : 0u;
-        auto r = rt->conn->goto_record(rt, ulRecord);
-        if (!r) return fail(r.error());
+        // GO 0 on a table the server certified physically EMPTY with the
+        // cursor already in the empty (BOF+EOF, no row) state: the server
+        // keeps that state (Table::goto_record preserves the phantom
+        // position on GO 0 even if another station appended meanwhile)
+        // and would send back exactly the bounds/recno we already hold.
+        // Answer it locally. GO n>0 always goes to the wire (a peer may
+        // have appended record n). Only for record count 0: on a
+        // non-empty table GO 0 moves the server's engine cursor.
+        const bool empty_goto =
+            ulRecord == 0u &&
+            remote_cursor_proven_empty(rt) &&
+            rt->count_bound_ok && rt->count_bound == 0 &&
+            rt->count_bound_seq == rt->conn->nav_seq();
+        rt->goto_row_fresh = false;
+        if (empty_goto) {
+            cli_trace_tbl(rt, "AdsGotoRecord", "served locally (empty table)");
+            rt->invalidate_prefetch();
+            // A real frame would have expired the duplicate-nav stamp.
+            rt->last_nav = 0;
+        } else {
+            auto r = rt->conn->goto_record(rt, ulRecord);
+            if (!r) return fail(r.error());
+            if (rt->row_valid) {
+                rt->goto_row_fresh     = true;
+                rt->goto_row_frame_seq = rt->conn->frame_seq();
+                rt->goto_row_recno     = rt->current_recno;
+            }
+        }
         if (remote_table_has_index(rt)) {
             // Only invalidate when the cursor actually moved: same-record
             // restores (the xbrowse common case) keep the cached key number.

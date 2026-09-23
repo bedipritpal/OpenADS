@@ -545,6 +545,32 @@ public:
     util::Result<void> mutex_unlock(const std::string& name);
     util::Result<void> mutex_destroy(const std::string& name);
 
+    // Count of wire round trips issued on this connection (every
+    // request(), reads included). Unlike nav_seq() this also moves on
+    // locks, fetches and counts, so "no frame since X" means nothing at
+    // all reached the server in between (used by AdsRefreshRecord to
+    // serve the row a GotoRecord ack just delivered).
+    std::uint64_t frame_seq() const noexcept {
+        return frame_seq_.load(std::memory_order_relaxed);
+    }
+
+    // Per-connection record-length memo for re-opens of the same table.
+    // Keyed by lowercased table name + the full schema (names, types,
+    // widths, decimals) from the open ack, so any restructure changes
+    // the key and misses. Thread-safe.
+    bool recall_record_length(const std::string& key,
+                              std::uint32_t& out) {
+        std::lock_guard<std::mutex> lk(reclen_mu_);
+        auto it = reclen_memo_.find(key);
+        if (it == reclen_memo_.end()) return false;
+        out = it->second;
+        return true;
+    }
+    void remember_record_length(const std::string& key, std::uint32_t v) {
+        std::lock_guard<std::mutex> lk(reclen_mu_);
+        if (reclen_memo_.size() < 4096) reclen_memo_[key] = v;
+    }
+
 private:
     util::Result<Frame> request(const Frame& f);
 
@@ -571,6 +597,10 @@ private:
     // staleness is impossible by construction: observing a change
     // requires a cursor-affecting frame, which is exactly what bumps.
     std::atomic<std::uint64_t>  nav_seq_{0};
+    // See frame_seq(): bumped by every request().
+    std::atomic<std::uint64_t>  frame_seq_{0};
+    std::mutex                  reclen_mu_;
+    std::unordered_map<std::string, std::uint32_t> reclen_memo_;
     // Raw HelloAck payload (see above). Written once during
     // connect_with_transport, read afterwards without mu_ (the
     // connection is fully established before any other thread
@@ -870,6 +900,15 @@ struct RemoteTable {
     std::uint16_t            cached_table_type = 0;
     bool                     record_length_cached = false;
     std::uint32_t            cached_record_length = 0;
+    // Set by a wire AdsGotoRecord that landed on a row: the connection
+    // frame_seq() right after the ack and the recno it delivered. While
+    // no other frame has gone out and the cursor still sits on that row,
+    // an AdsRefreshRecord would re-read the very row that ack carried
+    // (the server's GotoRecord already re-read it from disk), so the
+    // refresh is served from it with no round trip.
+    bool                     goto_row_fresh     = false;
+    std::uint64_t            goto_row_frame_seq = 0;
+    std::uint32_t            goto_row_recno     = 0;
     // Deferred teardown (WAN chattiness: rddads issues FlushFileBuffers
     // + CloseAllIndexes before every CloseTable — 2 wasted frames per
     // USE, since the server close flushes data and purges index

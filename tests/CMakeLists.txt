@@ -487,6 +487,13 @@ endif()
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests -tce=*[slow]*,*flaky*)
 add_test(NAME openads_unit_tests_slow COMMAND openads_unit_tests -tc=*[slow]* -tce=*flaky*)
 
+# Session-pool MT stress: the pool test in 30 fresh processes (each run
+# already repeats its 4-thread phase 25x). Catches rare races that one
+# in-suite pass misses. Every patch must keep this green.
+if(UNIX)
+    add_test(NAME network_pool_mt_repeat COMMAND sh -c "i=0; while [ $i -lt 30 ]; do \"$0\" -tc=\"Session pool: MT*\" >/dev/null 2>&1 || { echo \"pool MT test failed on run $i\"; \"$0\" -tc=\"Session pool: MT*\"; exit 1; }; i=$((i+1)); done; echo \"pool MT test: 30 clean runs\"" $<TARGET_FILE:openads_unit_tests>)
+endif()
+
 # SQL URI backend smoke (sqlite://): runs a focused doctest subset in CI.
 if(OPENADS_WITH_POSTGRESQL)
     add_test(NAME pg_live_smoke COMMAND openads_unit_tests

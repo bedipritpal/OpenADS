@@ -7318,6 +7318,12 @@ remote_table_store() {
 std::unique_ptr<openads::network::RemoteTable>
 remote_table_take(openads::network::RemoteTable* rt) {
     if (rt == nullptr) return nullptr;
+    // remote_table_store() is shared by every thread (all lanes of a
+    // session pool): every access must hold s.mu. The park path in
+    // AdsCloseTable used to call this unlocked while other threads
+    // inserted/erased under s.mu -- a data race on the map that corrupted
+    // the heap under the 4-thread pool test (~1 run in 30 on Linux).
+    std::lock_guard<std::recursive_mutex> lk(state().mu);
     auto& m = remote_table_store();
     auto it = m.find(rt);
     if (it == m.end()) return nullptr;
@@ -7328,6 +7334,7 @@ remote_table_take(openads::network::RemoteTable* rt) {
 
 void remote_table_forget(openads::network::RemoteTable* rt) {
     if (rt == nullptr) return;
+    std::lock_guard<std::recursive_mutex> lk(state().mu);  // see take()
     remote_table_store().erase(rt);
 }
 
@@ -7346,6 +7353,7 @@ void remote_invalidate_index_parks(openads::network::RemoteConnection* rc) {
             if (c == l) return true;
         return false;
     };
+    std::lock_guard<std::recursive_mutex> lk(state().mu);  // shared store
     for (auto& kv : remote_table_store()) {
         auto* rt = kv.first;
         if (rt == nullptr || !lane_match(rt->conn)) continue;
@@ -7371,6 +7379,7 @@ std::string remote_pool_key(const std::string& name,
 // Parked tables keep no registry handle, so relations addressed by
 // handle could neither follow nor clean up -- real-close those.
 bool remote_table_has_relations(ADSHANDLE hTable) {
+    std::lock_guard<std::recursive_mutex> lk(state().mu);
     auto& tbl = relation_map();
     if (tbl.find(hTable) != tbl.end()) return true;
     for (auto& [parent, kids] : tbl) {
@@ -10140,6 +10149,8 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE hConn, UNSIGNED8* pucName,
         };
         const std::string want = stem_of(name);
         if (!want.empty()) {
+            // Shared store: hold s.mu for the scan (memory only, no wire).
+            std::lock_guard<std::recursive_mutex> lk_store(state().mu);
             for (auto& kv : remote_table_store()) {
                 auto* rt = kv.first;
                 if (rt == nullptr || rt->conn != ctx.remote) continue;

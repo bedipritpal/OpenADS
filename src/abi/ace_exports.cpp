@@ -4156,6 +4156,12 @@ bool& in_ri_check() {
 // Find the Connection that owns Table* t.
 Connection* conn_for_table(Table* t) {
     auto& s = state();
+    // Each Connection's table map is changed under s.mu (open/close), so
+    // the scan must hold it too. Without it a navigation on one session
+    // (snapshot_ri_pks) read a map another session was inserting into
+    // (found by ThreadSanitizer under the session-pool test). Lock order
+    // s.mu -> registry matches register_object/release.
+    std::lock_guard<std::recursive_mutex> lk(s.mu);
     Connection* found = nullptr;
     s.registry.for_each_handle([&](Handle, HandleKind k, void* p) {
         if (k != HandleKind::Connection || found) return;

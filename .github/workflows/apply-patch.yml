@@ -1,0 +1,300 @@
+name: apply-patch
+
+# Manually triggered: lands one reviewed patch on one branch, but only
+# after it applies cleanly, stays inside the allowed paths, builds, and
+# passes the full test suite. If any step fails, nothing is pushed.
+#
+# Inputs are never pasted into shell scripts directly. Every script
+# reads them from environment variables, so a crafted branch name or
+# message can't run commands.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to commit to (not the default branch)"
+        required: true
+        type: string
+      expected_head:
+        description: "Full 40-character SHA the branch must be at right now"
+        required: true
+        type: string
+      patch_b64:
+        description: "Patch (git diff or git format-patch output), base64-encoded"
+        required: true
+        type: string
+      commit_message:
+        description: "Commit message (one line)"
+        required: true
+        type: string
+      trigger_ci:
+        description: "After pushing, start ci.yml on the branch (needs workflow_dispatch in ci.yml)"
+        required: false
+        type: boolean
+        default: true
+
+# Default for every job: read-only. Only the commit job gets write.
+permissions:
+  contents: read
+
+# One run per branch at a time; a second run waits instead of racing.
+concurrency:
+  group: apply-patch-${{ inputs.branch }}
+  cancel-in-progress: false
+
+env:
+  # Safety limits. Edit here if you need to change them.
+  MAX_FILES: "20"
+  MAX_PATCH_B64_CHARS: "60000"
+  # Paths the patch may touch (extended regex, matched against the full
+  # path). .github/ is deliberately NOT allowed: a patch must never be
+  # able to change workflows, and GitHub also refuses workflow-file
+  # pushes made with the built-in token.
+  ALLOWED_PATHS_REGEX: '^(src/|include/|tests/|cmake/|docs/|bindings/|tools/|examples/|CMakeLists\.txt$|CMakePresets\.json$|CHANGELOG\.md$|README\.md$)'
+
+jobs:
+  validate:
+    name: Validate patch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check inputs
+        env:
+          BRANCH: ${{ inputs.branch }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          PATCH_B64: ${{ inputs.patch_b64 }}
+          COMMIT_MESSAGE: ${{ inputs.commit_message }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || [[ "$BRANCH" == *..* ]] || [[ "$BRANCH" == -* ]]; then
+            echo "::error::Branch name has characters that are not allowed."; exit 1
+          fi
+          if [[ "$BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "::error::Refusing to commit to the default branch ($DEFAULT_BRANCH)."; exit 1
+          fi
+          if ! [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::expected_head must be a full 40-character lowercase SHA."; exit 1
+          fi
+          if (( ${#PATCH_B64} > MAX_PATCH_B64_CHARS )); then
+            echo "::error::Patch is larger than $MAX_PATCH_B64_CHARS base64 characters."; exit 1
+          fi
+          if [[ -z "${COMMIT_MESSAGE// }" ]] || (( ${#COMMIT_MESSAGE} > 200 )); then
+            echo "::error::Commit message must be 1-200 characters."; exit 1
+          fi
+
+      - name: Check out branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check branch head matches expected_head
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$EXPECTED_HEAD" ]]; then
+            echo "::error::Branch is at $actual, expected $EXPECTED_HEAD. Someone pushed in between; nothing was changed."; exit 1
+          fi
+
+      - name: Decode patch
+        env:
+          PATCH_B64: ${{ inputs.patch_b64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Strip spaces and line breaks the web form may add. Any other
+          # damage makes decoding fail here, before anything is applied.
+          printf '%s' "$PATCH_B64" | tr -d ' \t\r\n' | base64 --decode > "$RUNNER_TEMP/change.patch"
+          if [[ ! -s "$RUNNER_TEMP/change.patch" ]]; then
+            echo "::error::Decoded patch is empty."; exit 1
+          fi
+          # Trailing blank lines after the last hunk (common when a patch
+          # is copied or saved by an editor) can be read as extra context
+          # lines and make the patch fail. Trim them to one final newline.
+          # Only the very end of the file is touched; hunk contents and
+          # line counts are left as they are.
+          python3 - "$RUNNER_TEMP/change.patch" <<'PY'
+          import re, sys
+          path = sys.argv[1]
+          data = open(path, "rb").read()
+          fixed = re.sub(rb"(?:\r?\n[ \t\r]*)+\Z", b"\n", data)
+          if fixed != data:
+              print("Trimmed trailing blank lines from the patch.")
+          open(path, "wb").write(fixed)
+          PY
+          sha256sum "$RUNNER_TEMP/change.patch"
+
+      - name: Apply patch and check paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check --index "$RUNNER_TEMP/change.patch"
+          git apply --index "$RUNNER_TEMP/change.patch"
+
+          # What actually changed, from git itself (covers adds, deletes
+          # and both sides of renames).
+          git diff --cached --name-status --no-renames > "$RUNNER_TEMP/changed.txt"
+          cat "$RUNNER_TEMP/changed.txt"
+          count="$(wc -l < "$RUNNER_TEMP/changed.txt")"
+          if (( count == 0 )); then
+            echo "::error::Patch changes nothing."; exit 1
+          fi
+          if (( count > MAX_FILES )); then
+            echo "::error::Patch touches $count files; the limit is $MAX_FILES."; exit 1
+          fi
+
+          bad=0
+          while IFS=$'\t' read -r status path; do
+            if ! [[ "$path" =~ $ALLOWED_PATHS_REGEX ]]; then
+              echo "::error::Path not allowed: $path"; bad=1
+            fi
+          done < "$RUNNER_TEMP/changed.txt"
+
+          # No symlinks, submodules or executable-bit changes.
+          # Raw lines look like ":<old mode> <new mode> ...". Reject any
+          # symlink (120000) or submodule (160000), and any mode change
+          # on an existing file.
+          if git diff --cached --raw --no-renames | awk '{o=substr($1,2); n=$2; if (o ~ /^(120000|160000)$/ || n ~ /^(120000|160000)$/ || (o != "000000" && n != "000000" && o != n)) bad=1} END {exit !bad}'; then
+            echo "::error::Patch changes file modes (symlink, submodule or executable bit)."; bad=1
+          fi
+          exit $bad
+
+      - name: Save patch for the next jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: change-patch
+          path: ${{ runner.temp }}/change.patch
+          retention-days: 3
+
+  build-and-test:
+    name: Build and test / ${{ matrix.preset }}${{ matrix.tls && ' / TLS' || '' }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            preset: ninja-clang
+            tls: false
+          - os: ubuntu-24.04
+            preset: ninja-clang
+            tls: true
+    steps:
+      - name: Check out the exact expected commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ inputs.expected_head }}
+          # Full history + tags, or git describe returns a bare SHA and
+          # network_version_test fails (same fix as ci.yml).
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Get patch
+        uses: actions/download-artifact@v4
+        with:
+          name: change-patch
+          path: ${{ runner.temp }}/patch
+
+      - name: Apply patch
+        shell: bash
+        run: git apply "$RUNNER_TEMP/patch/change.patch"
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      # Configure / Build / Test are the same commands as ci.yml.
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.preset }} \
+                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }}
+
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }} --config Release --target dbf_cdx_bench openads_unit_tests
+
+      - name: Test
+        run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure -C Release
+
+  commit:
+    name: Commit and push
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      # Only used to start ci.yml after the push (see last step).
+      actions: write
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Check head again
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          if [[ "$actual" != "$EXPECTED_HEAD" ]]; then
+            echo "::error::Branch moved to $actual while tests ran. Nothing pushed."; exit 1
+          fi
+
+      - name: Get patch
+        uses: actions/download-artifact@v4
+        with:
+          name: change-patch
+          path: ${{ runner.temp }}/patch
+
+      - name: Commit and push
+        env:
+          BRANCH: ${{ inputs.branch }}
+          COMMIT_MESSAGE: ${{ inputs.commit_message }}
+          ACTOR: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --index "$RUNNER_TEMP/patch/change.patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          printf '%s\n\nApplied by apply-patch workflow, run %s, started by %s.\n' \
+            "$COMMIT_MESSAGE" "$GITHUB_RUN_ID" "$ACTOR" > "$RUNNER_TEMP/msg.txt"
+          git commit -F "$RUNNER_TEMP/msg.txt"
+          # Plain push, never force. If the branch moved, GitHub rejects
+          # it and nothing lands.
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "Pushed $(git rev-parse HEAD) to $BRANCH"
+
+      # A push made with the built-in token does not start push-triggered
+      # workflows, and PR runs it causes wait for approval on the PR page.
+      # A workflow_dispatch request is the exception, so start ci.yml that
+      # way. This only works if ci.yml lists workflow_dispatch under on:,
+      # which a person has to add (this workflow can't edit workflow files).
+      # The commit has already landed, so a problem here is a warning only.
+      - name: Start CI on the branch
+        if: ${{ inputs.trigger_ci }}
+        env:
+          BRANCH: ${{ inputs.branch }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! grep -qE '^[[:space:]]*workflow_dispatch:' .github/workflows/ci.yml; then
+            echo "::warning::ci.yml has no workflow_dispatch trigger, so CI was not started. Approve the pending run on the PR page, or add workflow_dispatch to ci.yml."
+            exit 0
+          fi
+          if gh workflow run ci.yml --ref "$BRANCH"; then
+            echo "Started ci.yml on $BRANCH."
+          else
+            echo "::warning::Could not start ci.yml. The commit was pushed; start CI from the Actions tab."
+          fi

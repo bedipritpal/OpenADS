@@ -8096,8 +8096,18 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
             remote_flush_pools(rc);
             lk.lock();
         }
+        // Release s.mu across the OpenTable round-trip (same rule as the
+        // pool flush above and the production auto-open below). Holding
+        // it here blocks every other ABI call in the process for a full
+        // RTT, and with an in-process server (local serverd / tests) it
+        // deadlocks: this thread waits on rc's request lock, the lane
+        // thread that owns it waits on a reply, and the server handler
+        // for that reply waits on s.mu. Nothing below touches shared
+        // state until the lock is re-taken.
+        lk.unlock();
         auto otr = rc->open_table(name,
             static_cast<std::uint16_t>(map_open_mode(usMode)));
+        lk.lock();
         if (!otr) return fail(otr.error());
         auto& ot = otr.value();
         auto rt = std::make_unique<openads::network::RemoteTable>();

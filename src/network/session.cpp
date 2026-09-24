@@ -4967,6 +4967,20 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!tbl) { reply = err("Reindex: lookup failed"); break; }
             auto r = tbl->reindex();
             if (!r) { reply = err("Reindex: reindex failed"); break; }
+            // The table's bags (production .cdx/.z01 and any OpenIndex
+            // bag) are bound on the ABI twin (tbls_h_), not on the engine
+            // table, so the engine reindex above finds no index and is a
+            // no-op. Rebuild the twin's bags too, as Pack/Zap already do.
+            // Flush first so the rebuild reads every committed row;
+            // AdsGotoTop refreshes the twin's cached record count.
+            if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+                if (auto fl = tbl->flush(); !fl) {
+                    reply = err("Reindex: flush failed"); break;
+                }
+                (void)AdsGotoTop(hit->second);
+                UNSIGNED32 rrc = AdsReindex(hit->second);
+                if (rrc != 0) { reply = err("Reindex", rrc); break; }
+            }
             reply.opcode = Opcode::ReindexAck;
             break;
         }

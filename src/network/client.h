@@ -554,6 +554,14 @@ public:
         return frame_seq_.load(std::memory_order_relaxed);
     }
 
+    // Count of frames that can ADD rows or change row contents on the
+    // server (append, field writes, recall, SQL, pack/zap/reindex) sent on
+    // this connection. The empty-table window (see AdsSeek) closes as soon
+    // as this moves, so this station never misses its own new record.
+    std::uint64_t data_epoch() const noexcept {
+        return data_epoch_.load(std::memory_order_relaxed);
+    }
+
     // Per-connection record-length memo for re-opens of the same table.
     // Keyed by lowercased table name + the full schema (names, types,
     // widths, decimals) from the open ack, so any restructure changes
@@ -599,6 +607,7 @@ private:
     std::atomic<std::uint64_t>  nav_seq_{0};
     // See frame_seq(): bumped by every request().
     std::atomic<std::uint64_t>  frame_seq_{0};
+    std::atomic<std::uint64_t>  data_epoch_{0};
     std::mutex                  reclen_mu_;
     std::unordered_map<std::string, std::uint32_t> reclen_memo_;
     // Raw HelloAck payload (see above). Written once during
@@ -753,6 +762,11 @@ struct RemoteTable {
     std::uint32_t            count_bound    = 0;
     bool                     count_bound_ok = false;
     std::uint64_t            count_bound_seq = 0;
+    // Wall time of the last bound tail (server certification) and the
+    // connection data_epoch() at that moment. Drive the short "still
+    // empty" window for physically empty tables (AdsSeek/AdsGotoRecord).
+    std::chrono::steady_clock::time_point bound_at{};
+    std::uint64_t            bound_data_epoch = 0;
     // Last wire nav op on this table (0 = none/other, 1 = GotoTop,
     // 2 = GotoBottom), whether it produced a row, and the connection
     // nav_seq_ at the time. Serves two WAN-chattiness kills with one

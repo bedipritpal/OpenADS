@@ -10,6 +10,9 @@
 // Each case also checks the answers match what the wire would say, and
 // that the wire is still used when the proof does not hold.
 #include "doctest.h"
+
+#include <chrono>
+#include <thread>
 #include "mgmt/mg_stats.h"
 #include "network/server.h"
 #include "openads/ace.h"
@@ -119,7 +122,11 @@ TEST_CASE("Remote local answers: empty tables, table type, refresh") {
         CHECK(tt == ADS_CDX);
         CHECK(la_op(0x6A) - tt0 == 0u);
 
-        // GO n>0 is never answered locally (a peer may have appended).
+        // GO n>0 is not answered by these local answers (a peer may have
+        // appended). The separate still-empty window (OPENADS_EMPTY_TTL_MS,
+        // at most 2s) may answer it right after an empty certification, so
+        // let that window lapse first.
+        std::this_thread::sleep_for(std::chrono::milliseconds(2100));
         REQUIRE(AdsGotoRecord(hT, 1) == AE_SUCCESS);
         CHECK(la_op(0x58) - gr0 == 1u);
 

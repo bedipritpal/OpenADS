@@ -1686,6 +1686,64 @@ bool remote_cursor_proven_empty(const openads::network::RemoteTable* rt) {
            rt->filter_expr.empty() && rt->aof_expr.empty();
 }
 
+// "Still empty" window (user-approved trade-off, 23/09/2026): after the
+// server certifies a table physically EMPTY (record count 0) with the
+// cursor on no row (BOF+EOF), Seek / GO n on it are answered "not found"
+// locally for a short time instead of paying a round trip each. Vouch
+// probes its empty per-user settings tables ~280 times per startup.
+// Risk accepted: a record another STATION adds inside the window is seen
+// only when the window ends. This station's own writes (any append /
+// field write / SQL on this connection) close the window at once.
+// OPENADS_EMPTY_TTL_MS: window length, default 1500, 0 = off, max 2000.
+std::uint32_t remote_empty_ttl_ms() {
+    static const std::uint32_t v = [] {
+        const char* e = std::getenv("OPENADS_EMPTY_TTL_MS");
+        if (e == nullptr || *e == 0) return 1500u;
+        long x = std::strtol(e, nullptr, 10);
+        if (x < 0) x = 0;
+        if (x > 2000) x = 2000;
+        return static_cast<std::uint32_t>(x);
+    }();
+    return v;
+}
+
+bool remote_empty_window(const openads::network::RemoteTable* rt) {
+    if (rt == nullptr || rt->conn == nullptr) return false;
+    const std::uint32_t ttl = remote_empty_ttl_ms();
+    if (ttl == 0) return false;
+    if (rt->row_valid || !rt->pending_sets.empty() || rt->write_dirty)
+        return false;
+    if (!(rt->bound_bof_ok && rt->bound_bof &&
+          rt->bound_eof_ok && rt->bound_eof))
+        return false;
+    // The count must come from the same certification as the bounds.
+    if (!(rt->count_bound_ok && rt->count_bound == 0 &&
+          rt->count_bound_seq == rt->bound_seq))
+        return false;
+    if (rt->bound_data_epoch != rt->conn->data_epoch()) return false;
+    const auto age = std::chrono::steady_clock::now() - rt->bound_at;
+    return age >= std::chrono::steady_clock::duration::zero() &&
+           age <= std::chrono::milliseconds(ttl);
+}
+
+// Leave the table exactly as a wire answer on an empty table would:
+// no row, both limits, recno/count unchanged, certified at the current
+// seq (bound_at is NOT refreshed: the window runs from the last real
+// server answer, never extended by local answers).
+void remote_empty_restamp(openads::network::RemoteTable* rt) {
+    const std::uint64_t seq = rt->conn->nav_seq();
+    rt->row_valid = false;
+    rt->invalidate_prefetch();
+    rt->nav_at_bof = true;
+    rt->nav_at_eof = true;
+    rt->nav_not_bof = false;
+    rt->nav_not_eof = false;
+    rt->bound_seq = seq;
+    rt->recno_bound_seq = seq;
+    rt->count_bound_seq = seq;
+    rt->last_nav = 0;
+}
+
 // Memo key for AdsGetRecordLength re-opens: lowercased table name plus
 // the whole schema. Empty (= no memo) when the schema is not known.
 std::string remote_record_length_key(const openads::network::RemoteTable* rt) {
@@ -10229,17 +10287,26 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         // Answer it locally. GO n>0 always goes to the wire (a peer may
         // have appended record n). Only for record count 0: on a
         // non-empty table GO 0 moves the server's engine cursor.
-        const bool empty_goto =
+        const bool empty_goto_exact =
             ulRecord == 0u &&
             remote_cursor_proven_empty(rt) &&
             rt->count_bound_ok && rt->count_bound == 0 &&
             rt->count_bound_seq == rt->conn->nav_seq();
+        const bool empty_goto =
+            empty_goto_exact || remote_empty_window(rt);
         rt->goto_row_fresh = false;
         if (empty_goto) {
-            cli_trace_tbl(rt, "AdsGotoRecord", "served locally (empty table)");
-            rt->invalidate_prefetch();
-            // A real frame would have expired the duplicate-nav stamp.
-            rt->last_nav = 0;
+            if (empty_goto_exact) {
+                cli_trace_tbl(rt, "AdsGotoRecord", "served locally (empty table)");
+                rt->invalidate_prefetch();
+                // A real frame would have expired the duplicate-nav stamp.
+                rt->last_nav = 0;
+            } else {
+                cli_trace_tbl(rt, "AdsGotoRecord",
+                              "empty window: served locally want=%u",
+                              ulRecord);
+                remote_empty_restamp(rt);
+            }
         } else {
             auto r = rt->conn->goto_record(rt, ulRecord);
             if (!r) return fail(r.error());
@@ -20309,6 +20376,16 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             ri->parent->invalidate_prefetch();
             cli_trace_tbl(ri->parent, "AdsSeek", "key=%.24s",
                           key.c_str());
+        }
+        if (ri->parent != nullptr && remote_empty_window(ri->parent)) {
+            cli_trace_tbl(ri->parent, "AdsSeek",
+                          "empty window: not found (local)");
+            remote_empty_restamp(ri->parent);
+            ri->parent->found_cached  = true;
+            ri->parent->current_found = false;
+            if (pbFound) *pbFound = 0;
+            (void)u16KeyType;
+            return ok();
         }
         // RCB 07/14/2026: M12.24 -- pass the parent so the SeekAck's row trailer
         // lands straight in the row cache. Without it row_valid stays false and

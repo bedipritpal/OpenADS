@@ -245,6 +245,16 @@ void set_frame_trace_hook(FrameTraceHook hook) noexcept {
 util::Result<Frame> RemoteConnection::request(const Frame& f) {
     std::lock_guard<std::mutex> lk(mu_);
     frame_seq_.fetch_add(1, std::memory_order_relaxed);
+    switch (f.opcode) {
+        case Opcode::AppendBlank: case Opcode::SetField:
+        case Opcode::SetFields:   case Opcode::RecallRecord:
+        case Opcode::ExecuteSQL:  case Opcode::Reindex:
+        case Opcode::PackTable:   case Opcode::ZapTable:
+            data_epoch_.fetch_add(1, std::memory_order_relaxed);
+            break;
+        default:
+            break;
+    }
     const FrameTraceHook trace_hook =
         g_frame_trace_hook.load(std::memory_order_relaxed);
     const auto trace_t0 = trace_hook != nullptr
@@ -663,6 +673,8 @@ static void apply_bound_trailer(RemoteTable* rt, bool bof, bool eof,
     rt->recno_bound     = recno;
     rt->recno_bound_ok  = true;
     rt->recno_bound_seq = seq;
+    rt->bound_at         = std::chrono::steady_clock::now();
+    rt->bound_data_epoch = rt->conn->data_epoch();
     if (has_count) {
         rt->count_bound     = reccount;
         rt->count_bound_ok  = true;

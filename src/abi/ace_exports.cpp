@@ -1474,41 +1474,87 @@ bool remote_table_has_index(const openads::network::RemoteTable* rt) {
            (rt->active_index_id != 0 || !rt->index_by_tag.empty());
 }
 
-// Grid log for WAN diagnosis: fixed-width columns (3-space separated,
-// like ads_err.log) plus a variable-length detail tail, so both naked
-// eyes and analytical tools can parse it:
-//
-//   [+       123ms]   [V_USRCFG    ]   [AdsAtBOF            ]   nav=0 row=1
-//    | ms since trace start | table alias | operation       | detail...
-//
-// Same-ms runs read as locally served calls; an RTT-sized jump between
-// adjacent lines is exactly one wire round-trip.
+// Diagnostic WAN trace. Off unless wire_trace=1; no file opens or timestamps
+// on the disabled request path. Payload and seek keys are never logged.
 static bool cli_trace_on() {
     static const bool on = openads::util::client_setting_truthy(
         "OPENADS_WIRE_TRACE", "wire_trace");
     return on;
 }
 
+static const std::string& cli_trace_path() {
+    static const std::string path = [] {
+        auto p = openads::util::client_setting("OPENADS_WIRE_TRACE_FILE",
+                                                "wire_trace_file");
+        return p.empty() ? std::string("C:/tmp/cli_trace.log") : p;
+    }();
+    return path;
+}
+
+struct CliTraceState {
+    std::mutex mu;
+    std::map<std::pair<const void*, std::uint32_t>, std::string> tables;
+    std::map<std::pair<const void*, std::uint32_t>, std::string> indexes;
+};
+static CliTraceState& cli_trace_state() {
+    static CliTraceState trace;
+    return trace;
+}
+
+// Called after a successful open; table ID belongs to its connection,
+// not globally. Do not hold this mutex while performing any wire request.
+static void cli_trace_table_open(const openads::network::RemoteTable* rt) {
+    if (!cli_trace_on() || !rt || !rt->conn) return;
+    auto& trace = cli_trace_state();
+    std::lock_guard<std::mutex> lk(trace.mu);
+    trace.tables[{rt->conn, rt->id}] =
+        rt->alias.empty() ? rt->name : rt->alias;
+}
+static void cli_trace_table_close(const openads::network::RemoteTable* rt) {
+    if (!cli_trace_on() || !rt || !rt->conn) return;
+    auto& trace = cli_trace_state();
+    std::lock_guard<std::mutex> lk(trace.mu);
+    trace.tables.erase({rt->conn, rt->id});
+    for (const auto& entry : rt->index_by_tag)
+        trace.indexes.erase({rt->conn, entry.second});
+}
+
+static void cli_trace_write_locked(FILE* hf, long long ms,
+                                   const char* who, const char* op,
+                                   const char* detail) {
+    const auto now = std::chrono::system_clock::now();
+    const auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    const auto secs = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &secs);
+#else
+    localtime_r(&secs, &local);
+#endif
+    char stamp[32];
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
+    std::fprintf(hf, "%s.%03lld [+%9lldms] [%-20.20s] [%-20.20s] %s\n",
+                 stamp, static_cast<long long>(epoch_ms % 1000), ms,
+                 who ? who : "-", op ? op : "-", detail ? detail : "");
+}
+
 static void cli_trace_line(long long ms, const char* who, const char* op,
                            const char* detail) {
     if (!cli_trace_on()) return;
-    FILE* hf = std::fopen("C:/tmp/cli_trace.log", "a");
-    if (hf == nullptr) return;
-    std::fprintf(hf, "[+%9lldms]   [%-12.12s]   [%-20.20s]   %s\n", ms,
-                 who != nullptr ? who : "-",
-                 op != nullptr ? op : "-", detail != nullptr ? detail : "");
+    auto& trace = cli_trace_state();
+    std::lock_guard<std::mutex> lk(trace.mu);
+    FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
+    if (!hf) return;
+    cli_trace_write_locked(hf, ms, who, op, detail);
     std::fclose(hf);
 }
 
 static long long cli_trace_ms() {
-    // Millisecond stamp since the first traced call: adjacent-line gaps
-    // separate local answers (~0 ms) from wire round-trips (~RTT ms),
-    // which is the whole point of reading this log.
     static const auto t0 = std::chrono::steady_clock::now();
     return static_cast<long long>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - t0)
-            .count());
+            std::chrono::steady_clock::now() - t0).count());
 }
 
 static void cli_trace(const char* op, const char* fmt, ...) {
@@ -1520,16 +1566,11 @@ static void cli_trace(const char* op, const char* fmt, ...) {
     buf[sizeof(buf) - 1] = 0;
     cli_trace_line(cli_trace_ms(), "-", op, buf);
 }
-// Table-attributed variant: the alias (file name when the open
-// carried none) goes in the grid's table column, so repeated probe
-// blocks attribute to the table that paid them.
 static void cli_trace_tbl(const openads::network::RemoteTable* rt,
                           const char* op, const char* fmt, ...) {
-    std::string who;
-    if (rt != nullptr) {
-        who = !rt->alias.empty() ? rt->alias : rt->name;
-    }
-    if (who.empty()) who = "-";
+    if (!cli_trace_on()) return;
+    const std::string who = rt == nullptr ? "-" :
+        (!rt->alias.empty() ? rt->alias : rt->name);
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -1539,25 +1580,159 @@ static void cli_trace_tbl(const openads::network::RemoteTable* rt,
     cli_trace_line(cli_trace_ms(), who.c_str(), op, buf);
 }
 
-// wire_trace: one grid line per completed wire round trip, so opens,
-// closes, seeks, locks and writes show up next to the nav lines above.
-// op/ack are wire opcodes (hex, see src/network/wire.h); tid is the
-// table id for table-scoped ops (match it to the "opened id=" line);
-// conn tells session-pool lanes apart.
+static const char* cli_trace_opcode(std::uint8_t op) {
+    switch (op) {
+        case 0x01: return "Hello";
+        case 0x10: return "Connect";
+        case 0x12: return "Disconnect";
+        case 0x20: return "OpenTable";
+        case 0x22: return "CloseTable";
+        case 0x30: return "ExecuteSQL";
+        case 0x32: return "Fetch";
+        case 0x40: return "GotoTop";
+        case 0x42: return "Skip";
+        case 0x44: return "GetField";
+        case 0x46: return "GetRecordCount";
+        case 0x48: return "AtEOF";
+        case 0x4A: return "DescribeTable";
+        case 0x4C: return "AtBOF";
+        case 0x4E: return "GetRecordNum";
+        case 0x62: return "IsRecordDeleted";
+        case 0x64: return "GotoBottom";
+        case 0x66: return "IsFound";
+        case 0x68: return "RefreshRecord";
+        case 0x6A: return "GetTableType";
+        case 0x6C: return "GetRecordLength";
+        case 0x6E: return "GetNumIndexes";
+        case 0x70: return "GetLastAutoinc";
+        case 0x72: return "LockRecord";
+        case 0x74: return "UnlockRecord";
+        case 0x76: return "LockTable";
+        case 0x78: return "UnlockTable";
+        case 0x7A: return "PackTable";
+        case 0x7C: return "ZapTable";
+        case 0x7E: return "FlushFileBuffers";
+        case 0x80: return "CloseAllIndexes";
+        case 0x82: return "SetAOF";
+        case 0x84: return "ClearAOFRemote";
+        case 0x86: return "GetAOFOptLevel";
+        case 0x88: return "OpenIndex";
+        case 0x8A: return "CloseIndex";
+        case 0x8C: return "SetOrder";
+        case 0x8E: return "SetOrderByName";
+        case 0x90: return "Seek";
+        case 0x92: return "SeekLast";
+        case 0x94: return "CreateIndex";
+        case 0x96: return "SkipUnique";
+        case 0x98: return "SetScope";
+        case 0x9A: return "ClearScope";
+        case 0x9C: return "FetchCurrentRow";
+        case 0x50: return "AppendBlank";
+        case 0x52: return "SetField";
+        case 0x5E: return "SetFields";
+        case 0x54: return "DeleteRecord";
+        case 0x56: return "RecallRecord";
+        case 0x58: return "GotoRecord";
+        case 0x5A: return "FlushTable";
+        case 0x5C: return "GetKeyType";
+        case 0x60: return "Reindex";
+        case 0x9E: return "GetLastTableUpdate";
+        case 0x13: return "IsRecordLocked";
+        case 0x15: return "GetAllLocks";
+        case 0xA0: return "MgConnect";
+        case 0xA2: return "MgRequest";
+        case 0xA4: return "FetchWhere";
+        case 0xA6: return "Aggregate";
+        case 0xA8: return "GetRecord";
+        case 0xAA: return "SetRecord";
+        case 0xAC: return "CustomizeAOF";
+        case 0xAE: return "GetRecordCRC";
+        case 0xB0: return "GetKeyCount";
+        case 0x03: return "GetKeyNum";
+        case 0x05: return "FindTables";
+        case 0x07: return "BeginTransaction";
+        case 0x09: return "CommitTransaction";
+        case 0x0B: return "RollbackTransaction";
+        case 0x0D: return "FindRecord";
+        case 0x17: return "ZipArchive";
+        case 0x19: return "UnzipArchive";
+        case 0x1B: return "ZipList";
+        case 0xB2: return "DDGetProperty";
+        case 0xB4: return "DDSetProperty";
+        case 0xB6: return "DDCreateProc";
+        case 0xB8: return "DDCreateFunction";
+        case 0xBA: return "DDCreateTrigger";
+        case 0xBC: return "DDDropTrigger";
+        case 0xBE: return "DDDropView";
+        case 0xC0: return "DDDropLink";
+        case 0xC2: return "DDCreateUser";
+        case 0xC4: return "DDDropObject";
+        case 0xC6: return "DDAddUserToGroup";
+        case 0xC8: return "DDRemoveUserFromGroup";
+        case 0xCA: return "DDCreateLink";
+        case 0xCC: return "DDModifyLink";
+        case 0xCE: return "DDCreateRefIntegrity";
+        case 0xD0: return "DDCreateView";
+        case 0xD2: return "DDAddIndexFile";
+        case 0xD4: return "DDRemoveIndexFile";
+        case 0xD6: return "DDGetPermissions";
+        case 0xD8: return "DDGrantPermission";
+        case 0xDA: return "ShowDeleted";
+        case 0xDC: return "CreateTable";
+        case 0xDE: return "DropTable";
+        case 0xE0: return "FileExists";
+        case 0xE2: return "FileErase";
+        case 0xE4: return "FileRename";
+        case 0xE6: return "FileSize";
+        case 0xE8: return "FileMTime";
+        case 0xEA: return "Directory";
+        case 0xEC: return "DirExist";
+        case 0xEE: return "DirMake";
+        case 0xF0: return "DirRemove";
+        case 0xF2: return "FOpen";
+        case 0xF4: return "FCreate";
+        case 0xF6: return "FClose";
+        case 0xF8: return "FRead";
+        case 0xFA: return "FWrite";
+        case 0xFC: return "FSeek";
+        case 0xFE: return "Mutex";
+        default: return "Other";
+    }
+}
+
+// One line per completed request/reply. Connection and table ID identify
+// overlapping aliases, duration includes send+receive; no payload bytes.
 static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
                                  std::uint32_t tid, std::size_t req_bytes,
                                  std::uint8_t rep_op, std::size_t rep_bytes,
                                  long long us) {
+    auto& trace = cli_trace_state();
+    std::lock_guard<std::mutex> lk(trace.mu);
+    std::string table = "-";
+    const bool index_op = op == 0x90 || op == 0x92 || op == 0x8A ||
+                          op == 0x8C || op == 0x8E || op == 0x5C;
+    if (index_op) {
+        const auto ix = trace.indexes.find({conn, tid});
+        if (ix != trace.indexes.end()) table = ix->second;
+    } else if (op != 0x01 && op != 0x10 && op != 0x20 &&
+               op != 0x30 && op != 0x32 && op != 0x05 && op != 0x07 &&
+               op != 0x09 && op != 0x0B) {
+        const auto it = trace.tables.find({conn, tid});
+        if (it != trace.tables.end()) table = it->second;
+    }
     char buf[200];
     std::snprintf(buf, sizeof(buf),
-                  "op=0x%02X tid=%u req=%lu ack=0x%02X ackb=%lu us=%lld conn=%04X",
+                  "wire op=0x%02X tid=%u req=%lu ack=0x%02X ackb=%lu dur_us=%lld conn=%04X",
                   static_cast<unsigned>(op), static_cast<unsigned>(tid),
                   static_cast<unsigned long>(req_bytes),
                   static_cast<unsigned>(rep_op),
                   static_cast<unsigned long>(rep_bytes), us,
-                  static_cast<unsigned>(
-                      reinterpret_cast<std::uintptr_t>(conn) & 0xFFFFu));
-    cli_trace_line(cli_trace_ms(), "wire", "frame", buf);
+                  static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(conn) & 0xFFFFu));
+    FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
+    if (!hf) return;
+    cli_trace_write_locked(hf, cli_trace_ms(), table.c_str(),
+                           cli_trace_opcode(op), buf);
+    std::fclose(hf);
 }
 
 void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
@@ -7679,6 +7854,7 @@ void remote_close_table_live(ADSHANDLE hTable,
     auto* rc = rt->conn;
     const bool counted = rt->close_counted;
     if (rc != nullptr) (void)rc->close_table(rt->id);
+    cli_trace_table_close(rt);
     if (hTable != 0) forget_relations(hTable);
     auto& s2 = state();
     openads::network::RemoteConnection* fire = nullptr;
@@ -8225,6 +8401,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                 rt->table_type_cached = true;
             }
         }
+        cli_trace_table_open(rt.get());
         cli_trace_tbl(rt.get(), "AdsOpenTable", "opened id=%u mode=%u",
                       static_cast<unsigned>(rt->id),
                       static_cast<unsigned>(usMode));
@@ -15326,6 +15503,11 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             }
             ++count;
             remote_indexes.emplace(gh, std::move(ri));
+            if (cli_trace_on()) {
+                auto& trace = cli_trace_state();
+                std::lock_guard<std::mutex> trace_lk(trace.mu);
+                trace.indexes[{rt->conn, ent.id}] = rt->alias.empty() ? rt->name : rt->alias;
+            }
             // Dedup by tag: production-CDX auto-open and a later explicit
             // AdsOpenIndex on the same bag must not register the order
             // twice, or AdsGetNumIndexes / by-order resolution skew.
@@ -20475,8 +20657,8 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             // -- nothing on the network to make it look wrong -- and the wire skip
             // after that sent (step + a lag that no longer applied).
             ri->parent->invalidate_prefetch();
-            cli_trace_tbl(ri->parent, "AdsSeek", "key=%.24s",
-                          key.c_str());
+            cli_trace_tbl(ri->parent, "AdsSeek", "key_len=%u",
+                          static_cast<unsigned>(u16KeyLen));
         }
         if (ri->parent != nullptr && remote_empty_window(ri->parent)) {
             cli_trace_tbl(ri->parent, "AdsSeek",
@@ -20660,8 +20842,8 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             // RCB 07/14/2026: same stale-queue bug as AdsSeek -- see the note
             // there for why dropping the block is mandatory after a seek.
             ri->parent->invalidate_prefetch();
-            cli_trace_tbl(ri->parent, "AdsSeekLast", "key=%.24s",
-                          key.c_str());
+            cli_trace_tbl(ri->parent, "AdsSeekLast", "key_len=%u",
+                          static_cast<unsigned>(u16KeyLen));
         }
         auto r = ri->conn->seek(ri->id, key,
             /*soft=*/0,

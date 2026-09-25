@@ -992,6 +992,15 @@ struct RemoteTable {
     // adopt-or-emit decision, so a parked snapshot can never reference
     // dead server ids.
     bool indexes_parked = false;
+    // Nav stamp parked alongside the index snapshot: the CloseAll ->
+    // OpenIndex (unpark) cycle sends no frames, so a stamp taken just
+    // before the park still describes the live server cursor as long as
+    // nav_seq is unchanged when the same order is restored. Zeroed
+    // whenever the parked snapshot dies for real.
+    int                      parked_nav_which = 0;
+    std::uint32_t            parked_nav_order = 0;
+    bool                     parked_nav_row   = false;
+    std::uint64_t            parked_nav_seq   = 0;
     std::vector<std::pair<std::string, std::uint32_t>> parked_by_tag;
     std::vector<std::uint64_t> parked_handles;
     std::uint32_t parked_active = 0;

@@ -672,3 +672,74 @@ TEST_CASE("KeyCount: rotation revisits ride the per-order map") {
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
     srv.stop();
 }
+
+TEST_CASE("Parked nav stamp survives CloseAll/OpenIndex unpark") {
+    tb_wipe();
+    auto dir = tb_tmp_dir();
+    tb_seed(dir);
+
+    openads::network::Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    ADSHANDLE hConn = tb_connect_remote(dir, srv.port());
+    ADSHANDLE hTable = tb_open(hConn);
+
+    // Bind the bag and take the order to its top: one wire GotoTop that
+    // stamps (top, order) on the client.
+    UNSIGNED8 bag[] = "TB.CDX";
+    ADSHANDLE hIdx = 0;
+    UNSIGNED16 nidx = 1;
+    REQUIRE(AdsOpenIndex(hTable, bag, &hIdx, &nidx) == AE_SUCCESS);
+    REQUIRE(nidx >= 1);
+    REQUIRE(AdsGotoTop(hIdx) == AE_SUCCESS);
+
+    // The rddads rotation pattern: OrdListClear (parked, no frame) then
+    // the same bag reopened (unpark hit, no frame).
+    const std::uint64_t gt_before = tb_op(kOpGotoTop);
+    REQUIRE(AdsCloseAllIndexes(hTable) == AE_SUCCESS);
+    ADSHANDLE hIdx2 = 0;
+    nidx = 1;
+    REQUIRE(AdsOpenIndex(hTable, bag, &hIdx2, &nidx) == AE_SUCCESS);
+    // The post-unpark GotoTop(idx) must dedupe against the parked stamp:
+    // the server never moved, so no refresh frame is owed.
+    REQUIRE(AdsGotoTop(hIdx2) == AE_SUCCESS);
+    CHECK(tb_op(kOpGotoTop) == gt_before);
+    UNSIGNED32 rec = 0;
+    REQUIRE(AdsGetRecordNum(hTable, ADS_IGNOREFILTERS, &rec) == AE_SUCCESS);
+    CHECK(rec == 1u);
+
+    REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
+    srv.stop();
+}
+
+TEST_CASE("Parked nav stamp does not survive an intervening wire nav") {
+    tb_wipe();
+    auto dir = tb_tmp_dir();
+    tb_seed(dir);
+
+    openads::network::Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    ADSHANDLE hConn = tb_connect_remote(dir, srv.port());
+    ADSHANDLE hTable = tb_open(hConn);
+
+    UNSIGNED8 bag[] = "TB.CDX";
+    ADSHANDLE hIdx = 0;
+    UNSIGNED16 nidx = 1;
+    REQUIRE(AdsOpenIndex(hTable, bag, &hIdx, &nidx) == AE_SUCCESS);
+    REQUIRE(AdsGotoTop(hIdx) == AE_SUCCESS);
+
+    REQUIRE(AdsCloseAllIndexes(hTable) == AE_SUCCESS);
+    // A wire nav inside the window bumps the cursor seq: the parked
+    // stamp no longer proves anything and must be ignored.
+    REQUIRE(AdsGotoBottom(hTable) == AE_SUCCESS);
+    ADSHANDLE hIdx2 = 0;
+    nidx = 1;
+    REQUIRE(AdsOpenIndex(hTable, bag, &hIdx2, &nidx) == AE_SUCCESS);
+    const std::uint64_t gt_before = tb_op(kOpGotoTop);
+    REQUIRE(AdsGotoTop(hIdx2) == AE_SUCCESS);
+    CHECK(tb_op(kOpGotoTop) == gt_before + 1);
+
+    REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
+    srv.stop();
+}

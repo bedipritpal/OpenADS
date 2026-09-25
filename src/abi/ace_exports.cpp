@@ -743,6 +743,7 @@ UNSIGNED32 remote_emit_close_all(openads::network::RemoteTable* rt) {
     }
     rt->close_all_indexes_pending = false;
     rt->indexes_parked = false;
+    rt->parked_nav_which = 0;
     rt->parked_by_tag.clear();
     rt->parked_handles.clear();
     rt->index_by_tag.clear();
@@ -8319,6 +8320,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
             adopted->found_cached = false;
             adopted->nav_at_bof = adopted->nav_at_eof = false;
             adopted->last_nav = 0;  // re-stamped by the warm GotoTop below
+            adopted->parked_nav_which = 0;
             adopted->flush_file_pending = false;
             adopted->close_all_indexes_pending = false;
             adopted->pending_order = false;
@@ -15467,6 +15469,21 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 rt->active_index_id = rt->parked_active;
                 rt->indexes_parked = false;
                 rt->close_all_indexes_pending = false;
+                // Restore the nav stamp parked at CloseAll when it still
+                // proves the server cursor: same order coming back, no
+                // cursor-affecting frame since the park (seq gate). The
+                // post-unpark GotoTop(idx) then dedupes locally instead
+                // of paying a refresh RTT for a position the server
+                // never lost.
+                if (rt->parked_nav_which != 0 &&
+                    rt->parked_nav_order == rt->parked_active &&
+                    rt->parked_nav_seq == rt->conn->nav_seq()) {
+                    rt->last_nav       = rt->parked_nav_which;
+                    rt->last_nav_order = rt->parked_nav_order;
+                    rt->last_nav_row   = rt->parked_nav_row;
+                    rt->last_nav_seq   = rt->parked_nav_seq;
+                }
+                rt->parked_nav_which = 0;
                 cli_trace_tbl(rt, "AdsOpenIndex", "unpark hit %.32s",
                               rt->parked_bag_stem.c_str());
                 auto& s = state();
@@ -16034,6 +16051,14 @@ UNSIGNED32 ENTRYPOINT AdsCloseAllIndexes(ADSHANDLE hTable) {
             rt->index_handles.clear();
             rt->active_index_id = 0;
             rt->indexes_parked = true;
+            // Park the nav stamp with the bindings: if the same order
+            // comes back via an unpark with no intervening wire nav
+            // (seq-gated), the post-unpark GotoTop dedupes instead of
+            // paying a refresh frame for state the server never lost.
+            rt->parked_nav_which = rt->last_nav;
+            rt->parked_nav_order = rt->last_nav_order;
+            rt->parked_nav_row   = rt->last_nav_row;
+            rt->parked_nav_seq   = rt->last_nav_seq;
             cli_trace_tbl(rt, "AdsCloseAllIndexes", "parked %u tags", ntags);
         } else if (rt->indexes_parked) {
             cli_trace_tbl(rt, "AdsCloseAllIndexes", "repeat clear, park kept");

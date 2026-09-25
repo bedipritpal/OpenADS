@@ -2504,6 +2504,7 @@ RemoteConnection::file_exists(const std::string& path) {
     {
         std::lock_guard<std::mutex> lk(file_exists_mu_);
         if (file_exists_cache_.count(path) != 0) return true;
+        if (file_exists_neg_cache_.count(path) != 0) return false;
     }
     Frame req;
     req.opcode = Opcode::FileExists;
@@ -2514,9 +2515,14 @@ RemoteConnection::file_exists(const std::string& path) {
         rep.value().payload.empty())
         return fs_wire_err(rep.value(), "FileExists");
     bool exists = rep.value().payload[0] != 0;
-    if (exists) {
+    {
         std::lock_guard<std::mutex> lk(file_exists_mu_);
-        file_exists_cache_.insert(path);
+        if (exists) {
+            file_exists_cache_.insert(path);
+            file_exists_neg_cache_.erase(path);
+        } else {
+            file_exists_neg_cache_.insert(path);
+        }
     }
     return exists;
 }
@@ -2524,6 +2530,7 @@ RemoteConnection::file_exists(const std::string& path) {
 void RemoteConnection::file_exists_invalidate() {
     std::lock_guard<std::mutex> lk(file_exists_mu_);
     file_exists_cache_.clear();
+    file_exists_neg_cache_.clear();
 }
 
 util::Result<void>
@@ -2761,6 +2768,11 @@ RemoteConnection::zip_list(const std::string& zip) {
 
 util::Result<bool>
 RemoteConnection::dir_exist(const std::string& path) {
+    {
+        std::lock_guard<std::mutex> lk(dir_cache_mu_);
+        if (dir_known_.count(path) != 0) return true;
+        if (dir_missing_.count(path) != 0) return false;
+    }
     Frame req;
     req.opcode = Opcode::DirExist;
     push_lp_str(req.payload, path);
@@ -2769,11 +2781,25 @@ RemoteConnection::dir_exist(const std::string& path) {
     if (rep.value().opcode != Opcode::DirExistAck ||
         rep.value().payload.empty())
         return fs_wire_err(rep.value(), "DirExist");
-    return rep.value().payload[0] != 0;
+    const bool exists = rep.value().payload[0] != 0;
+    {
+        std::lock_guard<std::mutex> lk(dir_cache_mu_);
+        if (exists) {
+            dir_known_.insert(path);
+            dir_missing_.erase(path);
+        } else {
+            dir_missing_.insert(path);
+        }
+    }
+    return exists;
 }
 
 util::Result<void>
 RemoteConnection::dir_make(const std::string& path) {
+    {
+        std::lock_guard<std::mutex> lk(dir_cache_mu_);
+        if (dir_known_.count(path) != 0) return {};
+    }
     Frame req;
     req.opcode = Opcode::DirMake;
     push_lp_str(req.payload, path);
@@ -2781,6 +2807,9 @@ RemoteConnection::dir_make(const std::string& path) {
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::DirMakeAck)
         return fs_wire_err(rep.value(), "DirMake");
+    std::lock_guard<std::mutex> lk(dir_cache_mu_);
+    dir_known_.insert(path);
+    dir_missing_.erase(path);
     return {};
 }
 
@@ -2793,6 +2822,9 @@ RemoteConnection::dir_remove(const std::string& path) {
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::DirRemoveAck)
         return fs_wire_err(rep.value(), "DirRemove");
+    std::lock_guard<std::mutex> lk(dir_cache_mu_);
+    dir_known_.erase(path);
+    dir_missing_.insert(path);
     return {};
 }
 

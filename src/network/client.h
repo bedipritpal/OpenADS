@@ -119,6 +119,13 @@ public:
         return (server_caps_ & kCapNavOrderFuse) != 0;
     }
 
+    // Server's FlushTable handler does the full file-buffers flush
+    // (see kCapFlushTableDurable): a commit needs no trailing
+    // FlushFileBuffers frame.
+    bool server_flush_table_durable() const noexcept {
+        return (server_caps_ & kCapFlushTableDurable) != 0;
+    }
+
     // Current cursor-generation sequence (see nav_seq_). Relaxed load
     // is enough: it only orders the ABI layer's own duplicate
     // detection, never data.
@@ -620,6 +627,21 @@ private:
     // file-mutating ops, never held across wire calls.
     std::set<std::string>       file_exists_cache_;
     std::mutex                  file_exists_mu_;
+    // Negative half of the existence cache: repeated "missing" probes
+    // (Vouch checks optional bags/configs on every USE) are served
+    // locally until any file-mutating op on this connection clears it.
+    // A stale "missing" degrades to the app re-checking after its own
+    // create attempt (which clears the cache), never to wrong data.
+    std::set<std::string>       file_exists_neg_cache_;
+    // Directory truth (EnableFileFunc): DirExist=true answers and
+    // successful DirMakes feed dir_known_; DirExist=false feeds
+    // dir_missing_. A known dir makes DirMake a no-op (the server
+    // create is idempotent) and DirExist answer locally. Our own
+    // DirRemove erases the path from both. Peer mkdir/rmdir is not
+    // tracked -- session-scoped, same trade as the file cache.
+    std::set<std::string>       dir_known_;
+    std::set<std::string>       dir_missing_;
+    std::mutex                  dir_cache_mu_;
 
 public:
     // Deferred disconnect (MT shared connections). AdsDisconnect on a
@@ -703,6 +725,20 @@ struct RemoteTable {
     bool          open_exclusive = false;  // mapped mode (never pooled)
     bool          ever_locked = false;     // AppendBlank/LockRecord/Table
     bool          scope_touched = false;   // SetScope (server state unclear)
+    // Client-side lock ledger (WAN chattiness): mirrors the record and
+    // table locks this connection is known to hold on the server. Lets
+    // AdsUnlockTable skip the frame when nothing is held (rddads
+    // dbUnlock() calls it blindly before every lock/append), lets
+    // AdsGetAllLocks answer locally, and lets the close path park a
+    // table whose locks were all released (the blunt ever_locked flag
+    // alone used to force a real close + 7-frame reopen per save).
+    // locks_uncertain covers locks the ledger cannot name: the append
+    // auto-lock (AppendBlankAck carries no recno) and LockRecord(0)
+    // with no valid cursor. Only a wire UnlockTable (or close) clears
+    // it. Conservative throughout: doubt always goes to the wire.
+    std::set<std::uint32_t> held_recs;
+    bool          table_lock_held = false;
+    bool          locks_uncertain = false;
     // M12.18 — recno + deleted flag arrive together with the row
     // bytes so AdsGetRecordNum / AdsIsRecordDeleted can serve from
     // cache instead of a separate RTT each.

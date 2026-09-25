@@ -648,6 +648,16 @@ inline constexpr std::uint32_t kCapFlushInCloseAll = 0x00000020u;
 // never emit it.
 inline constexpr std::uint32_t kCapNavOrderFuse = 0x00000040u;
 
+// Durable FlushTable: the server's FlushTable handler already performs
+// the full file-buffers flush (ABI twin via AdsFlushFileBuffers, then
+// the engine table), i.e. exactly the work of a standalone
+// FlushFileBuffers frame. A client that sees this bit clears its dirty
+// flag when its own FlushTable lands and skips the trailing
+// FlushFileBuffers -- one frame per commit instead of two. Same
+// two-way gating as kCapFlushInCloseAll; old servers never echo it, so
+// the client keeps sending both frames there.
+inline constexpr std::uint32_t kCapFlushTableDurable = 0x00000080u;
+
 // Warm OpenTableAck sections (USE latency). After the fixed
 // `[u32 id][u16 bag_len][bag]` prefix, the ack carries
 // `[u8 section_count]` then that many TLVs:

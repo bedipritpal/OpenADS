@@ -7808,7 +7808,8 @@ const char* remote_table_unpoolable_reason(
     if (!rt->close_counted) return "sql_cursor";
     if (rt->open_exclusive) return "exclusive";
     if (!rt->pending_sets.empty()) return "pending_sets";
-    if (rt->ever_locked) return "ever_locked";
+    if (!rt->held_recs.empty() || rt->table_lock_held ||
+        rt->locks_uncertain) return "locks_held";
     if (rt->scope_touched) return "scope";
     if (!rt->aof_expr.empty()) return "aof";
     if (!rt->filter_expr.empty()) return "filter";
@@ -7824,7 +7825,15 @@ bool remote_table_poolable(openads::network::RemoteTable* rt) {
     if (!rt->close_counted) return false;   // SQL cursors etc.
     if (rt->open_exclusive) return false;   // parked exclusive blocks peers
     if (!rt->pending_sets.empty()) return false;  // flushed before close
-    if (rt->ever_locked || rt->scope_touched) return false;
+    // Locks once held no longer bar the park by themselves: the ledger
+    // proves whether any lock is STILL held (a parked table would
+    // otherwise pin it against every peer forever). ever_locked stays
+    // recorded for the trace but stops forcing a real close -- that
+    // policy cost GN_COUNT/FA_ACC01/USASELOG a full 7-frame reopen per
+    // voucher save.
+    if (!rt->held_recs.empty() || rt->table_lock_held ||
+        rt->locks_uncertain) return false;
+    if (rt->scope_touched) return false;
     if (!rt->aof_expr.empty() || !rt->filter_expr.empty()) return false;
     // Deferred teardown (FlushFileBuffers/CloseAllIndexes) is absorbed
     // by a real close, never by a park (no server close happens) — the
@@ -13334,8 +13343,11 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
         auto r = rt->conn->append_blank(rt->id);
         if (!r) return fail(r.error());
         // Fresh appends auto-lock (non-exclusive tables): pooled reuse
-        // must not resurrect a locked handle.
+        // must not resurrect a locked handle. The ack carries no
+        // recno, so the ledger cannot name the auto-lock -- mark the
+        // lock state uncertain until a full UnlockTable proves clear.
         rt->ever_locked = true;
+        rt->locks_uncertain = true;
         rt->write_dirty = true;
         return ok();
     }
@@ -13457,6 +13469,13 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
 UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     arc2_trace("AdsWriteRecord");
     if (auto* rt = get_remote_table(hTable)) {
+        // Snapshot dirtiness before remote_flush_pending drains the
+        // buffered sets: a commit with nothing written since the last
+        // flush (rddads DBCOMMITALL touches every open workarea) owes
+        // the server no frame at all -- it would only fsync unchanged
+        // pages, 1 RTT each, 16 of them after a Vouch voucher save.
+        const bool had_writes =
+            !rt->pending_sets.empty() || rt->write_dirty;
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
         rt->row_valid = false;                      // M12.17 cache invalidation
         // A write can move the row in/out of a conditional order or
@@ -13470,9 +13489,18 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
         // instead of serving a stale current_keyno.
         rt->keyno_valid = false;
         rt->invalidate_prefetch();
+        if (!had_writes) {
+            cli_trace_tbl(rt, "AdsWriteRecord", "clean: flush skipped");
+            return ok();
+        }
         auto r = rt->conn->flush_table(rt->id);
         if (!r) return fail(r.error());
-        rt->write_dirty = true;
+        // kCapFlushTableDurable servers run the full file-buffers
+        // flush inside the FlushTable handler, so the commit is
+        // durable right here and a trailing AdsFlushFileBuffers owes
+        // nothing (1 RTT saved per commit). Old servers keep the
+        // classic two-frame pair.
+        rt->write_dirty = !rt->conn->server_flush_table_durable();
         return ok();
     }
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -14599,6 +14627,13 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         auto r = rt->conn->lock_record(rt->id, ulRecord);
         if (!r) return fail(r.error());
         rt->ever_locked = true;
+        // ulRecord == 0 -> the current record (ACE convention). With
+        // no valid cursor the recno is unknowable client-side, so the
+        // ledger marks itself uncertain rather than guessing.
+        const std::uint32_t lrec = (ulRecord == 0)
+            ? (rt->row_valid ? rt->current_recno : 0) : ulRecord;
+        if (lrec == 0) rt->locks_uncertain = true;
+        else rt->held_recs.insert(lrec);
         return ok();
     }
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -14675,6 +14710,11 @@ UNSIGNED32 ENTRYPOINT AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
         auto r = rt->conn->unlock_record(rt->id, ulRecord);
         if (!r) return fail(r.error());
+        const std::uint32_t urec = (ulRecord == 0)
+            ? (rt->row_valid ? rt->current_recno : 0) : ulRecord;
+        if (urec != 0) rt->held_recs.erase(urec);
+        // locks_uncertain survives: only a full UnlockTable (or the
+        // close) proves the append auto-lock is gone.
         return ok();
     }
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -14747,6 +14787,7 @@ UNSIGNED32 ENTRYPOINT AdsLockTable(ADSHANDLE hTable) {
         auto r = rt->conn->lock_table(rt->id);
         if (!r) return fail(r.error());
         rt->ever_locked = true;
+        rt->table_lock_held = true;
         return ok();
     }
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -14817,8 +14858,24 @@ UNSIGNED32 ENTRYPOINT AdsUnlockTable(ADSHANDLE hTable) {
     arc2_trace("AdsUnlockTable");
     if (auto* rt = get_remote_table(hTable)) {
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
+        // Lock ledger: with nothing held on the server, the frame
+        // would release zero locks. Harbour rddads dbUnlock() has no
+        // client-side lock list and calls this blindly before every
+        // lock/append -- that blind call is most of the UnlockTable
+        // traffic in a Vouch save.
+        if (rt->held_recs.empty() && !rt->table_lock_held &&
+            !rt->locks_uncertain) {
+            cli_trace_tbl(rt, "AdsUnlockTable", "skipped: no locks held");
+            return ok();
+        }
         auto r = rt->conn->unlock_table(rt->id);
         if (!r) return fail(r.error());
+        // SAP ACE semantics: AdsUnlockTable releases ALL locks (table
+        // AND record, including the append auto-lock), so the ledger
+        // is provably empty again.
+        rt->held_recs.clear();
+        rt->table_lock_held = false;
+        rt->locks_uncertain = false;
         return ok();
     }
 #if defined(OPENADS_WITH_FIREBIRD)
@@ -17497,6 +17554,26 @@ UNSIGNED32 ENTRYPOINT AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
                           UNSIGNED16* pusCount) {
     arc2_trace("AdsGetAllLocks");
     if (auto* rt = get_remote_table(hTable)) {
+        // The client lock ledger is complete unless an append
+        // auto-lock or an unresolvable current-record lock made it
+        // uncertain (and a table lock shadows the record list, so
+        // that case stays on the wire too). rddads polls this after
+        // every commit -- answering locally saves 1 RTT each time.
+        if (pusCount != nullptr && !rt->locks_uncertain &&
+            !rt->table_lock_held) {
+            cli_trace_tbl(rt, "AdsGetAllLocks",
+                          "served from client lock ledger");
+            const UNSIGNED16 lcap = *pusCount;
+            UNSIGNED16 li = 0;
+            if (paRecnos != nullptr) {
+                for (std::uint32_t lrn : rt->held_recs) {
+                    if (li >= lcap) break;
+                    paRecnos[li++] = lrn;
+                }
+            }
+            *pusCount = static_cast<UNSIGNED16>(rt->held_recs.size());
+            return ok();
+        }
         // M12.36 â€” remote record locks are server-managed; the
         // GetAllLocks wire opcode returns this connection's held list.
         if (pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -38432,6 +38509,10 @@ UNSIGNED32 ENTRYPOINT AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
         auto r = rt->conn->set_record(rt->id, pucRecord,
                                       static_cast<std::size_t>(ulLen));
         if (!r) return fail(r.error());
+        // Full-record write: mark dirty so the commit's FlushTable and
+        // the FlushFileBuffers gate see it (the write_dirty snapshot in
+        // AdsWriteRecord depends on this).
+        rt->write_dirty = true;
         return ok();
     }
     Table* t = get_table(hTable);

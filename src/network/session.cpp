@@ -1721,7 +1721,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 const std::uint32_t scaps =
                     openads::network::kCapSetFieldsBatch |
                     openads::network::kCapFlushInCloseAll |
-                    openads::network::kCapNavOrderFuse;
+                    openads::network::kCapNavOrderFuse |
+                    openads::network::kCapFlushTableDurable;
                 reply.payload.push_back(
                     static_cast<std::uint8_t>( scaps        & 0xFFu));
                 reply.payload.push_back(

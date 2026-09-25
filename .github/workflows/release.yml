@@ -285,6 +285,168 @@ jobs:
           name: openads-${{ runner.os }}-${{ matrix.arch }}
           path: ${{ env.ASSET }}
 
+  # glibc 2.31 compatibility build for older Linux servers (Ubuntu 20.04):
+  # the ubuntu-24.04 leg's binaries require GLIBC_2.38+, so the same tree
+  # is built inside an ubuntu:20.04 container. Asset is additive: publish
+  # flattens it into the release but does not require the leg to be green.
+  # (Requested by Pritpal Bedi for his LAN test server.)
+  build-glibc231:
+    name: ubuntu 20.04 container / x64 (glibc 2.31)
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    timeout-minutes: 90
+    steps:
+      # Bare image: git/curl first so checkout + CMake FetchContent work.
+      - name: Install bootstrap tools
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git ca-certificates curl xz-utils
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+      # CMakePresets v4 needs CMake >= 3.23; 20.04's apt ships 3.16, so
+      # vendor the official binary (runs on any glibc >= 2.17). clang on
+      # 20.04 is clang-10: fine for this C++17 tree, but older compilers
+      # warn differently, so warnings-as-errors is off for this leg.
+      - name: Install toolchain and CMake
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential clang ninja-build pkg-config \
+            libncurses-dev libx11-dev bison flex python3 perl
+          curl -sSL -o /tmp/cmake.tar.gz \
+            https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz
+          mkdir -p /opt/cmake
+          tar xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+          echo "/opt/cmake/bin" >> "$GITHUB_PATH"
+          /opt/cmake/bin/cmake --version
+
+      # Same Harbour UDF SDK as the 24.04 leg, cached under its own key
+      # (binaries are glibc-specific).
+      - name: Cache Harbour SDK (glibc 2.31)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harbour-udf-glibc231
+          key: harbour-udf-linux-glibc231-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+
+      - name: Provision Harbour SDK (glibc 2.31)
+        shell: bash
+        env:
+          HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+        run: |
+          set -e
+          HB="$RUNNER_TEMP/harbour-udf-glibc231"
+          echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+          if [ -f "$HB/install/include/hbvm.h" ] && \
+             [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] && \
+             [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+            echo "Harbour SDK cached at $HB/install"
+          else
+            rm -rf "$HB"
+            mkdir -p "$HB"
+            git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+            git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+            git -C "$HB/src" checkout "$HARBOUR_REF"
+            cd "$HB/src"
+            make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+          fi
+          HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+          HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+          HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+          echo "Harbour SDK layout:"
+          echo "  include: ${HB_INC:-MISSING}"
+          echo "  libdir:  ${HB_LIBDIR:-MISSING}"
+          echo "  compiler:${HB_CC:-MISSING}"
+          if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+            echo "::error::Harbour SDK layout unexpected - full listing:"
+            find "$HB/install" -maxdepth 4 | sort | head -80
+            exit 1
+          fi
+          {
+            echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+            echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+            echo "HARBOUR_COMPILER=$HB_CC"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ninja-clang \
+                -DOPENADS_WITH_TLS=ON \
+                -DOPENADS_WITH_HTTP=ON \
+                -DOPENADS_WARNINGS_AS_ERRORS=OFF \
+                -DOPENADS_WITH_HARBOUR_UDF=ON \
+                -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR" \
+                -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR" \
+                -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+
+      - name: Build
+        run: cmake --build build/ninja-clang --config Release
+
+      - name: Test
+        timeout-minutes: 30
+        run: ctest --test-dir build/ninja-clang --output-on-failure -C Release
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          STAGE="openads-${{ steps.tag.outputs.version }}-linux-glibc231"
+          mkdir -p "$STAGE"
+          BUILD="build/ninja-clang"
+          for f in "$BUILD"/src/libopenace64.*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
+          cp "$BUILD"/tools/serverd/openads_serverd "$STAGE/"
+          cp "$BUILD"/tools/bench/openads_bench   "$STAGE/"
+          cp LICENSE NOTICE README.md openads.ini.sample "$STAGE/"
+          tar czvf "$STAGE.tar.gz" "$STAGE"
+          ls -la "$STAGE.tar.gz"
+          echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
+
+      # The whole point of the leg: prove the binaries stay within
+      # glibc 2.31 before they ship.
+      - name: Verify glibc ceiling (<= 2.31)
+        shell: bash
+        run: |
+          set -e
+          STAGE="openads-${{ steps.tag.outputs.version }}-linux-glibc231"
+          fail=0
+          for b in "$STAGE"/openads_serverd "$STAGE"/openads_bench \
+                   "$STAGE"/libopenace64.so "$STAGE"/libace64.so; do
+            hit=$(objdump -T "$b" | grep -oE 'GLIBC_2\.(3[2-9]|[4-9][0-9])' | sort -uV || true)
+            if [ -n "$hit" ]; then
+              echo "::error::$b references > GLIBC_2.31: $hit"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "All staged binaries within GLIBC_2.31."
+
+      - name: Upload artifact (workflow run)
+        if: always() && env.ASSET != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openads-Linux-x64-glibc231
+          path: ${{ env.ASSET }}
+
+
   publish:
     name: Publish GitHub Release
     needs: build

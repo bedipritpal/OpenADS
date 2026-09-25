@@ -79,8 +79,9 @@ TEST_CASE("M12.36 remote AdsIsRecordLocked reflects this connection's locks") {
 
     UNSIGNED8 tname[] = "li.dbf";
     ADSHANDLE hTable  = 0;
-    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED,
-                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI,
+ADS_COMPATIBLE_LOCKING, ADS_IGNORERIGHTS,
+ADS_SHARED, &hTable)
             == AE_SUCCESS);
 
     // Nothing locked yet.
@@ -126,8 +127,9 @@ TEST_CASE("M12.36 remote AdsGetAllLocks enumerates held record locks") {
 
     UNSIGNED8 tname[] = "li.dbf";
     ADSHANDLE hTable  = 0;
-    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED,
-                         ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &hTable)
+    REQUIRE(AdsOpenTable(hConn, tname, nullptr, ADS_CDX, ADS_ANSI,
+ADS_COMPATIBLE_LOCKING, ADS_IGNORERIGHTS,
+ADS_SHARED, &hTable)
             == AE_SUCCESS);
 
     REQUIRE(AdsLockRecord(hTable, 2) == AE_SUCCESS);
@@ -154,4 +156,66 @@ TEST_CASE("M12.36 remote AdsGetAllLocks enumerates held record locks") {
 
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
+}
+
+TEST_CASE("M13.1 remote AdsIsRecordLocked sees other connections' locks") {
+    auto dir = lock_tmp_dir();
+    seed_lock_fixture(dir);
+
+    openads::network::Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[512];
+    std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()), dir.string().c_str());
+    UNSIGNED8 srvbuf[512]{};
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+
+    auto open_li = [&](ADSHANDLE* pc, ADSHANDLE* pt) {
+        REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER, nullptr, nullptr, 0,
+                             pc) == AE_SUCCESS);
+        UNSIGNED8 tname[] = "li.dbf";
+        REQUIRE(AdsOpenTable(*pc, tname, nullptr, ADS_CDX, ADS_ANSI,
+ADS_COMPATIBLE_LOCKING, ADS_IGNORERIGHTS,
+ADS_SHARED,
+                             pt) == AE_SUCCESS);
+    };
+
+    ADSHANDLE hA = 0, tA = 0, hB = 0, tB = 0;
+    open_li(&hA, &tA);
+    open_li(&hB, &tB);
+
+    // Nobody holds anything yet.
+    UNSIGNED16 locked = 1;
+    REQUIRE(AdsIsRecordLocked(tB, 3, &locked) == AE_SUCCESS);
+    CHECK(locked == 0);
+
+    // A locks record 3: B's status query must see the cross-connection
+    // lock (SAP global semantics - login-semaphore guards depend on it),
+    // while A's own view still reports it and a neighbour stays free.
+    REQUIRE(AdsLockRecord(tA, 3) == AE_SUCCESS);
+    REQUIRE(AdsIsRecordLocked(tB, 3, &locked) == AE_SUCCESS);
+    CHECK(locked == 1);
+    REQUIRE(AdsIsRecordLocked(tA, 3, &locked) == AE_SUCCESS);
+    CHECK(locked == 1);
+    REQUIRE(AdsIsRecordLocked(tB, 4, &locked) == AE_SUCCESS);
+    CHECK(locked == 0);
+
+    // A's file lock covers every record from B's point of view.
+    REQUIRE(AdsLockTable(tA) == AE_SUCCESS);
+    REQUIRE(AdsIsRecordLocked(tB, 2, &locked) == AE_SUCCESS);
+    CHECK(locked == 1);
+    REQUIRE(AdsUnlockTable(tA) == AE_SUCCESS);
+    REQUIRE(AdsIsRecordLocked(tB, 2, &locked) == AE_SUCCESS);
+    CHECK(locked == 0);
+
+    // After A unlocks, B sees the record free again.
+    REQUIRE(AdsUnlockRecord(tA, 3) == AE_SUCCESS);
+    REQUIRE(AdsIsRecordLocked(tB, 3, &locked) == AE_SUCCESS);
+    CHECK(locked == 0);
+
+    REQUIRE(AdsCloseTable(tA) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(tB) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hA) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hB) == AE_SUCCESS);
 }

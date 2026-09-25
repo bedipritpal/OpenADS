@@ -38231,9 +38231,11 @@ UNSIGNED32 ENTRYPOINT AdsIsRecordLocked(ADSHANDLE hTable, UNSIGNED32 ulRecord,
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
     std::uint32_t rec = (ulRecord == 0) ? t->recno() : ulRecord;
-    for (std::uint32_t held : t->held_record_locks()) {
-        if (held == rec) { *pbLocked = 1; break; }
-    }
+    // mtfix11: SAP answers across connections - own registrations plus a
+    // non-destructive OS lock-byte probe, not this table's list alone.
+    auto any = t->is_record_locked_any(rec);
+    if (!any) return fail(any.error());
+    *pbLocked = any.value() ? 1 : 0;
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsIsServerLoaded(UNSIGNED8*, UNSIGNED16* p)

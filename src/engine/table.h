@@ -341,6 +341,15 @@ public:
     // exposing the LockMgr internals.
     std::vector<std::uint32_t> held_record_locks() const;
 
+    // Locked-by-any-owner query (mtfix11, SAP AdsIsRecordLocked
+    // semantics): this table's own registrations first, then a
+    // non-destructive OS probe of the record's lock byte and of the
+    // table's file-lock byte - a record also reads locked while ANOTHER
+    // owner holds the file lock (FLock covers every record). Read-only
+    // tables and tables without a driver file answer from the own-list
+    // only: they cannot hold locks and (Win32) cannot probe either.
+    util::Result<bool> is_record_locked_any(std::uint32_t recno);
+
     // Recno-sequence cursor (M10.6). When non-empty, goto_top /
     // goto_bottom / skip walk this list of recnos in order instead of
     // the natural append order or any active index. Used by SQL

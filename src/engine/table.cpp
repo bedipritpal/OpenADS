@@ -1972,6 +1972,24 @@ std::vector<std::uint32_t> Table::held_record_locks() const {
     return out;
 }
 
+util::Result<bool> Table::is_record_locked_any(std::uint32_t recno) {
+    if (table_lock_.has_value()) return true;
+    if (recno_locks_.count(recno) != 0) return true;
+    if (!driver_ || mode_ == OpenMode::Read) return false;
+    const auto lt = to_lock_type_();
+    auto rec = locks_.probe_record(driver_->file(), lt, locking_, recno);
+    if (!rec) return rec.error();
+    if (rec.value()) return true;
+    // Cdx/Vfp FLock ranges span every record-lock byte, so the record
+    // probe above already reports another owner's FLock - and a
+    // file-lock probe here would false-positive on ANY held record
+    // lock (those bytes live inside the FLock range). Only Ntx/Adt,
+    // whose FLock byte sits outside the record region, need the
+    // file-lock probe to see another owner's FLock.
+    if (LockMgr::file_lock_covers_records(lt)) return false;
+    return locks_.probe_file(driver_->file(), lt, locking_);
+}
+
 util::Result<void> Table::try_lock_table_excl() {
     if (mode_ == OpenMode::Read) return {};
     if (table_lock_) return {};

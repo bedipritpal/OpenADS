@@ -10721,14 +10721,26 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE hConn, UNSIGNED8* pucName,
                 if (rt == nullptr || rt->conn != ctx.remote) continue;
                 if (stem_of(rt->prod_bag_path) == want ||
                     (!rt->last_open_bag.empty() &&
-                     stem_of(rt->last_open_bag) == want)) {
+                     stem_of(rt->last_open_bag) == want) ||
+                    stem_of(rt->name) == want) {
+                    // rt->name is the table's own path as opened: a
+                    // live (or parked) table proves its dbf exists.
                     *pbExists = 1;
                     return ok();
                 }
             }
         }
-        auto r = ctx.remote->file_exists(name);
+        int fe_src = 2;
+        auto r = ctx.remote->file_exists(name, &fe_src);
         if (!r) return fail(r.error());
+        // Probe-level visibility: the frame hook only logs wire misses,
+        // so cache hits used to be invisible in the trace. One line per
+        // probe with the REAL path (the frame hook's tid is a truncated
+        // hash that cannot distinguish same-length paths).
+        cli_trace("FileExists", "probe %s -> %s (%s)", name.c_str(),
+                  r.value() ? "yes" : "no",
+                  fe_src == 0 ? "pos-cache" :
+                  fe_src == 1 ? "neg-cache" : "wire");
         *pbExists = r.value() ? 1 : 0;
         return ok();
     }
@@ -37714,6 +37726,16 @@ UNSIGNED32 ENTRYPOINT AdsGetNumLocks(ADSHANDLE hTable, UNSIGNED16* p) {
     // Remote: route through the wire GetAllLocks op and count (was a stub
     // returning 0 â€” lock introspection on remote tables reported nothing).
     if (auto* rt = get_remote_table(hTable)) {
+        // Same ledger fast path as AdsGetAllLocks: while the ledger is
+        // provably complete (no append auto-lock outstanding, no table
+        // lock), the count is the ledger size. rddads polls this after
+        // every commit -- answering locally saves 1 RTT each time.
+        if (!rt->locks_uncertain && !rt->table_lock_held) {
+            cli_trace_tbl(rt, "AdsGetNumLocks",
+                          "served from client lock ledger");
+            *p = static_cast<UNSIGNED16>(rt->held_recs.size());
+            return ok();
+        }
         auto r = rt->conn->get_all_locks(rt->id);
         if (!r) return fail(r.error());
         *p = static_cast<UNSIGNED16>(r.value().size());

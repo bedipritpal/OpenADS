@@ -13,6 +13,12 @@
 //      7-frame reopen per save);
 //   e) DirExist/DirMake answers cache per session (positive and
 //      negative), and repeated missing-FileExists probes cache too.
+// mtfix10:
+//   f) AdsGetNumLocks shares the GetAllLocks ledger fast path (rddads
+//      polls it after every commit/unlock -- it used to ride the wire
+//      op even when the ledger was provably complete);
+//   g) a FileExists probe for a table open on this connection answers
+//      from the open-table store (a live table proves its dbf exists).
 #include "doctest.h"
 #include "mgmt/mg_stats.h"
 #include "network/server.h"
@@ -127,6 +133,12 @@ TEST_CASE("Commit slimming: blind UnlockTable and GetAllLocks stay local") {
     REQUIRE(AdsGetAllLocks(hTable, recs, &n) == AE_SUCCESS);
     CHECK(cs_op(kOpGetAllLocks) == gal0);
     CHECK(n == 2u);
+
+    // GetNumLocks shares the ledger fast path (mtfix10).
+    UNSIGNED16 nl = 0;
+    REQUIRE(AdsGetNumLocks(hTable, &nl) == AE_SUCCESS);
+    CHECK(cs_op(kOpGetAllLocks) == gal0);
+    CHECK(nl == 2u);
     bool saw1 = false, saw3 = false;
     for (UNSIGNED16 i = 0; i < n && i < 8; ++i) {
         saw1 = saw1 || recs[i] == 1u;
@@ -143,6 +155,10 @@ TEST_CASE("Commit slimming: blind UnlockTable and GetAllLocks stay local") {
     REQUIRE(AdsGetAllLocks(hTable, recs, &n) == AE_SUCCESS);
     CHECK(cs_op(kOpGetAllLocks) == gal0 + 1);
     CHECK(n >= 3u);   // 1, 3 and the auto-locked blank
+    nl = 0;
+    REQUIRE(AdsGetNumLocks(hTable, &nl) == AE_SUCCESS);
+    CHECK(cs_op(kOpGetAllLocks) == gal0 + 2);   // uncertain: back to wire
+    CHECK(nl >= 3u);
     un0 = cs_op(kOpUnlockTable);
     REQUIRE(AdsUnlockTable(hTable) == AE_SUCCESS);
     CHECK(cs_op(kOpUnlockTable) == un0 + 1);
@@ -150,8 +166,12 @@ TEST_CASE("Commit slimming: blind UnlockTable and GetAllLocks stay local") {
     // Ledger provably empty again: local answer, zero locks.
     n = 8;
     REQUIRE(AdsGetAllLocks(hTable, recs, &n) == AE_SUCCESS);
-    CHECK(cs_op(kOpGetAllLocks) == gal0 + 1);
+    CHECK(cs_op(kOpGetAllLocks) == gal0 + 2);
     CHECK(n == 0u);
+    nl = 99;
+    REQUIRE(AdsGetNumLocks(hTable, &nl) == AE_SUCCESS);
+    CHECK(cs_op(kOpGetAllLocks) == gal0 + 2);
+    CHECK(nl == 0u);
 
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
@@ -284,8 +304,17 @@ TEST_CASE("Commit slimming: dir and missing-file answers cache") {
     CHECK(ex == 0u);
     CHECK(cs_op(kOpDirExist) == de0 + 1);
 
-    // Missing file: repeated "no" answers stop hitting the wire.
+    // A table open on this connection proves its own dbf exists: the
+    // probe answers from the open-table store with no wire op (mtfix10).
+    ADSHANDLE hTable = cs_open(hConn);
     const std::uint64_t fe0 = cs_op(kOpFileExists);
+    REQUIRE(AdsCheckExistence(hConn, (UNSIGNED8*)"CS.DBF", &ex)
+            == AE_SUCCESS);
+    CHECK(ex == 1u);
+    CHECK(cs_op(kOpFileExists) == fe0);
+    REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
+
+    // Missing file: repeated "no" answers stop hitting the wire.
     REQUIRE(AdsCheckExistence(hConn, (UNSIGNED8*)"NOPE.CDX", &ex)
             == AE_SUCCESS);
     CHECK(ex == 0u);

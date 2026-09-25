@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -2497,14 +2498,34 @@ std::uint64_t read_u64_le(const std::uint8_t* p) {
     return v;
 }
 
+// Existence-cache key: the server separator-normalizes client paths
+// (fs_sandbox), so "/" and "\\" spellings of one file are the same
+// file. Case is NOT folded: the server fs may be case-sensitive (Linux
+// hosts), where "A.DBF" and "a.dbf" are legitimately different files.
+std::string fs_cache_key(const std::string& path) {
+    std::string k = path;
+    for (auto& ch : k) {
+        if (ch == '/') ch = '\\';
+    }
+    return k;
+}
+
 } // namespace
 
 util::Result<bool>
-RemoteConnection::file_exists(const std::string& path) {
+RemoteConnection::file_exists(const std::string& path, int* src) {
+    if (src != nullptr) *src = 2;
+    const std::string key = fs_cache_key(path);
     {
         std::lock_guard<std::mutex> lk(file_exists_mu_);
-        if (file_exists_cache_.count(path) != 0) return true;
-        if (file_exists_neg_cache_.count(path) != 0) return false;
+        if (file_exists_cache_.count(key) != 0) {
+            if (src != nullptr) *src = 0;
+            return true;
+        }
+        if (file_exists_neg_cache_.count(key) != 0) {
+            if (src != nullptr) *src = 1;
+            return false;
+        }
     }
     Frame req;
     req.opcode = Opcode::FileExists;
@@ -2518,10 +2539,10 @@ RemoteConnection::file_exists(const std::string& path) {
     {
         std::lock_guard<std::mutex> lk(file_exists_mu_);
         if (exists) {
-            file_exists_cache_.insert(path);
-            file_exists_neg_cache_.erase(path);
+            file_exists_cache_.insert(key);
+            file_exists_neg_cache_.erase(key);
         } else {
-            file_exists_neg_cache_.insert(path);
+            file_exists_neg_cache_.insert(key);
         }
     }
     return exists;
@@ -2768,10 +2789,11 @@ RemoteConnection::zip_list(const std::string& zip) {
 
 util::Result<bool>
 RemoteConnection::dir_exist(const std::string& path) {
+    const std::string key = fs_cache_key(path);
     {
         std::lock_guard<std::mutex> lk(dir_cache_mu_);
-        if (dir_known_.count(path) != 0) return true;
-        if (dir_missing_.count(path) != 0) return false;
+        if (dir_known_.count(key) != 0) return true;
+        if (dir_missing_.count(key) != 0) return false;
     }
     Frame req;
     req.opcode = Opcode::DirExist;
@@ -2785,10 +2807,10 @@ RemoteConnection::dir_exist(const std::string& path) {
     {
         std::lock_guard<std::mutex> lk(dir_cache_mu_);
         if (exists) {
-            dir_known_.insert(path);
-            dir_missing_.erase(path);
+            dir_known_.insert(key);
+            dir_missing_.erase(key);
         } else {
-            dir_missing_.insert(path);
+            dir_missing_.insert(key);
         }
     }
     return exists;
@@ -2796,9 +2818,10 @@ RemoteConnection::dir_exist(const std::string& path) {
 
 util::Result<void>
 RemoteConnection::dir_make(const std::string& path) {
+    const std::string key = fs_cache_key(path);
     {
         std::lock_guard<std::mutex> lk(dir_cache_mu_);
-        if (dir_known_.count(path) != 0) return {};
+        if (dir_known_.count(key) != 0) return {};
     }
     Frame req;
     req.opcode = Opcode::DirMake;
@@ -2808,8 +2831,8 @@ RemoteConnection::dir_make(const std::string& path) {
     if (rep.value().opcode != Opcode::DirMakeAck)
         return fs_wire_err(rep.value(), "DirMake");
     std::lock_guard<std::mutex> lk(dir_cache_mu_);
-    dir_known_.insert(path);
-    dir_missing_.erase(path);
+    dir_known_.insert(key);
+    dir_missing_.erase(key);
     return {};
 }
 
@@ -2823,8 +2846,9 @@ RemoteConnection::dir_remove(const std::string& path) {
     if (rep.value().opcode != Opcode::DirRemoveAck)
         return fs_wire_err(rep.value(), "DirRemove");
     std::lock_guard<std::mutex> lk(dir_cache_mu_);
-    dir_known_.erase(path);
-    dir_missing_.insert(path);
+    const std::string rkey = fs_cache_key(path);
+    dir_known_.erase(rkey);
+    dir_missing_.insert(rkey);
     return {};
 }
 

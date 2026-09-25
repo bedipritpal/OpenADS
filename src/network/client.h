@@ -382,7 +382,10 @@ public:
     // via file_exists_invalidate) clears it. Negatives always go to
     // the wire — caching "missing" would hide a concurrently created
     // table, while a stale "present" degrades to a clean open error.
-    util::Result<bool>          file_exists(const std::string& path);
+    // src (optional out): 0 = positive cache, 1 = negative cache,
+    // 2 = wire probe. For probe-level trace logging.
+    util::Result<bool>          file_exists(const std::string& path,
+                                            int* src = nullptr);
     void                        file_exists_invalidate();
     util::Result<void>          file_erase(const std::string& path);
     util::Result<void>          file_rename(const std::string& old_p,

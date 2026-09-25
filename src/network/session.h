@@ -87,6 +87,11 @@ private:
     // Original OpenTable payload (DD alias or relative path). ensure_abi_handle
     // must reopen the same physical file — basename-only breaks subdir tables.
     std::unordered_map<std::uint32_t, std::string>            tbl_open_paths_;
+    // mtfix11 - Server::try_register_open bookkeeping per wire table id:
+    // (engine-resolved canonical path, exclusive flag) as registered at
+    // OpenTable; consumed at CloseTable / teardown for unregister_open.
+    std::unordered_map<std::uint32_t, std::pair<std::string, bool>>
+                                                            tbl_open_reg_;
     std::unordered_map<std::uint32_t, ADSHANDLE>                cursor_tbls_;
     // M12.16 — lazy-promoted ABI handle parallel to tbls_.
     std::unordered_map<std::uint32_t, ADSHANDLE>                tbls_h_;

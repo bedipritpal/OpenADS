@@ -342,6 +342,7 @@ add_executable(openads_unit_tests
     unit/network_lock_exclusion_test.cpp
     unit/network_login_gate_stress_test.cpp
     unit/abi_remote_lock_introspection_test.cpp
+    unit/network_exclusive_open_test.cpp
     unit/backend_tier1_test.cpp
     unit/abi_oads_file_funcs_test.cpp
     unit/abi_create_index_path_test.cpp

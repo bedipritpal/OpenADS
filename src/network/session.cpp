@@ -544,7 +544,11 @@ void Session::cleanup() {
     //    else still references the path, and skips LockRegistry cleanup).
     if (sess_conn_) {
         for (auto& [id, h] : tbls_) {
-            (void)id;
+            if (auto rit = tbl_open_reg_.find(id);
+                rit != tbl_open_reg_.end()) {
+                srv_->unregister_open(sid_, rit->second.first,
+                                      rit->second.second);
+            }
             if (auto* t = sess_conn_->lookup_table(h)) {
                 (void)t->flush();
                 openads::mgmt::LockRegistry::instance().remove_all_for_table(t);
@@ -555,6 +559,7 @@ void Session::cleanup() {
     }
     tbls_.clear();
     tbl_open_paths_.clear();
+    tbl_open_reg_.clear();
 
     // 5) oads_FOpen / AdsFOpen files for this session.
     files_.clear();
@@ -1878,7 +1883,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             std::string rel;
             auto open_mode = openads::engine::OpenMode::Shared;
             if (client_open_table_mode_ok_ && f.payload.size() >= 2) {
-                // M12.x extended payload: [u16 LE mode][table_name_bytes]
+                // M12.x extended payload: [u16 mode][table_name_bytes]
                 std::uint16_t mode_u16 = static_cast<std::uint16_t>(
                     static_cast<std::uint16_t>(f.payload[0]) |
                     (static_cast<std::uint16_t>(f.payload[1]) << 8));
@@ -1912,6 +1917,28 @@ DispatchResult Session::dispatch(const Frame& f) {
                 break;
             }
             std::uint32_t id = next_id_++;
+            // mtfix11 - enforce ADS_EXCLUSIVE across wire sessions (SAP
+            // semantics; the drivers alone treat Exclusive as a plain
+            // open, so a reindex/pack exclusive hold never kept a second
+            // instance's opens out). Open-then-register keeps the
+            // registry key canonical (the engine's resolved path); a
+            // denied open is closed again and answered with 7040
+            // AE_FILE_IN_USE - the same code this codebase maps Win32
+            // sharing violations to.
+            if (auto* tbl = sess_conn_->lookup_table(th.value())) {
+                const std::string& canon = tbl->path();
+                const bool excl =
+                    (open_mode == openads::engine::OpenMode::Exclusive);
+                if (!canon.empty()) {
+                    if (!srv_->try_register_open(sid_, canon, excl)) {
+                        sess_conn_->close_table(th.value());
+                        reply = err("OpenTable: table in use exclusively",
+                                    7040);
+                        break;
+                    }
+                    tbl_open_reg_.emplace(id, std::make_pair(canon, excl));
+                }
+            }
             tbls_.emplace(id, th.value());
             tbl_open_paths_.emplace(id, rel);
             srv_->add_session_table(sid_, +1, rel);
@@ -2001,6 +2028,12 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (it != tbls_.end()) {
                 sess_conn_->close_table(it->second);
                 tbls_.erase(it);
+                if (auto rit = tbl_open_reg_.find(id);
+                    rit != tbl_open_reg_.end()) {
+                    srv_->unregister_open(sid_, rit->second.first,
+                                          rit->second.second);
+                    tbl_open_reg_.erase(rit);
+                }
                 std::string tname;
                 if (auto pit = tbl_open_paths_.find(id); pit != tbl_open_paths_.end())
                     tname = pit->second;

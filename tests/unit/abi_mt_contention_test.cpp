@@ -283,7 +283,16 @@ TEST_CASE("MT: record lock contention across threads honours the byte lock") {
     std::atomic<UNSIGNED32> b_rc{0xFFFFFFFFu};
     std::thread tb([&] {
         AdsGotoRecord(hTB, 7);
-        b_rc = AdsLockRecord(hTB, 0);
+        // mtfix6: locks are single-attempt now - a contended lock fails
+        // immediately and the application owns the retry loop. Poll like
+        // an app would until A releases.
+        UNSIGNED32 rc = 1;
+        for (int a = 0; a < 400 && rc != 0; ++a) {
+            rc = AdsLockRecord(hTB, 0);
+            if (rc != 0)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        b_rc = rc;
         b_done = 1;
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(500));

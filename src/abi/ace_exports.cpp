@@ -6779,6 +6779,93 @@ remote_pool_lanes_of(openads::network::RemoteConnection* rc) {
     return pool->lanes;
 }
 
+// Lane pinning by (logical connection, path, alias).
+//
+// The thread-affine lane pool spreads a process's tables over several
+// server sessions for parallel wire throughput, but record locks are
+// owned per server SESSION. Harbour's zero-space pattern
+// (hb_dbRequest/hb_dbDetach - one workarea shared process-wide across
+// threads for login semaphores) needs the opposite: a workarea's lock
+// identity must survive being driven from any thread, and must survive a
+// close + fresh USE of the same alias (Vouch's LogUse). DBFCDX gets this
+// for free because the lock list lives in the workarea struct itself.
+//
+// Pinning gives each (connection, normalized path, alias) one stable
+// lane for the connection's lifetime: every USE of that alias+path from
+// any thread - including the first USE after a close - binds to the same
+// server session, so locks taken through it stay visible and unlockable
+// no matter which thread is holding the workarea. Different aliases of
+// the same file keep different owners (UsrConsole-style cross-owner lock
+// probes still conflict, either on another lane or as another server-side
+// Table object on the same lane). Single-threaded callers are unaffected
+// (thread affinity already kept them on lane 0).
+//
+// Pins persist across AdsCloseTable on purpose - a close releases held
+// locks (same as DBFCDX closing a workarea); what pinning preserves is
+// IDENTITY for the next open, not the locks themselves. Pins are dropped
+// at AdsDisconnect.
+//
+// Default ON; kill switch: openads.ini lane_pin_alias = 0 (or
+// OPENADS_LANE_PIN_ALIAS=0) restores pure thread-affinity.
+static std::unordered_map<std::string, openads::network::RemoteConnection*>&
+remote_lane_pins() {
+    static std::unordered_map<std::string, openads::network::RemoteConnection*> m;
+    return m;
+}
+static bool remote_lane_pin_enabled() {
+    static const bool on = [] {
+        const std::string v = openads::util::client_setting(
+            "OPENADS_LANE_PIN_ALIAS", "lane_pin_alias");
+        if (v.empty()) return true;
+        std::string l = v;
+        for (auto& c : l) c = static_cast<char>(::tolower((unsigned char)c));
+        return !(l == "0" || l == "false" || l == "off" || l == "no");
+    }();
+    return on;
+}
+static std::string remote_lane_pin_key(ADSHANDLE rem_h,
+                                       const std::string& name,
+                                       const std::string& alias) {
+    std::string n = name;
+    for (auto& c : n) { if (c == '\\') c = '/'; }
+    std::string a = alias;
+    for (auto& c : a) c = static_cast<char>(::toupper((unsigned char)c));
+    return std::to_string(static_cast<unsigned long long>(rem_h)) +
+           '\x01' + n + '\x01' + a;
+}
+// Resolve the lane for a (connection, path, alias) open: pinned lane when
+// one is recorded and alive, otherwise the thread-affine pick, which then
+// becomes the pin. s.mu must be held.
+static openads::network::RemoteConnection*
+remote_pool_lane_for_open(ADSHANDLE rem_h, const std::string& name,
+                          const std::string& alias) {
+    namespace net = openads::network;
+    if (!remote_lane_pin_enabled())
+        return remote_pool_lane_conn(static_cast<Handle>(rem_h));
+    const std::string key = remote_lane_pin_key(rem_h, name, alias);
+    auto& pins = remote_lane_pins();
+    auto it = pins.find(key);
+    if (it != pins.end()) {
+        if (it->second != nullptr && it->second->valid()) return it->second;
+        pins.erase(it);   // dead lane: fall through and re-pin
+    }
+    net::RemoteConnection* rc = remote_pool_lane_conn(static_cast<Handle>(rem_h));
+    if (rc != nullptr) pins[key] = rc;
+    return rc;
+}
+// Drop every pin of a logical connection (AdsDisconnect). s.mu held.
+static void remote_lane_pins_clear(ADSHANDLE rem_h) {
+    const std::string prefix =
+        std::to_string(static_cast<unsigned long long>(rem_h)) + '\x01';
+    for (auto it = remote_lane_pins().begin();
+         it != remote_lane_pins().end();) {
+        if (it->first.compare(0, prefix.size(), prefix) == 0)
+            it = remote_lane_pins().erase(it);
+        else
+            ++it;
+    }
+}
+
 extern "C" {
 
 
@@ -7773,6 +7860,8 @@ UNSIGNED32 ENTRYPOINT AdsDisconnect(ADSHANDLE hConnect) {
             // ANY lane still has open tables.
             auto lanes = remote_pool_lanes_of(rc0);
             if (lanes.empty()) lanes.push_back(rc0);
+            // Lane pins name lanes of this connection; drop them all.
+            remote_lane_pins_clear(hConnect);
             // Null out rt->conn on any open SQL cursors that reference this
             // connection so AdsCloseTable can detect the dangling case and
             // skip the wire op rather than crashing with a use-after-free.
@@ -7946,13 +8035,6 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     }
     if (auto* rc0 = s.registry.lookup<openads::network::RemoteConnection>(
             rem_h, HandleKind::RemoteConnection)) {
-        // MT lane: this thread's session for the logical connection.
-        // Each table pins to its lane via rt->conn below (cursor/order
-        // bindings are per-session server-side); single-threaded callers
-        // always get the primary (lane 0) — behaviour unchanged.
-        openads::network::RemoteConnection* rc =
-            remote_pool_lane_conn(static_cast<Handle>(rem_h));
-        if (rc == nullptr) rc = rc0;
         auto name = openads::abi::to_internal(pucName, 0);
         // M12.33 â€” strip tcp:// URI prefix that legacy Delphi TAdsTable
         // components embed in the table name (e.g.
@@ -7987,6 +8069,15 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         if (alias.empty()) {
             alias = std::filesystem::path(name).stem().string();
         }
+        // MT lane: this table's session for the logical connection.
+        // Lane pinning (default ON): same alias+path binds to the same
+        // lane from any thread and across close/reopen, so record-lock
+        // identity follows the workarea (zero-space detach/request).
+        // Without pinning: this thread's affine lane, and single-threaded
+        // callers always get the primary (lane 0) — behaviour unchanged.
+        openads::network::RemoteConnection* rc =
+            remote_pool_lane_for_open(rem_h, name, alias);
+        if (rc == nullptr) rc = rc0;
         openads::util::write_remote_open_audit(name, alias);
         // Pooled re-USE (USE latency): same connection/path/alias/mode
         // within TTL reuses the parked server handle — no OpenTable wire

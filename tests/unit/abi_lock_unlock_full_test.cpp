@@ -314,7 +314,14 @@ TEST_CASE("lockfull remote: threads on a shared connection don't leak locks") {
             ADSHANDLE hT = handles[t];
             for (int c = 0; c < kCycles; ++c) {
                 const UNSIGNED32 rec = 1 + (c % 5);
-                UNSIGNED32 rc = AdsLockRecord(hT, rec);
+                // mtfix6: locks are single-attempt; the application owns
+                // the retry loop under contention.
+                UNSIGNED32 rc = 1;
+                for (int a = 0; a < 500 && rc != 0; ++a) {
+                    rc = AdsLockRecord(hT, rec);
+                    if (rc != 0)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
                 if (rc != 0) { fprintf(stderr, "[lockfull] lock rc=%u\n", rc); ++failures; break; }
                 UNSIGNED8 f[] = "VAL";
                 rc = AdsSetLong(hT, f, c);

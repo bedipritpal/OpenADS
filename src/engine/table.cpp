@@ -1228,7 +1228,10 @@ util::Result<void> Table::append_record() {
     // the ACE lock budget, then roll the blank row back so a timeout
     // cannot leave a durable empty record.
     {
-        const auto p = openads::abi::lock_retry_policy();
+        // Engine-internal budget, decoupled from the client-facing ACE lock
+        // policy (single-attempt by default): the app cannot retry this
+        // internal auto-lock itself, so it keeps its own short wait.
+        const auto& p = openads::abi::engine_append_lock_policy();
         const auto t0 = std::chrono::steady_clock::now();
         const auto deadline = t0 + std::chrono::milliseconds(
             p.budget_ms() == 0 ? 1 : p.budget_ms());
@@ -1242,7 +1245,7 @@ util::Result<void> Table::append_record() {
                 std::chrono::steady_clock::now() >= deadline) {
                 break;
             }
-            openads::abi::lock_retry_sleep(i);
+            openads::abi::lock_retry_sleep(p, i);
         }
         if (!locked) {
             const std::uint32_t failed = recno_;

@@ -319,16 +319,18 @@ jobs:
           echo "version=${T#v}" >> "$GITHUB_OUTPUT"
 
       # CMakePresets v4 needs CMake >= 3.23; 20.04's apt ships 3.16, so
-      # vendor the official binary (runs on any glibc >= 2.17). clang on
-      # 20.04 is clang-10: fine for this C++17 tree, but older compilers
-      # warn differently, so warnings-as-errors is off for this leg.
+      # vendor the official binary (runs on any glibc >= 2.17). Compiler:
+      # focal's clang-10 rejects this tree's C++20 implicit-move returns
+      # (P1825, e.g. server_fs.cpp), so this leg builds with g++-10 (in
+      # the focal archive, implements P1825); warnings-as-errors stays
+      # off for the older toolchain.
       - name: Install toolchain and CMake
         shell: bash
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential clang ninja-build pkg-config \
+            build-essential g++-10 ninja-build pkg-config \
             libncurses-dev libx11-dev bison flex python3 perl
           curl -sSL -o /tmp/cmake.tar.gz \
             https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz
@@ -388,6 +390,8 @@ jobs:
         shell: bash
         run: |
           cmake --preset ninja-clang \
+                -DCMAKE_C_COMPILER=gcc-10 \
+                -DCMAKE_CXX_COMPILER=g++-10 \
                 -DOPENADS_WITH_TLS=ON \
                 -DOPENADS_WITH_HTTP=ON \
                 -DOPENADS_WARNINGS_AS_ERRORS=OFF \

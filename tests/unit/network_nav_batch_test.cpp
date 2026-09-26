@@ -177,9 +177,15 @@ TEST_CASE("Nav batching: duplicate GotoTop/GotoBottom skip their frame") {
     REQUIRE(AdsGotoBottom(hTable) == AE_SUCCESS);
     CHECK(nb_op(kOpGotoBottom) == bot0 + 1);
 
-    // A wire nav in between invalidates: top goes out again.
+    // mtfix12 R1: the wire GotoBottom certified the TOP in the same
+    // server visit, so this top answers from the pair certification —
+    // stronger than the old re-wire. A wire nav with no certification
+    // (GotoRecord) invalidates it: the next top goes out again.
     REQUIRE(AdsGotoTop(hTable) == AE_SUCCESS);
-    CHECK(nb_op(kOpGotoTop) == top0 + 1);
+    CHECK(nb_op(kOpGotoTop) == top0);       // pair-certified
+    REQUIRE(AdsGotoRecord(hTable, 2) == AE_SUCCESS);
+    REQUIRE(AdsGotoTop(hTable) == AE_SUCCESS);
+    CHECK(nb_op(kOpGotoTop) == top0 + 1);   // invalidated: back on wire
 
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
@@ -454,11 +460,19 @@ TEST_CASE("Nav batching: deferred SetOrder fuses into GotoTop") {    nb_wipe();
     REQUIRE(AdsGetRecordNum(hTable, 0, &rec) == AE_SUCCESS);
     CHECK(rec == 2u);
 
-    // Same pair to the bottom: fused the same way.
+    // Same pattern to the bottom: fused the same way. mtfix12 R1
+    // notes: the fused GotoTop above certified the bottom in the same
+    // visit, so a plain ordered GotoBottom here would be pair-served
+    // and exercise nothing. A pending order blocks the pair serve (the
+    // certified order no longer provably matches), so defer a natural
+    // switch first — the bottom on the TABLE handle fuses it into one
+    // frame exactly like leg one. (ByHandle(hOrd) can't be the second
+    // switch: with the acked binding still hOrd it reads as a
+    // same-order no-op and would leave the natural switch pending.)
+    REQUIRE(AdsSetIndexOrderByHandle(hTable, 0) == AE_SUCCESS);
     const std::uint64_t bot0 = nb_op(kOpGotoBottom);
-    REQUIRE(AdsSetIndexOrderByHandle(hTable, hOrd) == AE_SUCCESS);
     CHECK(nb_op(kOpSetOrder) == so0);
-    REQUIRE(AdsGotoBottom(hOrd) == AE_SUCCESS);
+    REQUIRE(AdsGotoBottom(hTable) == AE_SUCCESS);
     CHECK(nb_op(kOpSetOrder) == so0);
     CHECK(nb_op(kOpGotoBottom) == bot0 + 1);
 

@@ -335,6 +335,7 @@ add_executable(openads_unit_tests
     unit/network_empty_window_test.cpp
     unit/network_remote_reindex_test.cpp
     unit/network_frame_trace_test.cpp
+    unit/network_boundary_pair_test.cpp
     unit/network_commit_slimming_test.cpp
     unit/network_teardown_batch_test.cpp
     unit/network_pool_mt_test.cpp

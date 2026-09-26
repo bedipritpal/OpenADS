@@ -16256,6 +16256,27 @@ UNSIGNED32 ENTRYPOINT AdsCloseAllIndexes(ADSHANDLE hTable) {
     return ok();
 }
 
+// One-off client ABI discriminator for Vouch INDEX ON. Off unless explicitly
+// enabled. Keep this independent of wire_trace: a rejected call never hits wire.
+static void create_index_diag(const char* fmt, ...) {
+    const char* path = std::getenv("OPENADS_CREATE_INDEX_DIAG_FILE");
+    if (!path || !*path) return;
+    static std::mutex mu;
+    std::lock_guard<std::mutex> lock(mu);
+    FILE* f = std::fopen(path, "a");
+    if (!f) return;
+    va_list args;
+    va_start(args, fmt);
+    std::vfprintf(f, fmt, args);
+    va_end(args);
+    std::fputc('\n', f);
+    std::fclose(f);
+}
+
+static const char* create_index_arg(const UNSIGNED8* p) {
+    return p ? reinterpret_cast<const char*>(p) : "<NULL>";
+}
+
 UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
                             UNSIGNED8*  pucFileName,
                             UNSIGNED8*  pucIndexName,
@@ -16266,8 +16287,15 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
                             UNSIGNED16  usPageSize,
                             ADSHANDLE*  phIndex) {
     arc2_trace("AdsCreateIndex61");
+    create_index_diag("61 ENTRY h=%llu file=%.160s tag=%.160s expr=%.160s cond=%.160s keyfilter=%.160s opts=0x%08lx page=%u out=%p",
+        static_cast<unsigned long long>(hTable), create_index_arg(pucFileName),
+        create_index_arg(pucIndexName), create_index_arg(pucExpr),
+        create_index_arg(pucCondition), create_index_arg(pucKeyFilter),
+        static_cast<unsigned long>(ulOptions), static_cast<unsigned>(usPageSize),
+        static_cast<void*>(phIndex));
     if (phIndex == nullptr || pucFileName == nullptr ||
         pucIndexName == nullptr || pucExpr == nullptr) {
+        create_index_diag("61 EXIT null-arg 5000 h=%llu", static_cast<unsigned long long>(hTable));
         return fail(openads::AE_INTERNAL_ERROR, "null arg");
     }
 #if defined(OPENADS_WITH_SQLITE)
@@ -16438,6 +16466,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
     }
 #endif
     if (auto* rt = get_remote_table(hTable)) {
+        create_index_diag("61 ROUTE remote h=%llu table_id=%u", static_cast<unsigned long long>(hTable), static_cast<unsigned>(rt->id));
         std::string path = openads::abi::to_internal(pucFileName, 0);
         path = normalize_index_path(std::move(path));
         std::string tag  = openads::abi::to_internal(pucIndexName, 0);
@@ -16446,10 +16475,19 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
             ? openads::abi::to_internal(pucCondition, 0) : std::string();
         std::string kf   = pucKeyFilter
             ? openads::abi::to_internal(pucKeyFilter, 0) : std::string();
+        create_index_diag("61 WIRE 0x94 h=%llu table_id=%u path=%.160s tag=%.160s",
+            static_cast<unsigned long long>(hTable), static_cast<unsigned>(rt->id),
+            path.c_str(), tag.c_str());
         auto r = rt->conn->create_index(rt->id, path, tag, expr,
                                          cond, kf,
                                          ulOptions, usPageSize);
-        if (!r) return fail(r.error());
+        if (!r) {
+            create_index_diag("61 WIRE error h=%llu code=%u (no success ACK)",
+                static_cast<unsigned long long>(hTable), static_cast<unsigned>(r.error().code));
+            return fail(r.error());
+        }
+        create_index_diag("61 WIRE ACK success h=%llu index_id=%u (0x95)",
+            static_cast<unsigned long long>(hTable), static_cast<unsigned>(r.value()));
         // Creating a tag opens EVERY tag in the bag (ADS semantics -- the
         // server-side create binds siblings as parked views), so refresh
         // the client registry from the server: OrdCount() (AdsGetNumIndexes)
@@ -16534,8 +16572,11 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
     }
     Table* t = get_table(hTable);
     if (!t) {
+        create_index_diag("61 EXIT unknown-handle 5000 h=%llu remote_lookup_missed=1",
+            static_cast<unsigned long long>(hTable));
         return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     }
+    create_index_diag("61 ROUTE native h=%llu", static_cast<unsigned long long>(hTable));
     // Settle any coalesced dirty record first: the build loop below reads
     // rows straight from disk, so a pending buffer edit would be indexed
     // from its stale on-disk image (and silently dropped by
@@ -17242,11 +17283,18 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
                           UNSIGNED8* pucCondition, UNSIGNED32 ulOptions,
                           UNSIGNED16 usKeyType, ADSHANDLE* phIndex) {
     arc2_trace("AdsCreateIndex");
+    create_index_diag("legacy ENTRY h=%llu file=%.160s tag=%.160s expr=%.160s cond=%.160s opts=0x%08lx keytype=%u out=%p",
+        static_cast<unsigned long long>(hTable), create_index_arg(pucFile),
+        create_index_arg(pucTag), create_index_arg(pucExpr),
+        create_index_arg(pucCondition), static_cast<unsigned long>(ulOptions),
+        static_cast<unsigned>(usKeyType), static_cast<void*>(phIndex));
     if (phIndex == nullptr) {
+        create_index_diag("legacy EXIT null-out 5000 h=%llu", static_cast<unsigned long long>(hTable));
         return fail(openads::AE_INTERNAL_ERROR, "null index out-param");
     }
     // Legacy API: remote tables route through AdsCreateIndex61 (M12.16).
     if (get_remote_table(hTable) != nullptr) {
+        create_index_diag("legacy ROUTE 61 h=%llu", static_cast<unsigned long long>(hTable));
         return AdsCreateIndex61(hTable, pucFile, pucTag, pucExpr, pucCondition,
                                 nullptr, ulOptions,
                                 usKeyType ? usKeyType
@@ -17255,8 +17303,10 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
     }
     Table* t = get_table(hTable);
     if (!t) {
+        create_index_diag("legacy EXIT unknown-handle 5000 h=%llu", static_cast<unsigned long long>(hTable));
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
+    create_index_diag("legacy ROUTE native h=%llu", static_cast<unsigned long long>(hTable));
     // Settle any coalesced dirty record first (see AdsCreateIndex61).
     if (auto cr = t->commit_dirty_record(); !cr) return fail(cr.error());
     auto file = normalize_index_path(
@@ -39492,9 +39542,17 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex90(ADSHANDLE hObj, UNSIGNED8* pucFileName,
                             UNSIGNED32 ulOptions, UNSIGNED32 ulPageSize,
                             UNSIGNED8* /*pucCollation*/, ADSHANDLE* phIndex) {
     arc2_trace("AdsCreateIndex90");
-    return AdsCreateIndex61(hObj, pucFileName, pucTag, pucExpr, pucCondition,
+    create_index_diag("90 ENTRY h=%llu file=%.160s tag=%.160s expr=%.160s cond=%.160s while=%.160s opts=0x%08lx page=%lu out=%p",
+        static_cast<unsigned long long>(hObj), create_index_arg(pucFileName),
+        create_index_arg(pucTag), create_index_arg(pucExpr),
+        create_index_arg(pucCondition), create_index_arg(pucWhile),
+        static_cast<unsigned long>(ulOptions), static_cast<unsigned long>(ulPageSize),
+        static_cast<void*>(phIndex));
+    auto rc = AdsCreateIndex61(hObj, pucFileName, pucTag, pucExpr, pucCondition,
                             pucWhile, ulOptions,
                             static_cast<UNSIGNED16>(ulPageSize), phIndex);
+    create_index_diag("90 EXIT h=%llu rc=%lu", static_cast<unsigned long long>(hObj), static_cast<unsigned long>(rc));
+    return rc;
 }
 
 UNSIGNED32 ENTRYPOINT AdsDDAddTable90(ADSHANDLE hConnect, UNSIGNED8* pucAlias,

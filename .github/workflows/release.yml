@@ -93,17 +93,17 @@ jobs:
              [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] && \
              [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
             echo "Harbour SDK cached at $HB/install"
-            exit 0
+          else
+            sudo apt-get update
+            sudo apt-get install -y build-essential libncurses-dev libx11-dev
+            rm -rf "$HB"
+            mkdir -p "$HB"
+            git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+            git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+            git -C "$HB/src" checkout "$HARBOUR_REF"
+            cd "$HB/src"
+            make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
           fi
-          sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev libx11-dev
-          rm -rf "$HB"
-          mkdir -p "$HB"
-          git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
-          git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
-          git -C "$HB/src" checkout "$HARBOUR_REF"
-          cd "$HB/src"
-          make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
           # Resolve exact SDK paths (no layout guessing in CMake):
           # headers, MT VM archive, compiler binary.
           HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"

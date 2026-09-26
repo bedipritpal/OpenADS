@@ -126,12 +126,37 @@ public:
         return (server_caps_ & kCapFlushTableDurable) != 0;
     }
 
+    // Server certifies the opposite boundary on GotoTop/GotoBottom
+    // (see kCapNavBoundaryPair): one frame proves both ends, so a
+    // back-to-back dbGoTop(); dbGoBottom() ritual costs one RTT.
+    bool server_nav_boundary_pair() const noexcept {
+        return (server_caps_ & kCapNavBoundaryPair) != 0;
+    }
+
     // Current cursor-generation sequence (see nav_seq_). Relaxed load
     // is enough: it only orders the ABI layer's own duplicate
     // detection, never data.
     std::uint64_t nav_seq() const noexcept {
         return nav_seq_.load(std::memory_order_relaxed);
     }
+
+    // mtfix12 — per-table generations (R1 pair guard / R2 per-table
+    // envelope). Keyed by wire table id, bumped inside request() for
+    // every cursor/visibility-affecting frame (nav) and
+    // content-affecting frame (write) — central by construction, so no
+    // ABI call site can miss one. Index-keyed ops (Seek/SeekLast/
+    // SkipUnique/SetScope/ClearScope) and the connection-wide
+    // ShowDeleted bump through note_tbl_nav/note_all_tables_nav from
+    // the methods that know the binding. Table-id reuse after a close
+    // only starts a new table's counter higher — conservative, never
+    // stale-accepting.
+    std::uint64_t tbl_nav_seq(std::uint32_t id);
+    std::uint64_t tbl_write_gen(std::uint32_t id);
+    // Index-keyed cursor op whose parent table the caller resolved.
+    void note_tbl_nav(std::uint32_t id);
+    // Connection-wide visibility change (ShowDeleted) or an
+    // index-keyed op with no resolved parent: expire every table.
+    void note_all_tables_nav();
 
     // Server version from the HelloAck handshake ("openads/1.09.27";
     // pre-1.8.14 servers answer the literal "openads/0.3.2"). Empty
@@ -475,6 +500,13 @@ public:
     // and skips the round-trip).
     util::Result<void>          apply_open_row(RemoteTable* rt,
         const std::vector<std::uint8_t>& trailer);
+    // mtfix12 R1 — apply the certified opposite-boundary landing
+    // (pair_blob, row-trailer format) exactly as that boundary's wire
+    // ack would have: same row-trailer parse (row cache, prefetch
+    // reset, lag re-anchor), then the certified bound values and the
+    // scoped key count. Caller has already verified freshness
+    // (pair_seq/pair_write_gen) via remote_nav_pair.
+    util::Result<void>          apply_pair_blob(RemoteTable* rt);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
     util::Result<void>          set_field(std::uint32_t id,
@@ -602,6 +634,10 @@ private:
 
     std::unique_ptr<ITransport> transport_;
     std::mutex                  mu_;
+    // mtfix12 per-table generations (see tbl_nav_seq/tbl_write_gen).
+    // Guarded by mu_ (bumped inside request(), which already holds it).
+    std::unordered_map<std::uint32_t, std::uint64_t> tbl_nav_seqs_;
+    std::unordered_map<std::uint32_t, std::uint64_t> tbl_write_gens_;
     // Server caps echoed in ConnectAck (0 when the server predates caps).
     std::uint32_t               server_caps_ = 0;
     // Monotonic cursor-generation counter. Bumped ONLY by frames that
@@ -824,6 +860,56 @@ struct RemoteTable {
     // A top in order A says nothing about order B, so the duplicate
     // check requires the context to match, not just the op.
     std::uint32_t            last_nav_order = 0;
+
+    // mtfix12 R1 — boundary-pair certification. A GotoTop/GotoBottom ack
+    // on a kCapNavBoundaryPair server carries the OPPOSITE boundary's
+    // complete landing state, read by the server in the same atomic
+    // visit: the row blob in row-trailer format (pack_row_trailer
+    // bytes, lookahead depth 0), that landing's bound values, and the
+    // scoped key count. While the conn-wide nav_seq holds (identical
+    // envelope to remote_nav_duplicate) and no write touched this table
+    // since (write_gen), a back-to-back opposite-boundary call applies
+    // the blob exactly as the wire ack would have: same parser, same
+    // bound application, same keyno sync — byte-identical state, one
+    // RTT saved. pair_which is the boundary this certifies (1 = top,
+    // 2 = bottom), i.e. the OPPOSITE of the nav that carried it.
+    bool                     pair_valid     = false;
+    int                      pair_which     = 0;
+    std::uint32_t            pair_order     = 0;
+    std::uint64_t            pair_seq       = 0;
+    std::uint64_t            pair_write_gen = 0;
+    std::vector<std::uint8_t> pair_blob;
+    bool                     pair_bof       = false;
+    bool                     pair_eof       = false;
+    std::uint32_t            pair_recno     = 0;
+    bool                     pair_has_count    = false;
+    std::uint32_t            pair_reccount     = 0;
+    bool                     pair_has_keycount = false;
+    std::uint32_t            pair_keycount     = 0;
+    // Write generation snapshot: RemoteConnection::tbl_write_gen(id)
+    // at certification time (the conn bumps the live counter inside
+    // request() for every content-affecting frame, so no call site can
+    // miss it). The pair blob was read before any such change, so it
+    // must not overwrite fresher row state — guard on equality at
+    // serve time.
+    // mtfix12 R2 — certified server-cursor anchor. Set whenever a wire
+    // nav ack (or the open warm row) lands this handle's cursor on a
+    // row: the server cursor IS anchor_recno at that instant (lag is
+    // 0 by ack contract). Conn-wide envelope: valid while
+    // anchor_seq == conn nav_seq. Per-table opt-in envelope
+    // (OPENADS_NAV_SELF_GOTO=table): valid while anchor_tbl_seq ==
+    // tbl_change_seq — server cursors are per handle, so only THIS
+    // handle's frames can move it. Position-only certification; row
+    // bytes come from the existing row cache.
+    std::uint32_t            anchor_recno   = 0;
+    bool                     anchor_ok      = false;
+    std::uint64_t            anchor_seq     = 0;
+    std::uint64_t            anchor_tbl_seq = 0;
+    // anchor_tbl_seq snapshots RemoteConnection::tbl_nav_seq(id) — the
+    // per-table cursor/visibility generation bumped centrally in
+    // request(). Purely-local visibility mutations (filter/scope/order
+    // set+clear — the sites that reset last_nav) must also expire the
+    // anchor: they clear anchor_ok directly.
     // M12.19 — cached record count. Serves AdsGetRecordCount and
     // AdsGetRelKeyPos (scrollbar) without an extra RTT. Invalidated
     // on writes that may change the row count: AppendBlank /

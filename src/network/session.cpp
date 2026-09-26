@@ -1148,6 +1148,84 @@ void Session::pack_bound_trailer(Frame& reply, std::uint32_t id) {
     }
 }
 
+// mtfix12 R1 (kCapNavBoundaryPair) — see session.h. The pair section:
+//   [u8 flags][u32 trailer_len][trailer][bound 6|10][u32 keycount?]
+// flags bit 0x02 = pair bound carries reccount, bit 0x04 = keycount
+// present (ordered tables; natural order derives count == reccount on
+// the client). The trailer is pack_row_trailer output at lookahead
+// depth 0 for the OPPOSITE boundary, read inside this same visit, so
+// the client's adjacent opposite-boundary call applies it verbatim.
+void Session::pack_boundary_pair(Frame& reply, std::uint32_t id,
+                                 int which, ADSHANDLE hord,
+                                 openads::engine::Table* tbl) {
+    const bool to_bottom = (which == 1);  // certify the opposite end
+    std::uint8_t flags = 0;
+    Frame blob;
+    blob.opcode = reply.opcode;
+    Frame bnd;
+    bnd.opcode = reply.opcode;
+    UNSIGNED32 kc = 0;
+    bool granted = false;
+    if (hord != 0) {
+        // Ordered table: navigate the ABI twin (it carries the order
+        // and scope), restore the requested boundary exactly after.
+        UNSIGNED32 save_rec = 0;
+        UNSIGNED16 sb = 0, se = 0;
+        (void)AdsGetRecordNum(hord, 0, &save_rec);
+        (void)AdsAtBOF(hord, &sb);
+        (void)AdsAtEOF(hord, &se);
+        const bool empty_landing = (sb != 0 && se != 0);
+        const UNSIGNED32 grc =
+            to_bottom ? AdsGotoBottom(hord) : AdsGotoTop(hord);
+        if (grc == 0) {
+            pack_row_trailer(blob, id, 0);
+            pack_bound_trailer(bnd, id);
+            if (bnd.payload.size() >= 10) flags |= 0x02;
+            if (AdsGetKeyCount(hord, 0, &kc) == 0) flags |= 0x04;
+            granted = true;
+        }
+        if (empty_landing) {
+            (void)(which == 1 ? AdsGotoTop(hord) : AdsGotoBottom(hord));
+        } else {
+            (void)AdsGotoRecord(hord, save_rec);
+        }
+    } else if (tbl != nullptr) {
+        const std::uint32_t save_rec = tbl->recno();
+        const bool empty_landing = tbl->bof() && tbl->eof();
+        auto gr = to_bottom ? tbl->goto_bottom() : tbl->goto_top();
+        if (gr) {
+            pack_row_trailer(blob, id, 0);
+            pack_bound_trailer(bnd, id);
+            if (bnd.payload.size() >= 10) flags |= 0x02;
+            granted = true;
+        }
+        if (empty_landing) {
+            if (which == 1) (void)tbl->goto_top();
+            else            (void)tbl->goto_bottom();
+        } else {
+            (void)tbl->goto_record(save_rec);
+        }
+    }
+    if (!granted) return;  // client falls back to a plain second frame
+    reply.payload.push_back(flags);
+    const std::uint32_t tlen =
+        static_cast<std::uint32_t>(blob.payload.size());
+    reply.payload.push_back(static_cast<std::uint8_t>( tlen        & 0xFFu));
+    reply.payload.push_back(static_cast<std::uint8_t>((tlen >>  8) & 0xFFu));
+    reply.payload.push_back(static_cast<std::uint8_t>((tlen >> 16) & 0xFFu));
+    reply.payload.push_back(static_cast<std::uint8_t>((tlen >> 24) & 0xFFu));
+    reply.payload.insert(reply.payload.end(),
+                         blob.payload.begin(), blob.payload.end());
+    reply.payload.insert(reply.payload.end(),
+                         bnd.payload.begin(), bnd.payload.end());
+    if ((flags & 0x04) != 0) {
+        reply.payload.push_back(static_cast<std::uint8_t>( kc        & 0xFFu));
+        reply.payload.push_back(static_cast<std::uint8_t>((kc >>  8) & 0xFFu));
+        reply.payload.push_back(static_cast<std::uint8_t>((kc >> 16) & 0xFFu));
+        reply.payload.push_back(static_cast<std::uint8_t>((kc >> 24) & 0xFFu));
+    }
+}
+
 // M12.22/M12.23 — read-ahead depth for one forward Skip.
 //
 // `hint` is what the client asked for via AdsCacheRecords, or
@@ -1727,7 +1805,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                     openads::network::kCapSetFieldsBatch |
                     openads::network::kCapFlushInCloseAll |
                     openads::network::kCapNavOrderFuse |
-                    openads::network::kCapFlushTableDurable;
+                    openads::network::kCapFlushTableDurable |
+                    openads::network::kCapNavBoundaryPair;
                 reply.payload.push_back(
                     static_cast<std::uint8_t>( scaps        & 0xFFu));
                 reply.payload.push_back(
@@ -2082,12 +2161,21 @@ DispatchResult Session::dispatch(const Frame& f) {
             // navigating, collapsing SetOrder+GotoTop into one frame.
             // Length-gated (old clients stop at byte 6); cursor tables
             // above ignore it (their orders are query-fixed).
+            // mtfix12 R1: byte 6 is a flags byte on new clients —
+            // bit 0x01 fused order section (kCapNavOrderFuse, same
+            // wire shape as before: old clients send exactly 0x01),
+            // bit 0x02 boundary-pair request (kCapNavBoundaryPair).
             bool fused_order = false;
-            if (f.payload.size() >= 11 && f.payload[6] == 0x01) {
-                std::uint32_t oiid = read_u32_le(f.payload.data() + 7);
-                UNSIGNED32 oorc = install_table_order(id, oiid);
-                if (oorc != 0) { reply = err("SetOrder", oorc); break; }
-                fused_order = true;
+            bool want_pair = false;
+            if (f.payload.size() >= 7) {
+                const std::uint8_t fl = f.payload[6];
+                want_pair = (fl & 0x02) != 0;
+                if ((fl & 0x01) != 0 && f.payload.size() >= 11) {
+                    std::uint32_t oiid = read_u32_le(f.payload.data() + 7);
+                    UNSIGNED32 oorc = install_table_order(id, oiid);
+                    if (oorc != 0) { reply = err("SetOrder", oorc); break; }
+                    fused_order = true;
+                }
             }
             auto it = tbls_.find(id);
             if (it == tbls_.end() || !sess_conn_) {
@@ -2135,7 +2223,21 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             pack_row_trailer(reply, id, next_lookahead(id, gt_hint));
             // Reposition truth rides after the trailer (see GotoRecord).
-            pack_bound_trailer(reply, id);
+            // mtfix12 R1: pair-requested acks carry an explicit
+            // [u8 ack_flags] first (bit 0x01 = bound has reccount) so
+            // the client parses section offsets deterministically.
+            if (want_pair) {
+                Frame bnd;
+                bnd.opcode = reply.opcode;
+                pack_bound_trailer(bnd, id);
+                reply.payload.push_back(
+                    bnd.payload.size() >= 10 ? 1 : 0);
+                reply.payload.insert(reply.payload.end(),
+                                     bnd.payload.begin(),
+                                     bnd.payload.end());
+            } else {
+                pack_bound_trailer(reply, id);
+            }
             // Fused switch only: the app almost always asks this
             // order's key count next (scrollbar setup), so certify it
             // now ([u32] after the bound tail) instead of paying a
@@ -2151,6 +2253,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply.payload.push_back(static_cast<std::uint8_t>((fkc >>  8) & 0xFFu));
                 reply.payload.push_back(static_cast<std::uint8_t>((fkc >> 16) & 0xFFu));
                 reply.payload.push_back(static_cast<std::uint8_t>((fkc >> 24) & 0xFFu));
+            }
+            // mtfix12 R1: the opposite boundary's landing state,
+            // read and packed inside this same visit.
+            if (want_pair) {
+                pack_boundary_pair(reply, id, 1, hord, tbl);
             }
             // Sync AFTER packing — pack_row_trailer walks the ABI cursor
             // through the block and restores it, so the engine cursor has to be
@@ -2617,12 +2724,20 @@ DispatchResult Session::dispatch(const Frame& f) {
             // Fused nav+order: trailing [u8 0x01][u32 order_id].
             // (GotoBottom carries no depth hint, so the section starts
             // at byte 4.)
+            // mtfix12 R1: byte 4 is a flags byte on new clients (see
+            // GotoTop): bit 0x01 fused order section, bit 0x02
+            // boundary-pair request.
             bool fused_order = false;
-            if (f.payload.size() >= 9 && f.payload[4] == 0x01) {
-                std::uint32_t oiid = read_u32_le(f.payload.data() + 5);
-                UNSIGNED32 oorc = install_table_order(id, oiid);
-                if (oorc != 0) { reply = err("SetOrder", oorc); break; }
-                fused_order = true;
+            bool want_pair = false;
+            if (f.payload.size() >= 5) {
+                const std::uint8_t fl = f.payload[4];
+                want_pair = (fl & 0x02) != 0;
+                if ((fl & 0x01) != 0 && f.payload.size() >= 9) {
+                    std::uint32_t oiid = read_u32_le(f.payload.data() + 5);
+                    UNSIGNED32 oorc = install_table_order(id, oiid);
+                    if (oorc != 0) { reply = err("SetOrder", oorc); break; }
+                    fused_order = true;
+                }
             }
             auto it = tbls_.find(id);
             if (it == tbls_.end() || !sess_conn_) {
@@ -2644,7 +2759,18 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             reply.opcode = Opcode::GotoBottomAck;
             pack_row_trailer(reply, id);
-            pack_bound_trailer(reply, id);
+            if (want_pair) {
+                Frame bnd;
+                bnd.opcode = reply.opcode;
+                pack_bound_trailer(bnd, id);
+                reply.payload.push_back(
+                    bnd.payload.size() >= 10 ? 1 : 0);
+                reply.payload.insert(reply.payload.end(),
+                                     bnd.payload.begin(),
+                                     bnd.payload.end());
+            } else {
+                pack_bound_trailer(reply, id);
+            }
             // Fused switch only: certify the new order's key count
             // (see GotoTop).
             if (fused_order) {
@@ -2658,6 +2784,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply.payload.push_back(static_cast<std::uint8_t>((fkc >>  8) & 0xFFu));
                 reply.payload.push_back(static_cast<std::uint8_t>((fkc >> 16) & 0xFFu));
                 reply.payload.push_back(static_cast<std::uint8_t>((fkc >> 24) & 0xFFu));
+            }
+            if (want_pair) {
+                pack_boundary_pair(reply, id, 2, hord, tbl);
             }
             break;
         }

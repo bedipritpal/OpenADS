@@ -231,6 +231,17 @@ private:
     // what must stay a pure read. A freshly repositioned twin is not
     // in limbo; both-true genuinely means an empty cursor.
     void      pack_bound_trailer(Frame& reply, std::uint32_t id);
+    // mtfix12 R1 (kCapNavBoundaryPair): append the OPPOSITE boundary's
+    // landing state (row blob at lookahead depth 0, bound values,
+    // scoped key count for ordered tables) after the requested
+    // boundary's own sections. `which` is the boundary just navigated
+    // (1 = top, 2 = bottom); the pair certifies the other end. The
+    // cursor is restored exactly before returning; on any failure
+    // nothing is appended (the client length-gates and falls back to
+    // a plain second frame). Read-only wrt caller-visible state.
+    void      pack_boundary_pair(Frame& reply, std::uint32_t id,
+                                 int which, ADSHANDLE hord,
+                                 openads::engine::Table* tbl);
     // Warm OpenTableAck sections (USE latency): schema + first-row TLVs
     // appended after the bag field (see wire.h OpenTableAckSections).
     // The row section positions the engine cursor exactly like an

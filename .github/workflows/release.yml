@@ -308,6 +308,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.ref }}
+          # Full history + tags: the version stamp falls back to
+          # `git describe --tags`, and a shallow tag checkout can leave
+          # the tag unresolvable to the container's older git.
+          fetch-depth: 0
+
+      # The container's git refuses the runner-owned workspace ("dubious
+      # ownership"), which silently broke `git describe --tags` and shipped
+      # a plain-version stamp on the 20.04 asset. Mark it safe and re-fetch
+      # the tag refs so describe resolves even for a tag checkout.
+      - name: Make the tag resolvable to git in the container
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force origin
+          git describe --tags
 
       - name: Resolve tag
         id: tag
@@ -390,6 +405,7 @@ jobs:
         shell: bash
         run: |
           cmake --preset ninja-clang \
+                -DOPENADS_VERSION_FORCE=${{ steps.tag.outputs.version }} \
                 -DCMAKE_C_COMPILER=gcc-10 \
                 -DCMAKE_CXX_COMPILER=g++-10 \
                 -DOPENADS_WITH_TLS=ON \

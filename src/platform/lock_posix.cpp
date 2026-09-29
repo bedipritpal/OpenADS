@@ -110,6 +110,29 @@ util::Result<ByteLock> ByteLock::try_acquire(File& f, std::uint64_t offset,
     return do_lock(f, offset, length, kind, kSetLk);
 }
 
+util::Result<bool> ByteLock::probe(File& f, std::uint64_t offset,
+                                   std::uint64_t length) {
+    struct flock fl{};
+    fl.l_type   = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    fl.l_start  = static_cast<off_t>(fold_lock_offset(offset));
+    fl.l_len    = static_cast<off_t>(length);
+    fl.l_pid    = 0;
+    // native_handle() stores (fd + 1) to avoid the nullptr/fd-0 collision.
+    int fd = static_cast<int>(reinterpret_cast<intptr_t>(f.native_handle()) - 1);
+#ifdef F_OFD_SETLK
+    // F_OFD_GETLK reports conflicts against OTHER open file descriptions -
+    // exactly "another handle/session holds this byte". The querying fd's
+    // own locks are invisible to it; callers check their own list first.
+    if (::fcntl(fd, F_OFD_GETLK, &fl) == -1) return os_error("fcntl(F_OFD_GETLK)");
+#else
+    // Pre-3.15 fallback: process-scoped GETLK reports other PROCESSES only;
+    // same-process conflicts stay invisible (degraded, never wrong-safe).
+    if (::fcntl(fd, F_GETLK, &fl) == -1) return os_error("fcntl(F_GETLK)");
+#endif
+    return fl.l_type != F_UNLCK;
+}
+
 util::Result<void> ByteLock::release() {
     release_();
     return {};

@@ -8,7 +8,7 @@
 // blocks the next dbRLock() forever (the GN_COUNT R-LOCKING loop).
 //
 // This file pins every lock/unlock case: current vs explicit recno,
-// refcounted double locks, unlock of non-held records, append auto-lock
+// idempotent double locks, unlock of non-held records, append auto-lock
 // release, the dbUnlock equivalence, cross-connection contention, and
 // the multi-thread shared-connection scenario from the field.
 
@@ -69,7 +69,14 @@ ADSHANDLE open_shared(ADSHANDLE hConn, const char* name) {
     UNSIGNED8 tname[64] = {};
     std::memcpy(tname, name, std::strlen(name) + 1);  // NOLINT
     ADSHANDLE hT = 0;
-    REQUIRE(AdsOpenTable(hConn, tname, tname, ADS_CDX, 1, 1, 0, 1, &hT) == 0);
+    // usMode ADS_SHARED: this helper always opened exclusive (usMode=1),
+    // which only "worked" while exclusive opens were a silent no-op. With
+    // mtfix11's SAP-faithful enforcement a second connection's exclusive
+    // open of the same table is correctly denied, so open what the name
+    // says. (Argument order: usLockType, usCheckRights, usMode.)
+    REQUIRE(AdsOpenTable(hConn, tname, tname, ADS_CDX, ADS_ANSI,
+                         ADS_COMPATIBLE_LOCKING, ADS_IGNORERIGHTS,
+                         ADS_SHARED, &hT) == 0);
     return hT;
 }
 
@@ -101,7 +108,7 @@ TEST_CASE("lockfull local: lock current then unlock current") {
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("lockfull local: double lock is refcounted, needs two unlocks") {
+TEST_CASE("lockfull local: double lock needs one unlock") {
     auto dir = fs::temp_directory_path() / "oads_lf_refcount";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -111,7 +118,6 @@ TEST_CASE("lockfull local: double lock is refcounted, needs two unlocks") {
     REQUIRE(AdsLockRecord(hT, 2) == 0);
     REQUIRE(AdsLockRecord(hT, 2) == 0);
     CHECK(num_locks(hT) == 1u);
-    REQUIRE(AdsUnlockRecord(hT, 2) == 0);
     REQUIRE(AdsUnlockRecord(hT, 2) == 0);
     CHECK(num_locks(hT) == 0u);
     REQUIRE(AdsCloseTable(hT) == 0);
@@ -207,6 +213,38 @@ TEST_CASE("lockfull remote: lock current / unlock current over the wire") {
     CHECK(num_locks(hT) == 0u);
     REQUIRE(AdsCloseTable(hT) == 0);
     REQUIRE(AdsDisconnect(hC) == 0);
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("lockfull remote: repeated lock needs one unlock") {
+    auto dir = fs::temp_directory_path() / "oads_lf_remote_repeat";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    openads::network::Server srv;
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    ADSHANDLE hSetup = connect_local(dir);
+    stage_table(dir, "RC_REPEAT", 5, hSetup);
+    REQUIRE(AdsDisconnect(hSetup) == 0);
+
+    ADSHANDLE hA = connect_remote(dir, srv.port());
+    ADSHANDLE hB = connect_remote(dir, srv.port());
+    auto hTA = open_shared(hA, "RC_REPEAT");
+    auto hTB = open_shared(hB, "RC_REPEAT");
+    REQUIRE(AdsLockRecord(hTA, 2) == 0);
+    REQUIRE(AdsLockRecord(hTA, 2) == 0);
+    CHECK(num_locks(hTA) == 1u);
+    // The lock remains exclusive until its one and only release.
+    CHECK(AdsLockRecord(hTB, 2) != 0);
+    REQUIRE(AdsUnlockRecord(hTA, 2) == 0);
+    CHECK(num_locks(hTA) == 0u);
+    // The other session must acquire the real OS lock after just one unlock.
+    REQUIRE(AdsLockRecord(hTB, 2) == 0);
+    REQUIRE(AdsUnlockRecord(hTB, 2) == 0);
+    REQUIRE(AdsCloseTable(hTA) == 0);
+    REQUIRE(AdsCloseTable(hTB) == 0);
+    REQUIRE(AdsDisconnect(hA) == 0);
+    REQUIRE(AdsDisconnect(hB) == 0);
     srv.stop();
     fs::remove_all(dir, ec);
 }
@@ -314,7 +352,14 @@ TEST_CASE("lockfull remote: threads on a shared connection don't leak locks") {
             ADSHANDLE hT = handles[t];
             for (int c = 0; c < kCycles; ++c) {
                 const UNSIGNED32 rec = 1 + (c % 5);
-                UNSIGNED32 rc = AdsLockRecord(hT, rec);
+                // mtfix6: locks are single-attempt; the application owns
+                // the retry loop under contention.
+                UNSIGNED32 rc = 1;
+                for (int a = 0; a < 500 && rc != 0; ++a) {
+                    rc = AdsLockRecord(hT, rec);
+                    if (rc != 0)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
                 if (rc != 0) { fprintf(stderr, "[lockfull] lock rc=%u\n", rc); ++failures; break; }
                 UNSIGNED8 f[] = "VAL";
                 rc = AdsSetLong(hT, f, c);

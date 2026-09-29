@@ -13,6 +13,14 @@ project(OpenADS
 # a .git tree falls back to ${PROJECT_VERSION} from project() above.
 # The previous hard-coded "1.0.0-rc1" string drifted six releases
 # behind reality and surprised users running rc12.
+# A pipeline that knows the release tag passes it explicitly: the tag
+# is the source of truth for a release build's stamp, not the local
+# clone's git state (shallow/container checkouts may not resolve
+# `git describe` - the glibc231 container leg shipped a plain
+# "1.09.68" banner for exactly that reason).
+if(OPENADS_VERSION_FORCE)
+    set(OPENADS_VERSION_STR "${OPENADS_VERSION_FORCE}")
+else()
 set(OPENADS_VERSION_STR "${PROJECT_VERSION}")
 find_package(Git QUIET)
 if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
@@ -28,6 +36,7 @@ if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
         string(REGEX REPLACE "^v" "" OPENADS_VERSION_STR "${_git_describe}")
         string(REGEX REPLACE "-dirty$" "" OPENADS_VERSION_STR "${OPENADS_VERSION_STR}")
     endif()
+endif()
 endif()
 message(STATUS "OpenADS version: ${OPENADS_VERSION_STR}")
 # Deliver the version through a generated header instead of a global

@@ -1,0 +1,46 @@
+name: temporary reviewed upstream sync
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: reviewed-openads-working-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: perf/safe-local-answers
+          fetch-depth: 0
+      - name: Merge pinned upstream and verify reviewed tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 807f0694282f65cf1876dbae5634c15e5f3d8f29
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch https://github.com/FiveTechSoft/OpenADS.git 54e237b18ebbbae5b9b93fc1dd2a8c2f81502429
+          test "$(git rev-parse FETCH_HEAD)" = 54e237b18ebbbae5b9b93fc1dd2a8c2f81502429
+          set +e
+          git merge --no-commit --no-ff 54e237b18ebbbae5b9b93fc1dd2a8c2f81502429
+          status=$?
+          set -e
+          test "$status" = 1
+          expected=$(printf '%s\n' .github/workflows/apply-patch.yml .github/workflows/ci.yml src/abi/ace_exports.cpp src/engine/table.cpp src/network/session.cpp tests/unit/abi_remote_lock_introspection_test.cpp | sort)
+          test "$(git diff --name-only --diff-filter=U | sort)" = "$expected"
+          git checkout --ours .github/workflows/apply-patch.yml
+          python3 - <<'PYCODE'
+          import base64,zlib
+          exec(zlib.decompress(base64.b64decode('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')))
+          PYCODE
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = 24726b65cfeb8d95562f91516d67303135de8a7a
+          git commit -m 'Sync upstream main 54e237b1 into test branch; preserve mtfix20 and repair duplicate ADT source (Pritpal Bedi)'
+          test "$(git rev-parse HEAD^1)" = 807f0694282f65cf1876dbae5634c15e5f3d8f29
+          test "$(git rev-parse HEAD^2)" = 54e237b18ebbbae5b9b93fc1dd2a8c2f81502429
+          test "$(git ls-remote origin refs/heads/perf/safe-local-answers | cut -f1)" = 807f0694282f65cf1876dbae5634c15e5f3d8f29
+          git push origin HEAD:refs/heads/perf/safe-local-answers

@@ -1,0 +1,44 @@
+name: temporary mtfix21 header packaging repair
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mtfix21-header-repair
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: perf/safe-local-answers
+          fetch-depth: 0
+      - name: Verify, land packaging fix, refresh existing archives
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          expected=adf8aa5eb0b5602b7fa21e46d48e702d610eedb5
+          tag=v1.09.70-mtfix21
+          test "$(git rev-parse HEAD^)" = "$expected"
+          test "$(git ls-remote origin refs/tags/$tag | cut -f1)" = "$expected"
+          gh release view "$tag" --json isPrerelease,isDraft --jq 'select(.isPrerelease == true and .isDraft == false)' > before.json
+          test -s before.json
+          test "$(git rev-parse HEAD^{tree})" = 80bb40178a8a9064daf6a9c3522f3ca37995c8a8
+          mkdir assets
+          gh release download "$tag" --dir assets --pattern 'openads-*'
+          sha256sum assets/*
+          printf '%s' 'aW1wb3J0IG9zLHppcGZpbGUsdGFyZmlsZSxoYXNobGliLHBhdGhsaWIsc2h1dGlsCnJvb3Q9cGF0aGxpYi5QYXRoKCdpbmNsdWRlL29wZW5hZHMnKTsgYXNzZXRzPXBhdGhsaWIuUGF0aCgnYXNzZXRzJyk7IG91dD1wYXRobGliLlBhdGgoJ3JlcGFja2VkJyk7b3V0Lm1rZGlyKCkKaGVhZGVycz17ZidpbmNsdWRlL29wZW5hZHMve259LmgnOnJvb3QvZid7bn0uaCcgZm9yIG4gaW4gWydhY2UnLCdlcnJvcicsJ29wZW5hZHNfc3FsJywncGxhdGZvcm0nLCd2ZXJzaW9uJ119O2hlYWRlcnNbJ2luY2x1ZGUvYWNlLmgnXT1yb290LydhY2UuaCcKZm9yIHAgaW4gc29ydGVkKGFzc2V0cy5pdGVyZGlyKCksa2V5PWxhbWJkYSBwOiAobm90IHAubmFtZS5lbmRzd2l0aCgnd2luZG93cy14ODYuemlwJykscC5uYW1lKSk6CiBkZXN0PW91dC9wLm5hbWUKIGlmIHAuc3VmZml4PT0nLnppcCc6CiAgd2l0aCB6aXBmaWxlLlppcEZpbGUocCkgYXMgemksemlwZmlsZS5aaXBGaWxlKGRlc3QsJ3cnLGNvbXByZXNzaW9uPXppcGZpbGUuWklQX0RFRkxBVEVEKSBhcyB6bzoKICAgb3JpZz17aS5maWxlbmFtZTpoYXNobGliLnNoYTI1Nih6aS5yZWFkKGkuZmlsZW5hbWUpKS5oZXhkaWdlc3QoKSBmb3IgaSBpbiB6aS5pbmZvbGlzdCgpIGlmIG5vdCBpLmlzX2RpcigpfQogICBmb3IgaSBpbiB6aS5pbmZvbGlzdCgpOnpvLndyaXRlc3RyKGksemkucmVhZChpLmZpbGVuYW1lKSkKICAgZm9yIG5hbWUsc3JjIGluIGhlYWRlcnMuaXRlbXMoKTp6by53cml0ZShzcmMsbmFtZSkKICB3aXRoIHppcGZpbGUuWmlwRmlsZShkZXN0KSBhcyB6OgogICBhc3NlcnQgYWxsKGhhc2hsaWIuc2hhMjU2KHoucmVhZChuKSkuaGV4ZGlnZXN0KCk9PWggZm9yIG4saCBpbiBvcmlnLml0ZW1zKCkpCiAgIGFzc2VydCBhbGwoei5yZWFkKG4pPT1zLnJlYWRfYnl0ZXMoKSBmb3IgbixzIGluIGhlYWRlcnMuaXRlbXMoKSkKIGVsc2U6CiAgd2l0aCB0YXJmaWxlLm9wZW4ocCwncjpneicpIGFzIHRpOgogICBtZW1iZXJzPXRpLmdldG1lbWJlcnMoKTtwcmVmaXg9bWVtYmVyc1swXS5uYW1lLnNwbGl0KCcvJylbMF07b3JpZz17bS5uYW1lOmhhc2hsaWIuc2hhMjU2KHRpLmV4dHJhY3RmaWxlKG0pLnJlYWQoKSkuaGV4ZGlnZXN0KCkgZm9yIG0gaW4gbWVtYmVycyBpZiBtLmlzZmlsZSgpfQogICB3aXRoIHRhcmZpbGUub3BlbihkZXN0LCd3Omd6JykgYXMgdG86CiAgICBmb3IgbSBpbiBtZW1iZXJzOnRvLmFkZGZpbGUobSx0aS5leHRyYWN0ZmlsZShtKSBpZiBtLmlzZmlsZSgpIGVsc2UgTm9uZSkKICAgIGZvciBuYW1lLHNyYyBpbiBoZWFkZXJzLml0ZW1zKCk6dG8uYWRkKHNyYyxhcmNuYW1lPXByZWZpeCsnLycrbmFtZSkKICB3aXRoIHRhcmZpbGUub3BlbihkZXN0LCdyOmd6JykgYXMgdDoKICAgYXNzZXJ0IGFsbChoYXNobGliLnNoYTI1Nih0LmV4dHJhY3RmaWxlKG4pLnJlYWQoKSkuaGV4ZGlnZXN0KCk9PWggZm9yIG4saCBpbiBvcmlnLml0ZW1zKCkpCiAgIGFzc2VydCBhbGwodC5leHRyYWN0ZmlsZShwcmVmaXgrJy8nK24pLnJlYWQoKT09cy5yZWFkX2J5dGVzKCkgZm9yIG4scyBpbiBoZWFkZXJzLml0ZW1zKCkpCiBwcmludChwLm5hbWUsaGFzaGxpYi5zaGEyNTYoZGVzdC5yZWFkX2J5dGVzKCkpLmhleGRpZ2VzdCgpLCdvcmlnaW5hbCBieXRlcyBwcmVzZXJ2ZWQ7IHNpeCBoZWFkZXJzIHZlcmlmaWVkJykK' | base64 -d > /tmp/repack.py
+          python3 /tmp/repack.py
+          gh release upload "$tag" repacked/openads-1.09.70-mtfix21-windows-x86.zip --clobber
+          for asset in repacked/*; do
+            [[ "$asset" == *windows-x86.zip ]] && continue
+            gh release upload "$tag" "$asset" --clobber
+          done
+          gh release view "$tag" --json isPrerelease,isDraft --jq 'select(.isPrerelease == true and .isDraft == false)' > after.json
+          test -s after.json
+          test "$(git ls-remote origin refs/tags/$tag | cut -f1)" = "$expected"
+          sha256sum repacked/*

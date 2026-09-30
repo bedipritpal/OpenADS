@@ -1,0 +1,35 @@
+name: temporary mtfix21 test tag
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: mtfix21-test-tag
+  cancel-in-progress: false
+jobs:
+  tag-and-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: perf/safe-local-answers
+          fetch-depth: 0
+      - name: Verify pinned test build, create tag, dispatch packaging
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          expected=adf8aa5eb0b5602b7fa21e46d48e702d610eedb5
+          tag=v1.09.70-mtfix21
+          test "$(git rev-parse HEAD)" = "$expected"
+          test "$(git ls-remote origin refs/heads/perf/safe-local-answers | cut -f1)" = "$expected"
+          test -z "$(git ls-remote origin refs/tags/$tag)"
+          test -f release-notes-1.09.70-mtfix21.md
+          test "$(git rev-parse HEAD^)" = 510e362693aad2b5318b0dd525cd483b9cff7d4f
+          test "$(git diff --name-only HEAD^ HEAD)" = release-notes-1.09.70-mtfix21.md
+          git tag "$tag" "$expected"
+          git push origin "refs/tags/$tag"
+          gh workflow run release.yml --repo bedipritpal/OpenADS --ref perf/safe-local-answers -f tag="$tag"

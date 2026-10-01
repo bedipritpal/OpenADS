@@ -25,9 +25,6 @@ jobs:
     # 90: a cold Harbour SDK build (Linux leg) plus the full tree can
     # exceed the old 60-minute cap; cached runs finish far sooner.
     timeout-minutes: 90
-    # The macOS runners can stall in the test step (>60 min);
-    # don't let them block the release while that's investigated.
-    continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
     strategy:
       fail-fast: false
       matrix:
@@ -153,10 +150,8 @@ jobs:
         run: cmake --build build/${{ matrix.preset }} --config Release
 
       - name: Test
-        # The macOS runners can stall here (>60 min); cap them and
-        # let the leg pass anyway so it can't block the release.
+        # macOS tests are a hard release gate; bound a stalled runner.
         timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 20 || 30 }}
-        continue-on-error: ${{ startsWith(matrix.os, 'macos') }}
         run: ctest --test-dir build/${{ matrix.preset }}
                    --output-on-failure -C Release
 

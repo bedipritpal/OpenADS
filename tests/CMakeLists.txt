@@ -39,6 +39,7 @@ add_executable(openads_unit_tests
     unit/platform_thread_test.cpp
     unit/dbf_header_test.cpp
     unit/dbf_field_test.cpp
+    unit/dbf_wide_char_test.cpp
     unit/dbf_record_test.cpp
     unit/dbf_write_test.cpp
     unit/ntx_driver_test.cpp
@@ -209,6 +210,7 @@ add_executable(openads_unit_tests
     unit/abi_remote_index_reopen_test.cpp
     unit/abi_remote_zombie_lock_test.cpp
     unit/network_skip_depth_test.cpp
+    unit/abi_index_focus_contract_test.cpp
     unit/abi_remote_index_nav_test.cpp
     unit/abi_remote_date_index_scope_test.cpp
     unit/abi_remote_prodcdx_test.cpp
@@ -268,6 +270,7 @@ add_executable(openads_unit_tests
     unit/abi_adt_smoke_test.cpp
     unit/abi_adt_create_test.cpp
     unit/abi_adt_append_exclusive_test.cpp
+    unit/abi_adt_append_exclusive_upstream_test.cpp
     unit/abi_adt_wide_numeric_test.cpp
     unit/abi_adi_create_test.cpp
     unit/abi_adi_separate_bag_test.cpp

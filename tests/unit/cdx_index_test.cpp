@@ -524,6 +524,7 @@ TEST_CASE("CdxIndex create resets page allocator tail after recreate at same pat
 TEST_CASE("CdxIndex seek_last descends multilevel duplicate-key branches and refreshes peers") {
     const auto p = fs::temp_directory_path() / "openads_cdx_last_multilevel.cdx";
     fs::remove(p);
+    {
     auto c = CdxIndex::create(p.string(), "T1", "TAG", 19, false, false);
     REQUIRE(c.has_value());
     CdxIndex writer = std::move(c).value();
@@ -553,12 +554,14 @@ TEST_CASE("CdxIndex seek_last descends multilevel duplicate-key branches and ref
     REQUIRE(last.has_value());
     CHECK(last.value().recno == 20001);
     CHECK(reader.current_key() == std::string(19, 'Z'));
+    } // Close the CDX handles before deleting the fixture on Windows.
     fs::remove(p);
 }
 
 TEST_CASE("CdxIndex seek_last skips empty rightmost leaves and handles an erased tree") {
     const auto p = fs::temp_directory_path() / "openads_cdx_last_holes.cdx";
     fs::remove(p);
+    {
     auto c = CdxIndex::create(p.string(), "T1", "TAG", 19, false, false);
     REQUIRE(c.has_value());
     CdxIndex ix = std::move(c).value();
@@ -589,5 +592,6 @@ TEST_CASE("CdxIndex seek_last skips empty rightmost leaves and handles an erased
     last = ix.seek_last();
     REQUIRE(last.has_value());
     CHECK_FALSE(last.value().positioned);
+    } // Close the CDX handles before deleting the fixture on Windows.
     fs::remove(p);
 }

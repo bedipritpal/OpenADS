@@ -139,3 +139,56 @@ TEST_CASE("M9.25 AdsMgGetUserNames clamps to caller capacity") {
 
     REQUIRE(AdsMgDisconnect(h) == 0);
 }
+
+#include "network/server.h"
+#include "openads/error.h"
+
+TEST_CASE("daemon management DLL sends password on every snapshot and mutator socket") {
+    openads::network::Server server;
+    server.set_daemon_hardening(true);
+    server.add_credential("admin", "secret");
+    REQUIRE(server.start("127.0.0.1", 0));
+    std::string endpoint = "127.0.0.1:" + std::to_string(server.port());
+    UNSIGNED8 user[] = "admin";
+    UNSIGNED8 password[] = "secret";
+    ADSHANDLE handle = 0;
+    REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), user, password, &handle) == 0);
+    ADS_MGMT_COMM_STATS stats{};
+    UNSIGNED16 bytes = sizeof(stats);
+    CHECK(AdsMgGetCommStats(handle, &stats, &bytes) == 0);
+    CHECK(AdsMgResetCommStats(handle) == 0);
+    CHECK(AdsMgDisconnect(handle) == 0);
+    server.stop();
+}
+
+TEST_CASE("daemon management DLL rejects missing or wrong credentials without changing LOCAL") {
+    openads::network::Server server;
+    server.set_daemon_hardening(true);
+    server.add_credential("admin", "secret");
+    REQUIRE(server.start("127.0.0.1", 0));
+    std::string endpoint = "127.0.0.1:" + std::to_string(server.port());
+    UNSIGNED8 user[] = "admin";
+    UNSIGNED8 wrong[] = "wrong";
+    ADSHANDLE handle = 0;
+    CHECK(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), user, wrong, &handle) != 0);
+    CHECK(handle == 0);
+    UNSIGNED8 local[] = "local";
+    REQUIRE(AdsMgConnect(local, user, wrong, &handle) == 0);
+    CHECK(AdsMgDisconnect(handle) == 0);
+    server.stop();
+}
+
+TEST_CASE("daemon loopback management without credentials is read-only") {
+    openads::network::Server server;
+    server.set_daemon_hardening(true);
+    REQUIRE(server.start("127.0.0.1", 0));
+    std::string endpoint = "127.0.0.1:" + std::to_string(server.port());
+    ADSHANDLE handle = 0;
+    REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), nullptr, nullptr, &handle) == 0);
+    ADS_MGMT_COMM_STATS stats{};
+    UNSIGNED16 bytes = sizeof(stats);
+    CHECK(AdsMgGetCommStats(handle, &stats, &bytes) == 0);
+    CHECK(AdsMgResetCommStats(handle) != 0);
+    CHECK(AdsMgDisconnect(handle) == 0);
+    server.stop();
+}

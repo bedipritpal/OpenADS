@@ -1690,3 +1690,283 @@ TEST_CASE("Enterprise pool: Data Dictionary connection + DD-resolved SQL over th
     srv.stop();
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("Network login throttling survives reconnect and isolates IP/account counters") {
+    Server server;
+    server.set_daemon_hardening(true);
+    CHECK(server.login_allowed("192.0.2.1", "alice"));
+    server.login_failed("192.0.2.1", "alice", 1);
+    CHECK_FALSE(server.login_allowed("192.0.2.1", "alice"));
+    CHECK_FALSE(server.login_allowed("192.0.2.2", "alice"));
+    CHECK_FALSE(server.login_allowed("192.0.2.1", "bob"));
+    CHECK(server.login_allowed("192.0.2.2", "bob"));
+    server.login_succeeded("192.0.2.1", "alice");
+    CHECK_FALSE(server.login_allowed("192.0.2.1", "alice"));
+    CHECK(server.login_allowed("192.0.2.2", "alice"));
+}
+
+TEST_CASE("Network requires Connect before mutex or DD operations") {
+    Server server;
+    server.set_daemon_hardening(true);
+    REQUIRE(server.start("127.0.0.1", 0));
+    for (auto opcode : {Opcode::Mutex, Opcode::DDCreateUser, Opcode::ExecuteSQL, Opcode::MgRequest}) {
+        auto connection = connect_tcp("127.0.0.1", server.port());
+        REQUIRE(connection);
+        Socket socket = connection.value();
+        Frame req;
+        req.opcode = opcode;
+        REQUIRE(write_frame(socket, req));
+        auto response = read_frame(socket);
+        REQUIRE(response);
+        CHECK(response.value().opcode == Opcode::Error);
+        sock_close(socket);
+    }
+    server.stop();
+}
+
+TEST_CASE("Network management session cannot switch to database operations") {
+    Server server;
+    server.set_daemon_hardening(true);
+    REQUIRE(server.start("127.0.0.1", 0));
+    auto connection = connect_tcp("127.0.0.1", server.port());
+    REQUIRE(connection);
+    Socket socket = connection.value();
+    Frame request;
+    request.opcode = Opcode::MgConnect;
+    REQUIRE(write_frame(socket, request));
+    auto response = read_frame(socket);
+    REQUIRE(response);
+    REQUIRE(response.value().opcode == Opcode::MgConnectAck);
+    request.opcode = Opcode::Connect;
+    REQUIRE(write_frame(socket, request));
+    response = read_frame(socket);
+    REQUIRE(response);
+    CHECK(response.value().opcode == Opcode::Error);
+    sock_close(socket);
+    server.stop();
+}
+
+TEST_CASE("Network failed Connect does not authorize a coalesced management mutator") {
+    Server server;
+    server.set_daemon_hardening(true);
+    server.add_credential("admin", "secret");
+    REQUIRE(server.start("127.0.0.1", 0));
+    auto connection = connect_tcp("127.0.0.1", server.port());
+    REQUIRE(connection);
+    Socket socket = connection.value();
+    Frame request;
+    request.opcode = Opcode::Connect;
+    request.payload = {0, 0, 0, 0, 0, 0};
+    auto first = openads::network::encode_frame(request);
+    REQUIRE(first);
+    request.opcode = Opcode::MgRequest;
+    request.payload.clear();
+    auto second = openads::network::encode_frame(request);
+    REQUIRE(second);
+    auto bytes = first.value();
+    bytes.insert(bytes.end(), second.value().begin(), second.value().end());
+    std::size_t sent = 0;
+    while (sent < bytes.size()) {
+        auto result = openads::network::sock_send(socket, bytes.data() + sent, bytes.size() - sent);
+        REQUIRE(result);
+        REQUIRE(result.value() > 0);
+        sent += result.value();
+    }
+    auto response = read_frame(socket);
+    REQUIRE(response);
+    CHECK(response.value().opcode == Opcode::Error);
+    response = read_frame(socket);
+    REQUIRE(response);
+    CHECK(response.value().opcode == Opcode::Error);
+    sock_close(socket);
+    server.stop();
+}
+
+#if defined(OPENADS_WITH_TLS)
+#include "network/tls_transport.h"
+#include "network/worker_pool.h"
+namespace {
+const char* tls_test_cert = R"PEM(-----BEGIN CERTIFICATE-----
+MIIDHzCCAgegAwIBAgIUMiv8kFxegndjtTrZZmvvL5pJEPcwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MTAwMjIzMzY1NVoXDTM2MDky
+OTIzMzY1NVowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEApFfhYhCylxtqm19DwpUMaKp/oLTevYnuhHyPf0Gj7hVj
+K5m1fhrxqyME46RXuRBFVx4+No+/aNduMigtmQYwILpJRZ/NttgLQbLdj9nEcdJp
+xcW2B3B20R6YqZk7jtp1RpETUI5twAjft0wuKD91DuKO8z9WE48gvlZA5F9YiNHV
+8GzhE5ezyPh1cuCwglo6Kp/hHdQ3xRXHHKqz8w1hA+VautV2QAXR2dy6GWwdXpRF
+XjV13A+N83U6fYU0DHtcB2Ol97/68uS7AuMwPKOo45B8BwkwAZJIeOPVvTX/y28U
+L6Im8E0f35kqUz9xfviZVkhf6RcuWenTotIQF+q3xQIDAQABo2kwZzAdBgNVHQ4E
+FgQUa8UyGpxY06hNJWGVU/Nn16vLOPQwHwYDVR0jBBgwFoAUa8UyGpxY06hNJWGV
+U/Nn16vLOPQwDwYDVR0TAQH/BAUwAwEB/zAUBgNVHREEDTALgglsb2NhbGhvc3Qw
+DQYJKoZIhvcNAQELBQADggEBACmmZB7xqro8ePCeQMvJSfilSKQ4JS9Vd38GFxpF
+dOB993hx77ATLvtx+HFouetFStIar6y3a38N+tfKle4RqVOP8rDRWEoFFVomqKpj
+18Hws0I0+2gZlsBLTV2CUh+jkAqD6td2+C1/NtniJPPLJt5zCJggIAc7CZGiQG2u
+AdzFSrK13x04ytWclz9AUemnJrto+q+4QB5RV1LqysoTkmYo+DC8ptvqFDuc231F
+qbuGK5kwhigm9qcKQNFVKwr9r6bcnPBapAX5U9cciPvdgDVYbu88peP1TjzRvoIv
+qpyFwJ7RqiiCY/wD8ueg73Onw9vNAsjrTOvL6K9xo+Hrb8E=
+-----END CERTIFICATE-----
+)PEM";
+// Test-only key, never deployed. Its only purpose is exercising the handshake.
+const char* tls_test_key = R"PEM(-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCkV+FiELKXG2qb
+X0PClQxoqn+gtN69ie6EfI9/QaPuFWMrmbV+GvGrIwTjpFe5EEVXHj42j79o124y
+KC2ZBjAguklFn8222AtBst2P2cRx0mnFxbYHcHbRHpipmTuO2nVGkRNQjm3ACN+3
+TC4oP3UO4o7zP1YTjyC+VkDkX1iI0dXwbOETl7PI+HVy4LCCWjoqn+Ed1DfFFccc
+qrPzDWED5Vq61XZABdHZ3LoZbB1elEVeNXXcD43zdTp9hTQMe1wHY6X3v/ry5LsC
+4zA8o6jjkHwHCTABkkh449W9Nf/LbxQvoibwTR/fmSpTP3F++JlWSF/pFy5Z6dOi
+0hAX6rfFAgMBAAECggEABYG8V6DfmxicFeC3UInWBJvR8vycihVZHK9fz4/PgmbN
+D+Tyo+sbNfTScR5MojLdX/Hve7yNWWH+m0elX39JlY8obWDRb9MFbYokynEtl/LJ
+AIuDcfRextsTmns796lyTI8H6qcbHlgtxuKSmV6m+Xy19YilxboCCt6xBfX77Xms
+vmxAKxoUByNQSkKPSZHtbAXYFJmk31F40y5Pj1Vbf075BKyOmO2gxj1C19fnpjzm
+f9pkGcGntEhGS/2QUaD/bGcFYvWs0f+YJHZWt78/BGNtFsxaYHSReM6vcqrlROAC
+mzEgVgk4Ol35djVk7IGyVTX8b5ymVtpwwO9BrACIcQKBgQC/p+7opmh8ALXB28EG
+zxq14sXYXZWHpHDNyI1CC+FzM66kEcMe+KKTI2sc2FBy0O+3Deh13wLV+Ur6UoLq
+yCpO65ocf6biLb3+A0sezlAwx3mqz280q54rT4Sc4dPNSDM7rbJc6AK2Yem+zqd4
+R1Os0dybLGtrDkHP4m8qKuaK0wKBgQDbhId17/QZVLG/h96qnh91mRLpOUhPBkIZ
+5MT+iN8gGKtAQsSNqcBOlRlbYH8MOhxPRmeVp4L9OvvJOuEkhelozo/5JprBJLHp
+wcC7Y19FU0tWUgM6qJyw0bBUNgoS1LAD93nepbgyDJVTtxZxTUFFPfjduyU9hlHL
+ZtrmeoPkBwKBgC72fJFfrXytQ9xz99GuUBI/tlE1ZV2uisGyIgMMHDt5b5Lek1x0
+eonphOa1jskDr6nAa7TuZ6h9BMVgEJptYAikrMfM89y6brLepbqvvXCmgIa9e7eB
+Uim0u38hyx+jUIKQJoOjin6ccYWC6ACOIc/YQOF5Of0qqi/BgZHon0NnAoGAfeUq
+EzeE1So/rsrrpwp8nGMn914E3F2Id3U+jYROAwhi3r3sIBrk0aytGDzlYEvLhKOq
+MKgbdcPoN2ZvTRUH4jXlWE0NoAu9hYS7Vj0NnKLCqETs2S1uf/IioIlFibs1H3FF
+Ea4VT47r7VEpq91Uu7NpETGNkBWCv5bDoD9PeO0CgYEApaxZ4QfRDtOJu1zZxfVA
+v4i9zdrjCKLMHVupUpFtPQH4HIrEOnQlVcCjAdu5SWIsWkT6A0ilOnN/izKf1z/4
+kypB5jbwAh6MMMxUQ8VDVx2GXYzNiU8NVw6SIcMRirJ560o9x3q1RqH8zDB2NFnA
+jpaoCC0GFWggLtLPIvszZig=
+-----END PRIVATE KEY-----
+)PEM";
+}
+TEST_CASE("native TLS listener validates config and serves encrypted Hello") {
+    openads::network::TlsConfig server_config;
+    server_config.cert_pem = tls_test_cert;
+    server_config.key_pem = tls_test_key;
+    Server server;
+    server.set_daemon_hardening(true);
+    openads::network::TlsConfig invalid;
+    CHECK_FALSE(server.set_tls(invalid).has_value());
+    invalid.cert_pem = tls_test_cert;
+    invalid.key_pem = "not a PEM private key";
+    CHECK_FALSE(server.set_tls(invalid).has_value());
+    REQUIRE(server.set_tls(server_config).has_value());
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    openads::network::TlsConfig client_config;
+    client_config.ca_pem = tls_test_cert;
+    client_config.sni_hostname = "localhost";
+    auto client = openads::network::connect_tls("127.0.0.1", server.port(), client_config);
+    REQUIRE(client.has_value());
+    Frame request;
+    request.opcode = Opcode::Hello;
+    REQUIRE(write_frame(*client.value(), request).has_value());
+    auto response = read_frame(*client.value());
+    REQUIRE(response.has_value());
+    CHECK(response.value().opcode == Opcode::HelloAck);
+    // A wire frame larger than one TLS record is split by the transport.
+    request.payload.resize(20000, 42);
+    REQUIRE(write_frame(*client.value(), request).has_value());
+    REQUIRE(read_frame(*client.value()).has_value());
+    client.value()->close();
+    client_config.sni_hostname = "wrong-host.invalid";
+    CHECK_FALSE(openads::network::connect_tls("127.0.0.1", server.port(), client_config).has_value());
+    server.stop();
+}
+TEST_CASE("native TLS single-worker pool serves a client while another handshake stalls") {
+    openads::network::TlsConfig config;
+    config.cert_pem = tls_test_cert;
+    config.key_pem = tls_test_key;
+    Server server;
+    server.set_daemon_hardening(true);
+    REQUIRE(server.set_tls(config).has_value());
+    openads::network::WorkerPool pool(server, 1);
+    pool.start();
+    auto listener = openads::network::listen_tcp({"127.0.0.1", 0, 4});
+    REQUIRE(listener.has_value());
+    auto port = openads::network::socket_local_port(listener.value());
+    REQUIRE(port.has_value());
+    auto stalled = connect_tcp("127.0.0.1", port.value());
+    REQUIRE(stalled.has_value());
+    auto accepted = openads::network::accept_one(listener.value());
+    REQUIRE(accepted.has_value());
+    pool.submit(accepted.value(), "", port.value());
+    // Truncated ClientHello record: no worker may wait for its remainder.
+    const std::uint8_t partial[] = {22, 3, 3, 0, 20, 1};
+    REQUIRE(openads::network::sock_send(stalled.value(), partial, sizeof(partial)).has_value());
+    openads::network::TlsConfig client_config;
+    client_config.ca_pem = tls_test_cert;
+    client_config.sni_hostname = "localhost";
+    std::thread accept_thread([&] {
+        auto incoming = openads::network::accept_one(listener.value());
+        if (incoming) pool.submit(incoming.value(), "", port.value());
+    });
+    auto client = openads::network::connect_tls("127.0.0.1", port.value(), client_config);
+    accept_thread.join();
+    REQUIRE(client.has_value());
+    Frame hello;
+    hello.opcode = Opcode::Hello;
+    REQUIRE(write_frame(*client.value(), hello).has_value());
+    auto reply = read_frame(*client.value());
+    REQUIRE(reply.has_value());
+    CHECK(reply.value().opcode == Opcode::HelloAck);
+    client.value()->close();
+    sock_close(stalled.value());
+    pool.stop();
+    sock_close(listener.value());
+}
+#endif
+
+TEST_CASE("daemon policy preserves AdsConnect60 authenticated table reads") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_daemon_table_regression";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB"});
+
+    Server srv;
+    srv.set_daemon_hardening(true);
+    srv.add_credential("reader", "secret");
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    char uri[256];
+    std::snprintf(uri, sizeof(uri),
+                  "tcp://127.0.0.1:%u/%s",
+                  static_cast<unsigned>(srv.port()),
+                  dir.string().c_str());
+
+    UNSIGNED8 srvbuf[256];
+    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
+    UNSIGNED8 leaf[64] = "data.dbf";
+
+    ADSHANDLE hConn = 0;
+    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
+                         (UNSIGNED8*)"reader", (UNSIGNED8*)"secret", 0, &hConn) == 0);
+
+    ADSHANDLE hTable = 0;
+    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
+                         0, 0, 0, 0, &hTable) == 0);
+
+    UNSIGNED32 cnt = 0;
+    REQUIRE(AdsGetRecordCount(hTable, 0, &cnt) == 0);
+    CHECK(cnt == 2);
+
+    REQUIRE(AdsGotoTop(hTable) == 0);
+    UNSIGNED8  buf[16] = {0};
+    UNSIGNED32 cap = sizeof(buf);
+    REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
+    std::string s((char*)buf, cap);
+    while (!s.empty() && s.back() == ' ') s.pop_back();
+    CHECK(s == "AAAA");
+
+    REQUIRE(AdsSkip(hTable, 1) == 0);
+    cap = sizeof(buf); std::memset(buf, 0, sizeof(buf));
+    REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
+    std::string s2((char*)buf, cap);
+    while (!s2.empty() && s2.back() == ' ') s2.pop_back();
+    CHECK(s2 == "BBBB");
+
+    REQUIRE(AdsCloseTable(hTable) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+
+    srv.stop();
+    fs::remove_all(dir, ec);
+}

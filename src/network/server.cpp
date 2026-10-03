@@ -6,6 +6,7 @@
 #include "openads_version.h"
 
 #include "engine/aof_eval.h"
+#include "engine/pbkdf2.h"
 #include "engine/aof_expr.h"
 #include "engine/table.h"
 #include "mgmt/error_log.h"
@@ -21,6 +22,7 @@
 #include "sql_backend/enterprise_config.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -192,10 +194,62 @@ void Server::ensure_server_id() {
 void Server::add_credential(const std::string& user,
                             const std::string& password) {
     std::lock_guard<std::mutex> lk(creds_mu_);
-    creds_[user] = password;
+    creds_[user] = daemon_hardening_ ? openads::engine::hash_password(password) : password;
 }
 
-bool Server::require_auth() const noexcept { return !creds_.empty(); }
+bool Server::require_auth() const noexcept {
+    std::lock_guard<std::mutex> lk(creds_mu_);
+    return !creds_.empty();
+}
+
+
+namespace {
+std::string login_user_key(std::string user) {
+    for (char& ch : user) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return "user:" + user;
+}
+}
+bool Server::login_allowed(const std::string& ip, const std::string& user) {
+    if (!daemon_hardening_) return true;
+    std::lock_guard<std::mutex> lk(login_mu_);
+    const auto now = std::chrono::steady_clock::now();
+    // Expire only genuinely quiet entries. Active attacks cannot reset a
+    // counter by cycling connections or filling the bounded registry.
+    for (auto it = login_attempts_.begin(); it != login_attempts_.end();) {
+        if (now - it->second.updated >= std::chrono::minutes(15))
+            it = login_attempts_.erase(it);
+        else ++it;
+    }
+    for (const auto& key : {"ip:" + ip, login_user_key(user)}) {
+        const auto it = login_attempts_.find(key);
+        if (it != login_attempts_.end() && now < it->second.retry_at) return false;
+        if (it == login_attempts_.end() && login_attempts_.size() >= 4096) return false;
+    }
+    return true;
+}
+void Server::login_failed(const std::string& ip, const std::string& user,
+                          std::uint32_t max_attempts) {
+    if (!daemon_hardening_) return;
+    std::lock_guard<std::mutex> lk(login_mu_);
+    const auto now = std::chrono::steady_clock::now();
+    max_attempts = std::max<std::uint32_t>(1, std::min<std::uint32_t>(max_attempts, 100));
+    for (const auto& key : {"ip:" + ip, login_user_key(user)}) {
+        if (login_attempts_.count(key) == 0 && login_attempts_.size() >= 4096) continue;
+        auto& state = login_attempts_[key];
+        state.failures = std::min<std::uint32_t>(state.failures + 1, 32);
+        state.updated = now;
+        const auto delay = state.failures >= max_attempts ? 300u :
+            std::min<std::uint32_t>(1u << std::min<std::uint32_t>(state.failures - 1, 6), 60);
+        state.retry_at = now + std::chrono::seconds(delay);
+    }
+}
+void Server::login_succeeded(const std::string& ip, const std::string& user) {
+    if (!daemon_hardening_) return;
+    std::lock_guard<std::mutex> lk(login_mu_);
+    // A valid account must not reset IP-wide failures against other users.
+    (void)ip;
+    login_attempts_.erase(login_user_key(user));
+}
 
 std::vector<Server::SessionInfo> Server::sessions_snapshot() const {
     std::lock_guard<std::mutex> lk(info_mu_);
@@ -479,6 +533,15 @@ bool Server::kill_session_by_conn_no(std::uint16_t conn_no) {
     if (conn_no == 0 || conn_no > sessions.size()) return false;
     return kill_session(sessions[conn_no - 1].id);
 }
+
+#if defined(OPENADS_WITH_TLS)
+util::Result<void> Server::set_tls(const TlsConfig& config) {
+    if (running_.load()) return util::Error{5000, 0, "TLS configuration requires a stopped server", ""};
+    if (auto result = validate_tls_server_config(config); !result) return result.error();
+    tls_ = config;
+    return {};
+}
+#endif
 
 util::Result<void> Server::start(const std::string& host,
                                  std::uint16_t port) {
@@ -794,8 +857,19 @@ void Server::session_loop(Socket s, std::string default_data_dir,
                           std::uint16_t listener_port) {
     // The per-frame contract (read → dispatch → reply → telemetry) lives in
     // Session::handle_readable so the reactor WorkerPool shares it verbatim.
+    if (daemon_hardening_) (void)socket_set_nonblocking(s, true);
     Session sess(*this, s, std::move(default_data_dir), listener_port);
-    while (sess.handle_readable()) {}
+    if (!daemon_hardening_) {
+        while (sess.handle_readable()) {}
+        sock_close(s);
+        return;
+    }
+    while (!sess.expired()) {
+        std::vector<PollItem> ready{{s, sess.poll_events()}};
+        auto polled = socket_poll(ready, 200);
+        if (!polled) break;
+        if ((polled.value() != 0 || sess.buffered_read()) && !sess.handle_readable()) break;
+    }
     sock_close(s);
 }
 

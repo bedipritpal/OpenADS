@@ -4,6 +4,7 @@
 #include "network/mutex_manager.h"
 #include "network/socket.h"
 #include "network/transport.h"
+#include "network/tls_transport.h"
 #include "network/wire.h"
 #include "util/result.h"
 
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -55,6 +57,9 @@ class Server {
     // (register_session, install/erase_session_socket, unregister,
     // set_session_user, add_session_table, build_mg_snapshot,
     // kill_session_by_conn_no), creds_, data_dir_, require_auth().
+#if defined(OPENADS_WITH_TLS)
+    std::optional<TlsConfig> tls_;
+#endif
     friend class Session;
 
 public:
@@ -66,11 +71,20 @@ public:
     Server& operator=(const Server&) = delete;
     ~Server();
 
+#if defined(OPENADS_WITH_TLS)
+    util::Result<void> set_tls(const TlsConfig& config);
+    const TlsConfig* tls_config() const noexcept { return tls_ ? &*tls_ : nullptr; }
+#endif
     util::Result<void> start(const std::string& host,
                              std::uint16_t port);
     std::uint16_t      port() const noexcept { return port_; }
     bool               running() const noexcept { return running_.load(); }
     void               stop() noexcept;
+
+    // Explicit daemon policy. Embedded/LOCAL servers retain their legacy defaults.
+    // Configure before registering credentials or starting any listener.
+    void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
+    bool daemon_hardening() const noexcept { return daemon_hardening_; }
 
     // M12.9 — auth. When at least one credential is registered, every
     // Connect frame must carry a matching user / password pair; an
@@ -78,6 +92,11 @@ public:
     void add_credential(const std::string& user,
                         const std::string& password);
     bool require_auth() const noexcept;
+    // Reconnect-resistant login throttling. No sleeps on reactor workers.
+    bool login_allowed(const std::string& ip, const std::string& user);
+    void login_failed(const std::string& ip, const std::string& user,
+                      std::uint32_t max_attempts = 5);
+    void login_succeeded(const std::string& ip, const std::string& user);
 
     // Set the data root directory (or directories). Relative paths from
     // Connect frames are resolved under this directory; a Connect whose
@@ -197,6 +216,7 @@ private:
     // sessions_mu_ (this takes it).
     void reap_finished_threads_();
 
+    bool daemon_hardening_ = false;
     Socket                   listener_;
     std::uint16_t            port_ = 0;
     // Multi-port: extra listeners with their own data directories.
@@ -248,9 +268,16 @@ private:
     // M12.32 — distributed mutex manager.
     MutexManager                                   mutex_mgr_;
 
-    // M12.9 — credential map (user -> password). Protected by creds_mu_
+    // M12.9 — credential map (user -> salted PBKDF2 verifier). Protected by creds_mu_
     // because add_credential() may run while sessions authenticate.
     mutable std::mutex                           creds_mu_;
+    struct LoginAttempts {
+        std::uint32_t failures = 0;
+        std::chrono::steady_clock::time_point retry_at{};
+        std::chrono::steady_clock::time_point updated{};
+    };
+    std::mutex login_mu_;
+    std::unordered_map<std::string, LoginAttempts> login_attempts_;
     std::unordered_map<std::string, std::string> creds_;
 
     // studio.web.0.4 — live session registry. session_loop

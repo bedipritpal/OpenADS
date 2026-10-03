@@ -2,3 +2,6 @@ src/session/connection.cpp:generic-api-key:557
 src/session/connection.cpp:generic-api-key:1489
 tests/unit/aes_test.cpp:generic-api-key:41
 third_party/tinyaes/aes.c:generic-api-key:18
+
+# Public upstream TLS loopback test fixture only; never a deployed key.
+tests/unit/network_server_test.cpp:private-key:1810

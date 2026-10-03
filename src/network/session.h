@@ -9,6 +9,7 @@
 #include "session/connection.h"
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -57,6 +58,10 @@ public:
 
     // Accessor for the reactor: the connection socket this Session owns.
     Socket socket() const noexcept { return s_; }
+    bool expired() const noexcept;
+    std::uint8_t poll_events() const noexcept;
+    bool buffered_read() const noexcept;
+
 
 private:
     // Telemetry + dispatch + reply for one complete frame. Shared by the
@@ -64,6 +69,15 @@ private:
     // Returns false when the connection should be torn down.
     bool process_frame(const Frame& f);
 
+    bool queue_reply(const Frame& frame);
+    bool flush_reply();
+    std::unique_ptr<ITransport> tls_transport_;
+    bool transport_failed_ = false;
+    bool close_after_reply_ = false;
+    bool drain_reader_ = false;
+    std::vector<std::uint8_t> reply_bytes_;
+    std::size_t reply_offset_ = 0;
+    std::chrono::steady_clock::time_point reply_since_ = std::chrono::steady_clock::now();
     Server*       srv_;
     Socket        s_;
     std::uint64_t sid_;
@@ -71,9 +85,15 @@ private:
     // (resolved once at accept; getpeername per frame would be a
     // syscall on every request).
     std::string   peer_str_;
+    std::string   peer_ip_ = "unknown";
     // Reassembles complete frames from partial non-blocking reads (reactor
     // path). Harmless on the blocking path — each read yields a whole frame.
     FrameReader   reader_;
+    std::chrono::steady_clock::time_point created_ = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point last_read_ = created_;
+    std::chrono::steady_clock::time_point partial_since_ = created_;
+    std::unordered_set<std::string> created_mutexes_;
+    std::unordered_set<std::uint64_t> explicit_record_locks_;
     // Default data directory for this connection, determined by which TCP
     // port the client connected to. Empty means use the server's global
     // data_dir_ (primary listener).
@@ -83,6 +103,8 @@ private:
     // Connect frame; OpenTable allocates a session-scoped 32-bit
     // table id keyed into engine handles.
     std::unique_ptr<openads::session::Connection> sess_conn_;
+    bool mg_connected_ = false;
+    bool mg_admin_ = false;
     std::unordered_map<std::uint32_t, openads::session::Handle> tbls_;
     // Original OpenTable payload (DD alias or relative path). ensure_abi_handle
     // must reopen the same physical file — basename-only breaks subdir tables.

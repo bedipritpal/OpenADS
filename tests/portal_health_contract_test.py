@@ -37,3 +37,6 @@ assert "hb_threadEnterCriticalSectionGC" in remote and "hb_threadLeaveCriticalSe
 assert "hb_stornint( ( HB_MAXINT ) rc, 5 )" in remote
 assert "port < 1 || port > 65535" in remote
 assert "oads_default_connection" not in remote and "AdsMgGetHandle" not in remote
+
+assert 'key === "max_sessions" && value === 0 ? "Unlimited (0)"' in spa
+assert 'Object.entries(h)' in js and 'Object.entries(h)' in spa

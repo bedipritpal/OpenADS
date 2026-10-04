@@ -274,6 +274,8 @@ mgmt::MgSnapshot Server::build_mg_snapshot() const {
     snap.connections = static_cast<std::uint32_t>(sessions.size());
     snap.server_type = 1;   // 1 = remote server
     snap.server_port = port_;
+    snap.max_sessions = max_sessions_;
+    snap.max_sessions_source = max_sessions_source_;
     snap.rss_bytes   = openads::platform::process_rss_bytes();
 
     {
@@ -564,9 +566,10 @@ util::Result<void> Server::start(const std::string& host,
     // Resolve enterprise limits once at start. A test/embedder override wins;
     // otherwise take the env-loaded EnterpriseConfig (OPENADS_SERVER_*).
     const auto& ecfg = openads::sql_backend::enterprise_config();
-    max_sessions_ = (max_sessions_override_ != 0)
+    max_sessions_ = has_max_sessions_override_
                         ? max_sessions_override_
                         : ecfg.server_max_sessions;
+    if (!has_max_sessions_override_) max_sessions_source_ = ecfg.server_max_sessions_source;
     ListenerOptions opts;
     opts.host = host;
     opts.port = port;

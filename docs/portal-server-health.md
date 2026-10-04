@@ -71,3 +71,13 @@ using hbmk2 -mt; run only against a sandbox daemon with test-only credentials.
 It covers four concurrent callers, invalid port/URI rejection and wrong-login
 failure. Passwords are never printed; production secrets do not belong in
 command-line arguments or this fixture's invocation.
+
+## Connection cap
+
+max_sessions is the daemon's effective admission limit, not the connection
+peak or open-file limit. 0 means unlimited. max_sessions_source records the
+resolved command-line, openads.ini, environment or default source at startup.
+Local-process/unsupported values are null, not fabricated caps. Both portals
+show these fields and the Harbour hash includes them automatically. The
+explicit-zero setting now overrides defaults as documented; omitted settings
+still use environment/default. This does not change any deployment's settings.

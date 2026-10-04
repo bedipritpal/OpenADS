@@ -1086,7 +1086,7 @@ function renderServerHealth(h) {
     const label = key.replaceAll("_", " ");
     if (value && typeof value === "object") {
       html += `<div>${esc(label)}</div><div>Current: ${val(value.current)} | Max used: ${val(value.max_used)} | Rejected: ${val(value.rejected)}</div>`;
-    } else html += `<div>${esc(label)}</div><div>${val(value)}</div>`;
+    } else html += `<div>${esc(label)}</div><div>${key === "max_sessions" && value === 0 ? "Unlimited (0)" : val(value)}</div>`;
   }
   html += `</div><details><summary>Count meanings and raw JSON</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(JSON.stringify(h, null, 2))}</pre></details>`;
   return html;

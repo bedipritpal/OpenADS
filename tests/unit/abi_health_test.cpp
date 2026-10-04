@@ -51,6 +51,7 @@ TEST_CASE("health C ABI validates management handles and never truncates JSON") 
 
 TEST_CASE("health remote query uses management authentication and server-side measurement") {
     openads::network::Server server;
+    server.set_max_sessions(123, "openads.ini:max_sessions");
     server.set_daemon_hardening(true);
     server.add_credential("admin", "test-only-password");
     REQUIRE(server.start("127.0.0.1", 0));
@@ -74,6 +75,8 @@ TEST_CASE("health remote query uses management authentication and server-side me
     CHECK(json.find("\"workareas\":{\"current\":3") != std::string::npos);
     CHECK(json.find("\"distinct_table_paths\":2") != std::string::npos);
     CHECK(json.find("\"server_port\":" + std::to_string(server.port())) != std::string::npos);
+    CHECK(json.find("\"max_sessions\":123") != std::string::npos);
+    CHECK(json.find("\"max_sessions_source\":\"openads.ini:max_sessions\"") != std::string::npos);
     CHECK(json.find("unexposed-user") == std::string::npos);
     CHECK(json.find("/private") == std::string::npos);
     CHECK(json.find("test-only-password") == std::string::npos);
@@ -134,4 +137,19 @@ TEST_CASE("health workarea peak retains transient opens without a snapshot") {
     CHECK(snapshot.workareas == 3);
     CHECK(snapshot.max_workareas == peak);
     server.unregister_session(third);
+}
+
+TEST_CASE("health explicit zero session cap remains unlimited") {
+    openads::network::Server server;
+    server.set_max_sessions(0, "command line:--max_sessions");
+    REQUIRE(server.start("127.0.0.1", 0));
+    auto snapshot = server.build_mg_snapshot();
+    CHECK(snapshot.max_sessions == 0);
+    CHECK(snapshot.max_sessions_source == "command line:--max_sessions");
+    auto json = openads::mgmt::health_json(snapshot, "test");
+    CHECK(json.find("\"max_sessions\":0") != std::string::npos);
+    server.stop();
+    openads::mgmt::MgSnapshot local;
+    json = openads::mgmt::health_json(local, "test");
+    CHECK(json.find("\"max_sessions\":null") != std::string::npos);
 }

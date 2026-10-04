@@ -47,6 +47,8 @@ std::string health_json(const MgSnapshot& s, const std::string& version) {
     number("logged_errors", s.logged_errors);
     number("rss_bytes", s.rss_bytes);
     number("server_port", s.server_port);
+    out << ",\"max_sessions\":" << (s.max_sessions_source.empty() ? "null" : std::to_string(s.max_sessions))
+        << ",\"max_sessions_source\":" << (s.max_sessions_source.empty() ? "null" : quote(s.max_sessions_source));
     number("packets_in", s.packets_in); number("packets_out", s.packets_out);
     number("bytes_in", s.bytes_in); number("bytes_out", s.bytes_out);
     number("disconnects", s.disconnects); number("partial_connects", s.partial_connects);
@@ -57,7 +59,7 @@ std::string health_json(const MgSnapshot& s, const std::string& version) {
         << ",\"semantics\":{\"workareas\":\"server-open table handles, includes client-parked handles; not Harbour Select() areas\","
         << "\"users\":\"management user entries, not distinct people or application instances\","
         << "\"distinct_paths\":\"exact path strings, not canonical filesystem identities\","
-        << "\"max_used\":\"existing sampled high-water marks, not guaranteed instantaneous peaks\","
+        << "\"max_used\":\"workarea/table-handle maxima retain open events; other maxima keep existing telemetry semantics\","
         << "\"parked_handles\":\"client-only state, unavailable at server\","
         << "\"rejected\":\"not measured\","
         << "\"snapshot\":\"best-effort concurrent sample; management query session may be included\"}}";

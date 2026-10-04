@@ -157,3 +157,20 @@ openads_serverd --port 6262 --data /Users/anto/OpenADS/data
 set OPENADS_TEST_REMOTE=tcp://192.168.18.184:6262//Users/anto/OpenADS/data
 test_oads_file.exe
 ```
+
+### Columnar server stats
+
+Compile `oads_stats_display.prg` with your app and `oads_hb.c`, then use:
+
+```harbour
+QOut( OAds_ServerStatsText( hStats ) )
+```
+
+This text-only helper accepts the local or remote stats hash. It makes no
+connection and prints no credentials. The 76-column display uses Statistic
+(24), Current (20), Max used (16) and Rejected (16). Missing values say
+`Unavailable`; configured `max_sessions = 0` says `Unlimited (0)`. All returned
+scalar, usage and semantics fields are included; long labels/text wrap rather
+than being discarded. Compile/run `tests/smoke/harbour/stats_display.prg` with
+the helper for the native sandbox fixture. Added for Pritpal Bedi's stats/log
+review and aligned display request.

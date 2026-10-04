@@ -40,3 +40,11 @@ assert "oads_default_connection" not in remote and "AdsMgGetHandle" not in remot
 
 assert 'key === "max_sessions" && value === 0 ? "Unlimited (0)"' in spa
 assert 'Object.entries(h)' in js and 'Object.entries(h)' in spa
+
+helper = (root / "contrib/oads_hb/oads_stats_display.prg").read_text()
+assert 'FUNCTION OAds_ServerStatsText( hStats )' in helper
+assert 'PadL( "Current", 20 )' in helper and 'nWidth := 76' in helper
+assert 'StatsField( xValue, "max_used" )' in helper
+assert 'StatsField( xValue, "rejected" )' in helper
+assert 'SubStr(cLabel,77)' in helper and 'Unlimited (0)' in helper
+assert 'AdsMgConnect(' not in helper

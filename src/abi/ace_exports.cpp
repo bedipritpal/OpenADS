@@ -1753,7 +1753,10 @@ void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
 }
 
 void remote_ensure_rec_count(openads::network::RemoteTable* rt) {
-    if (rt == nullptr || rt->rec_count_cached) return;
+    if (rt == nullptr) return;
+    // Physical counts are snapshots. Another workarea, including one on
+    // this same connection, can append without touching this handle.
+    rt->rec_count_cached = false;
     if (auto r = rt->conn->record_count(rt->id)) {
         rt->cached_rec_count = r.value();
         rt->rec_count_cached = true;
@@ -12927,25 +12930,11 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOpti
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        // M12.19 -- record count is invariant outside of explicit
-        // writes (AppendBlank / DeleteRecord / RecallRecord / Pack
-        // / Zap), so cache the value on first hit and serve every
-        // subsequent AdsGetRecordCount + AdsGetRelKeyPos (scrollbar)
-        // call from cache. Each cache hit saves one wire RTT.
-        if (rt->rec_count_cached) {
-            *pulRecordCount = rt->cached_rec_count;
-            return ok();
-        }
-        // Certified count from the last nav ack tail (same trust as
-        // the cache above — in-memory server count). Covers the
-        // open→goto→count USE flow with zero extra frames.
-        if (rt->count_bound_ok &&
-            rt->count_bound_seq == rt->conn->nav_seq()) {
-            *pulRecordCount = rt->count_bound;
-            rt->cached_rec_count = rt->count_bound;
-            rt->rec_count_cached = true;
-            return ok();
-        }
+        // mtfix33: match Harbour DBFCDX shared RecCount. Neither a
+        // previous reply nor a nav tail certifies cross-session freshness.
+        // Exclusive handles can also have sibling workareas on this session;
+        // without a file-wide invalidation proof, do not reuse their counts.
+        rt->rec_count_cached = false;
         auto r = rt->conn->record_count(rt->id);
         if (!r) return fail(r.error());
         rt->cached_rec_count = static_cast<UNSIGNED32>(r.value());

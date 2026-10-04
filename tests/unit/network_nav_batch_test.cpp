@@ -754,7 +754,7 @@ UNSIGNED32 nb_reccount(ADSHANDLE hTable) {
     return v;
 }
 
-TEST_CASE("Count truth: nav ack certifies the record count") {
+TEST_CASE("Count truth: shared calls refresh instead of trusting nav snapshots") {
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed(dir, "cnt.dbf", 3);
@@ -764,14 +764,13 @@ TEST_CASE("Count truth: nav ack certifies the record count") {
     ADSHANDLE hConn = nb_connect_remote(dir, s.port());
     ADSHANDLE hTable = nb_open(hConn, "cnt.dbf");
 
-    // The USE flow (open, position, count) pays no count frame: the
-    // nav ack certified it. (Bottom, not top: the open's implicit
-    // GoTop dedupes a repeat top with no ack and no tail.)
+    // A nav count is a cursor snapshot, not a cross-session freshness
+    // certificate. Shared physical counts must refresh on each call.
     const std::uint64_t rc0 = nb_op(kOpGetRecordCount);
     REQUIRE(AdsGotoBottom(hTable) == AE_SUCCESS);
     CHECK(nb_reccount(hTable) == 3u);
     CHECK(nb_reccount(hTable) == 3u);
-    CHECK(nb_op(kOpGetRecordCount) == rc0);
+    CHECK(nb_op(kOpGetRecordCount) == rc0 + 2);
 
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
@@ -805,5 +804,79 @@ TEST_CASE("Phantom RecNo derives from flags plus cached count") {
     REQUIRE(AdsCloseTable(hA) == AE_SUCCESS);
     REQUIRE(AdsCloseTable(hB) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
+    s.stop();
+}
+
+TEST_CASE("mtfix33 shared physical count sees another session append without navigation") {
+    nb_wipe();
+    auto dir = nb_tmp_dir();
+    nb_seed(dir, "fresh.dbf", 3);
+    openads::network::Server s;
+    REQUIRE(s.start("127.0.0.1", 0).has_value());
+    ADSHANDLE ca = nb_connect_remote(dir, s.port());
+    ADSHANDLE cb = nb_connect_remote(dir, s.port());
+    ADSHANDLE a = nb_open(ca, "fresh.dbf");
+    ADSHANDLE b = nb_open(cb, "fresh.dbf");
+    REQUIRE(AdsGotoBottom(a) == AE_SUCCESS);
+    CHECK(nb_reccount(a) == 3u);
+    REQUIRE(AdsAppendRecord(b) == AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(b) == AE_SUCCESS);
+    CHECK(nb_reccount(a) == 4u);
+    CHECK(nb_reccount(a) == 4u);
+    // A's independent cursor did not move when B appended.
+    CHECK(nb_recno(a) == 3u);
+    REQUIRE(AdsCloseTable(b) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(cb) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(a) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(ca) == AE_SUCCESS);
+    s.stop();
+}
+
+TEST_CASE("mtfix33 count refreshes across sibling workareas even under exclusive open") {
+    nb_wipe();
+    auto dir = nb_tmp_dir();
+    nb_seed(dir, "sibling.dbf", 3);
+    openads::network::Server s;
+    REQUIRE(s.start("127.0.0.1", 0).has_value());
+    ADSHANDLE c = nb_connect_remote(dir, s.port());
+    ADSHANDLE a = 0;
+    UNSIGNED8 name[] = "sibling.dbf";
+    REQUIRE(AdsOpenTable(c, name, nullptr, ADS_CDX, ADS_ANSI,
+                         ADS_COMPATIBLE_LOCKING, ADS_IGNORERIGHTS,
+                         ADS_EXCLUSIVE, &a) == AE_SUCCESS);
+    ADSHANDLE b = nb_open(c, "sibling.dbf");
+    CHECK(nb_reccount(a) == 3u);
+    REQUIRE(AdsAppendRecord(b) == AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(b) == AE_SUCCESS);
+    CHECK(nb_reccount(a) == 4u);
+    REQUIRE(AdsCloseTable(b) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(a) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
+    s.stop();
+}
+
+TEST_CASE("mtfix33 shared count observes local DBFCDX append and peer zap") {
+    nb_wipe();
+    auto dir = nb_tmp_dir();
+    nb_seed(dir, "local.dbf", 3);
+    openads::network::Server s;
+    REQUIRE(s.start("127.0.0.1", 0).has_value());
+    ADSHANDLE c = nb_connect_remote(dir, s.port());
+    ADSHANDLE a = nb_open(c, "local.dbf");
+    CHECK(nb_reccount(a) == 3u);
+    UNSIGNED8 path[512]{};
+    std::memcpy(path, dir.string().c_str(), dir.string().size());
+    ADSHANDLE local = 0, b = 0;
+    REQUIRE(AdsConnect60(path, ADS_LOCAL_SERVER, nullptr, nullptr, 0, &local) == AE_SUCCESS);
+    b = nb_open(local, "local.dbf");
+    REQUIRE(AdsAppendRecord(b) == AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(b) == AE_SUCCESS);
+    CHECK(nb_reccount(a) == 4u);
+    REQUIRE(AdsZapTable(b) == AE_SUCCESS);
+    CHECK(nb_reccount(a) == 0u);
+    REQUIRE(AdsCloseTable(b) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(local) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(a) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
     s.stop();
 }

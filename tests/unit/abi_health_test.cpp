@@ -60,6 +60,9 @@ TEST_CASE("health remote query uses management authentication and server-side me
     info.open_table_names = {"/private/a.dbf", "/private/a.dbf", "/private/b.dbf"};
     const auto id = server.register_session(info);
     std::string endpoint = "127.0.0.1:" + std::to_string(server.port());
+    SUBCASE("plain management endpoint") {}
+    SUBCASE("tcp scheme and trailing slash") { endpoint = "tcp://" + endpoint + "/"; }
+    SUBCASE("uppercase TCP scheme and trailing slash") { endpoint = "TCP://" + endpoint + "/"; }
     UNSIGNED8 user[] = "admin", password[] = "test-only-password";
     ADSHANDLE handle = 0;
     REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), user, password, &handle) == 0);

@@ -585,6 +585,7 @@ target_link_libraries(oads_imac_test PRIVATE openads_ace)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME mingw_import_parser COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/mingw_import_parser_test.py)
     add_test(NAME portal_health_contract COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_contract_test.py)
 endif()
 

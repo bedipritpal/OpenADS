@@ -39465,6 +39465,10 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
     be.mg_user = pucUser ? reinterpret_cast<const char*>(pucUser) : std::string();
     std::string srv = pucServer
         ? reinterpret_cast<const char*>(pucServer) : "";
+    // Management accepts the ordinary TCP endpoint spelling as well as
+    // host:port. Do not strip tls://: this backend does not negotiate TLS.
+    if (srv.rfind("tcp://", 0) == 0 || srv.rfind("TCP://", 0) == 0)
+        srv.erase(0, 6);
     // Strip leading / trailing UNC slashes ("\\\\host\\").
     while (!srv.empty() && (srv.front() == '\\' || srv.front() == '/'))
         srv.erase(srv.begin());

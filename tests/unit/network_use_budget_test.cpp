@@ -72,6 +72,7 @@ TEST_CASE("Nav batching: full USE cycle stays within wire budget") {
     REQUIRE(AdsConnect60(sb, ADS_REMOTE_SERVER, nullptr, nullptr, 0, &hC)
             == AE_SUCCESS);
 
+    const auto open_index_before = ub_op(0x88);
     // Snapshot AFTER connect: the session pool (one Connect per lane,
     // OPENADS_POOL_SIZE) is established once per logical connection and
     // amortised over every USE — the budget below guards the per-USE
@@ -83,6 +84,13 @@ TEST_CASE("Nav batching: full USE cycle stays within wire budget") {
     UNSIGNED8 tn[] = "UB.DBF";
     ADSHANDLE hT = 0;
     REQUIRE(AdsOpenTable(hC, tn, nullptr, ADS_CDX, 0, 0, 0, 0, &hT) == AE_SUCCESS);
+    UNSIGNED32 record_len = 0; const auto rl_before = ub_op(0x6C);
+    REQUIRE(AdsGetRecordLength(hT, &record_len) == AE_SUCCESS);
+    CHECK(record_len == 9); CHECK(ub_op(0x6C) == rl_before);
+    const auto oi_after_open = ub_op(0x88);
+    ADSHANDLE duplicated[64]{}; UNSIGNED16 duplicated_count = 64;
+    REQUIRE(AdsOpenIndex(hT, bag, duplicated, &duplicated_count) == AE_SUCCESS);
+    CHECK(duplicated_count == 1); CHECK(ub_op(0x88) == oi_after_open);
     ADSHANDLE hOrd = 0;
     UNSIGNED8 want[] = "BYID";
     REQUIRE(AdsGetIndexHandle(hT, want, &hOrd) == AE_SUCCESS);
@@ -99,9 +107,7 @@ TEST_CASE("Nav batching: full USE cycle stays within wire budget") {
     UNSIGNED32 kc = 0;
     REQUIRE(AdsGetKeyCount(hOrd, 0, &kc) == AE_SUCCESS);
     CHECK(kc == 50u);
-    REQUIRE(AdsCloseTable(hT) == AE_SUCCESS);
-    REQUIRE(AdsDisconnect(hC) == AE_SUCCESS);
-
+    CHECK(ub_op(0x88) == open_index_before); // production binding rode OpenTable
     auto delta = [&](std::uint8_t op) { return ub_op(op) - before[op]; };
     std::uint64_t total = 0;
     for (int o = 0; o < 256; ++o)
@@ -115,6 +121,27 @@ TEST_CASE("Nav batching: full USE cycle stays within wire budget") {
                                // bottom and duplicate are served locally
     CHECK(delta(0x48) == 0u);  // AtEOF: served locally
     CHECK(delta(0x4C) == 0u);  // AtBOF: served locally
+
+    // A separate login gets independent server index IDs and cursor state.
+    ADSHANDLE second_conn = 0, second_table = 0;
+    REQUIRE(AdsConnect60(sb, ADS_REMOTE_SERVER, nullptr, nullptr, 0, &second_conn) == AE_SUCCESS);
+    REQUIRE(AdsOpenTable(second_conn, tn, nullptr, ADS_CDX, 0, 0, 0, 0, &second_table) == AE_SUCCESS);
+    ADSHANDLE second_order = 0; REQUIRE(AdsGetIndexHandle(second_table, want, &second_order) == AE_SUCCESS);
+    CHECK(second_order != hOrd);
+    REQUIRE(AdsSetIndexOrderByHandle(second_table, second_order) == AE_SUCCESS);
+    REQUIRE(AdsGotoTop(second_order) == AE_SUCCESS);
+    UNSIGNED32 first_rec = 0, second_rec = 0;
+    REQUIRE(AdsGetRecordNum(hT, 0, &first_rec) == AE_SUCCESS);
+    REQUIRE(AdsGetRecordNum(second_table, 0, &second_rec) == AE_SUCCESS);
+    CHECK(first_rec == 50); CHECK(second_rec == 1);
+    // CloseAll / same-bag reopen keeps its existing validated park path.
+    REQUIRE(AdsCloseAllIndexes(second_table) == AE_SUCCESS);
+    duplicated_count = 64;
+    REQUIRE(AdsOpenIndex(second_table, bag, duplicated, &duplicated_count) == AE_SUCCESS);
+    CHECK(duplicated_count == 1);
+    REQUIRE(AdsCloseTable(second_table) == AE_SUCCESS); REQUIRE(AdsDisconnect(second_conn) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(hT) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(hC) == AE_SUCCESS);
 
     s.stop();
     fs::remove_all(dir, ec);

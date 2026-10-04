@@ -8469,6 +8469,11 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         rt->name = name;
         rt->alias = std::move(alias);
         rt->close_counted = true;
+        rt->production_index_reply = std::move(ot.production_index_reply);
+        if (ot.has_record_length) {
+            rt->cached_record_length = ot.record_length;
+            rt->record_length_cached = true;
+        }
         rt->open_mode_raw = usMode;
         rt->open_exclusive =
             (map_open_mode(usMode) == openads::engine::OpenMode::Exclusive);
@@ -15830,7 +15835,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 return ok();
             }
         }
-        auto r = rt->conn->open_index(rt->id, path);
+        auto r = rt->production_index_reply.empty()
+            ? rt->conn->open_index(rt->id, path)
+            : openads::network::RemoteConnection::parse_open_index_reply(rt->production_index_reply, path);
+        rt->production_index_reply.clear();
         if (!r) return fail(r.error());
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);

@@ -227,6 +227,8 @@ jobs:
           mkdir -p "$STAGE/include/openads"
           cp include/openads/ace.h "$STAGE/include/ace.h"
           cp include/openads/{ace,error,openads_sql,platform,version}.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/{oads_hb.c,oads_stats_display.prg,README.md} "$STAGE/contrib/oads_hb/"
           tar czvf "$STAGE.tar.gz" "$STAGE"
           ls -la "$STAGE.tar.gz"
           echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
@@ -295,7 +297,7 @@ jobs:
           # into the app, not shipped in the DLL. Arch-independent C
           # source: both Windows zips carry it. (Pritpal Bedi.)
           New-Item -ItemType Directory "$stage/contrib/oads_hb" -Force | Out-Null
-          Copy-Item contrib/oads_hb/oads_hb.c,contrib/oads_hb/README.md "$stage/contrib/oads_hb/"
+          Copy-Item contrib/oads_hb/oads_hb.c,contrib/oads_hb/oads_stats_display.prg,contrib/oads_hb/README.md "$stage/contrib/oads_hb/"
           if ("${{ matrix.arch }}" -eq "x86") {
               Copy-Item src/openads_ace_x86_stdcall.def      "$stage/"
               # Ship the 32-bit MinGW import library at the archive root too:
@@ -472,6 +474,8 @@ jobs:
           mkdir -p "$STAGE/include/openads"
           cp include/openads/ace.h "$STAGE/include/ace.h"
           cp include/openads/{ace,error,openads_sql,platform,version}.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/{oads_hb.c,oads_stats_display.prg,README.md} "$STAGE/contrib/oads_hb/"
           tar czvf "$STAGE.tar.gz" "$STAGE"
           ls -la "$STAGE.tar.gz"
           echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
@@ -579,11 +583,11 @@ jobs:
                   with tarfile.open(path) as t:
                       files = {m.name: t.extractfile(m).read() for m in t.getmembers() if m.isfile()}
               byname = {pathlib.PurePosixPath(n).name: data for n, data in files.items()}
-              required = ['LICENSE','NOTICE','README.md','openads.ini.sample']
+              required = ['LICENSE','NOTICE','README.md','openads.ini.sample','oads_hb.c','oads_stats_display.prg']
               windows = '-windows-' in path.name
               if windows:
                   bits = '64' if '-x64.' in path.name else '32'
-                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','openads_serverd.exe','openads_bench.exe','oads_hb.c']
+                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','openads_serverd.exe','openads_bench.exe','oads_hb.c','oads_stats_display.prg']
                   assert byname[f'ace{bits}.dll'] == byname[f'openace{bits}.dll'], 'ACE aliases differ'
                   binary = byname['openads_serverd.exe']
               else:

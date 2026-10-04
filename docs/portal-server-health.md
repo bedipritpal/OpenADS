@@ -10,6 +10,8 @@ Every scalar and usage entry is displayed, with Current/Max used/Rejected.
 Unknown values say Unavailable/not measured, never false 0. Expand Count meanings
 and raw JSON for the exact schema/semantics. No new polling timer was added.
 Counts remain best-effort concurrent samples; different queries can differ.
+Workarea/table-handle maxima now retain each open/close event, not just the
+current query value. Other max fields retain their existing telemetry semantics.
 Workareas are server-open handles including parked ones, not OS descriptors
 or Harbour Select areas. Distinct path counts are separate.
 
@@ -41,3 +43,31 @@ including when the PHP process is 64-bit. All normal RDD/ACE interfaces remain.
 
 Local verification uses sandbox fixtures, not a user's server. Test build only;
 fork main merge awaits application test clearance, no upstream submission.
+
+## Harbour convenience call
+
+`OAds_ServerStatsRemote(cServerIP, nPort, cAdminUser, cAdminPass, @nError)`
+returns the stats hash, or NIL with a numeric error in the optional fifth
+argument. Supply a literal IPv4 address or hostname (not a URI/path), port
+1..65535, and credentials loaded from your secure settings. Empty credentials
+retain only the existing literal-loopback read-only exception. This wrapper
+builds host:port, uses its own native management handle, queries and disconnects,
+serializes its lifecycle for MT callers, and leaves rddads/data handles alone.
+The older `OAds_ServerStats(hMgmt, @nError)` remains available. Direct
+AdsMgConnect also accepts tcp://host:port/; this is not tls:// support.
+
+```harbour
+LOCAL nError := 0, hStats
+hStats := OAds_ServerStatsRemote( cServerIP, nPort, cAdminUser, cAdminPass, @nError )
+IF hStats == NIL
+   ? "Server stats failed", nError
+   RETURN NIL
+ENDIF
+```
+
+The explicit-wrapper smoke fixture is tests/smoke/harbour/serverstats_remote.prg.
+Compile it with the actual contrib/oads_hb/oads_hb.c and matching ACE library
+using hbmk2 -mt; run only against a sandbox daemon with test-only credentials.
+It covers four concurrent callers, invalid port/URI rejection and wrong-login
+failure. Passwords are never printed; production secrets do not belong in
+command-line arguments or this fixture's invocation.

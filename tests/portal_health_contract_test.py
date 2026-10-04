@@ -27,3 +27,13 @@ server_info = js[js.index("  function loadServerInfo("):]
 assert "if (resp.management_required)" in server_info
 assert "id=\"mg-logout-${tabId}\"" in server_info
 assert "management_required" not in js[:js.index("  function serverHealthHtml(")]
+
+glue = (root / "contrib/oads_hb/oads_hb.c").read_text(encoding="utf-8")
+remote = glue[glue.index("HB_FUNC( OADS_SERVERSTATSREMOTE )"):]
+remote = remote[:remote.index("/* ------------------------------------------------------------------ */")]
+assert "ADSHANDLE handle = 0;" in remote
+assert "AdsMgConnect" in remote and "OAdsGetServerStats" in remote and "AdsMgDisconnect( handle )" in remote
+assert "hb_threadEnterCriticalSectionGC" in remote and "hb_threadLeaveCriticalSection" in remote
+assert "hb_stornint( ( HB_MAXINT ) rc, 5 )" in remote
+assert "port < 1 || port > 65535" in remote
+assert "oads_default_connection" not in remote and "AdsMgGetHandle" not in remote

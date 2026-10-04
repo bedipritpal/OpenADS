@@ -106,3 +106,32 @@ TEST_CASE("health remote query uses management authentication and server-side me
     (void)id;
     loopback.stop();
 }
+
+TEST_CASE("health workarea peak retains transient opens without a snapshot") {
+    openads::network::Server server;
+    openads::network::Server::SessionInfo a;
+    a.open_tables = 2;
+    const auto first = server.register_session(a);
+    const auto second = server.register_session({});
+    server.add_session_table(second, 1000, "same.dbf");
+    // Close before the first sample, as in a short storm.
+    server.add_session_table(second, -1000, "same.dbf");
+    auto snapshot = server.build_mg_snapshot();
+    CHECK(snapshot.workareas == 2);
+    CHECK(snapshot.max_workareas >= 1002);
+    CHECK(snapshot.max_tables >= 1002);
+    const auto peak = snapshot.max_workareas;
+    server.add_session_table(first, -100, "same.dbf"); // clamped close
+    server.unregister_session(second);
+    server.unregister_session(first);
+    server.unregister_session(first); // duplicate cleanup cannot underflow
+    snapshot = server.build_mg_snapshot();
+    CHECK(snapshot.workareas == 0);
+    CHECK(snapshot.max_workareas == peak);
+    const auto third = server.register_session({});
+    server.add_session_table(third, 3, "same.dbf");
+    snapshot = server.build_mg_snapshot();
+    CHECK(snapshot.workareas == 3);
+    CHECK(snapshot.max_workareas == peak);
+    server.unregister_session(third);
+}

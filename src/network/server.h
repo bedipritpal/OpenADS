@@ -285,6 +285,7 @@ private:
     // sessions_snapshot().
     mutable std::mutex                          info_mu_;
     std::unordered_map<std::uint64_t, SessionInfo> sessions_info_;
+    std::uint32_t open_workareas_ = 0; // aggregate, protected by info_mu_
     std::atomic<std::uint64_t>                  next_session_id_{1};
 
 public:

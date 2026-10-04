@@ -42,6 +42,7 @@
 #include "hbapi.h"
 #include "hbapiitm.h"
 #include "hbdate.h"
+#include "hbjson.h"
 #include "ace.h"
 #include <string.h>
 
@@ -93,6 +94,29 @@ static ADSHANDLE oads_default_connection( void )
 extern UNSIGNED32 ENTRYPOINT AdsGetServerVersion( ADSHANDLE   hConnect,
                                                   UNSIGNED8 * pucBuf,
                                                   UNSIGNED16 * pusLen );
+
+/* Additive OpenADS export, declared here for older ACE SDK headers. */
+extern UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE hMgmt,
+                                               UNSIGNED8* pucJson,
+                                               UNSIGNED32* pulLen);
+
+/* OAds_ServerStats(hMgmt, @nError) -> hash, NIL on failure.
+   hMgmt must come from AdsMgConnect; deliberately no default data handle.
+   Harbour JSON preserves null as NIL and uses wide numeric values on x86. */
+HB_FUNC( OADS_SERVERSTATS )
+{
+    char buffer[8192];
+    UNSIGNED32 len = ( UNSIGNED32 ) sizeof(buffer);
+    UNSIGNED32 rc = OAdsGetServerStats(( ADSHANDLE ) hb_parnint(1),
+                                      ( UNSIGNED8* ) buffer, &len);
+    PHB_ITEM value = hb_itemNew(NULL);
+    if (rc == 0 && (len < 2 || len > sizeof(buffer) ||
+        hb_jsonDecode(buffer, value) != (HB_SIZE)(len - 1) || !HB_IS_HASH(value)))
+        rc = 5001;
+    hb_stornint((HB_MAXINT)rc, 2);
+    if (rc == 0) hb_itemReturnRelease(value);
+    else { hb_itemRelease(value); hb_ret(); }
+}
 
 /* ------------------------------------------------------------------ */
 /*  OADS_SETCONNECTION( hConn ) -> lOk                                 */

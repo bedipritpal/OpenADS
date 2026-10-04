@@ -177,7 +177,7 @@ jobs:
           release: false
           update: false
           install: >-
-            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake' }}
+            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake python' }}
 
       - name: Build static ACE library (MinGW)
         if: always() && runner.os == 'Windows'
@@ -192,6 +192,18 @@ jobs:
           cmake --build build/mingw-${{ matrix.arch }} \
                 --target openads_ace_static -j"$(nproc)"
           ls -la build/mingw-${{ matrix.arch }}/src/libopenace*.a
+
+      - name: Regenerate MinGW DLL imports and link health probe
+        if: always() && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          BITS="${{ matrix.arch == 'x64' && '64' || '32' }}"
+          mkdir -p build/fresh-imports
+          python3 tools/scripts/regenerate_mingw_imports.py \
+            "build/${{ matrix.preset }}/src/Release/openace${BITS}.dll" \
+            "dist/import-libs/${{ matrix.arch }}/mingw/libace${BITS}.a" \
+            "build/fresh-imports/libace${BITS}.a" "$BITS"
 
       - name: Stage release files (POSIX)
         if: always() && runner.os != 'Windows'
@@ -261,6 +273,8 @@ jobs:
           # runners have no Borland toolchain (see dist/import-libs/gen.ps1).
           New-Item -ItemType Directory "$stage/lib" | Out-Null
           Copy-Item -Recurse "dist/import-libs/${{ matrix.arch }}/*" "$stage/lib/"
+          # Replace stale MinGW archives with this DLL's actual exports.
+          Copy-Item "build/fresh-imports/libace$bits.a" "$stage/lib/mingw/libace$bits.a" -Force
           # Static ACE library (MinGW): link into an hbmk2 -comp=mingw[64]
           # app and no ace<bits>.dll is needed at all. Built in the
           # "Build static ACE library (MinGW)" step above.
@@ -287,7 +301,7 @@ jobs:
               # Ship the 32-bit MinGW import library at the archive root too:
               # 32-bit Harbour (hbmk2 -comp=mingw, rddads) links it directly.
               # (Reported by Pritpal Bedi.)
-              Copy-Item dist/import-libs/x86/mingw/libace32.a "$stage/"
+              Copy-Item build/fresh-imports/libace32.a "$stage/"
           } else {
               Copy-Item src/openads_ace.def                   "$stage/"
           }

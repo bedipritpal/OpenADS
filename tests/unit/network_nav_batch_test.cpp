@@ -944,3 +944,21 @@ TEST_CASE("mtfix34 natural relative-position uses one fresh count per operation"
     REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
     s.stop();
 }
+
+TEST_CASE("mtfix35 remote physical count forwards disk refresh errors without stale output") {
+    nb_wipe();
+    const auto dir = nb_tmp_dir();
+    nb_seed(dir, "error.dbf", 3);
+    openads::network::Server s;
+    REQUIRE(s.start("127.0.0.1", 0).has_value());
+    const auto c = nb_connect_remote(dir, s.port());
+    const auto a = nb_open(c, "error.dbf");
+    CHECK(nb_reccount(a) == 3u);
+    fs::resize_file(dir / "error.dbf", 4);
+    UNSIGNED32 count = 0xDEADBEEFu;
+    CHECK(AdsGetRecordCount(a, ADS_IGNOREFILTERS, &count) == 5103);
+    CHECK(count == 0xDEADBEEFu);
+    CHECK(AdsCloseTable(a) == AE_SUCCESS);
+    CHECK(AdsDisconnect(c) == AE_SUCCESS);
+    s.stop();
+}

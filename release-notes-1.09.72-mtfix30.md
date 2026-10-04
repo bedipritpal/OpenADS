@@ -38,3 +38,23 @@ tcp://host:port/ too; this does not add native tls:// management support.
 Workarea/table-handle peaks now retain transient opens between snapshots.
 Other max fields keep their existing telemetry semantics; current counts
 remain concurrent samples. These are logical handles, not OS descriptors.
+
+## Configured session limit and aligned stats
+
+- Health JSON and Harbour stats hash now include `max_sessions` and
+  `max_sessions_source`, reporting the effective CLI / openads.ini /
+  environment / default setting. Zero means unlimited, and an explicit zero
+  now overrides the default rather than being ignored. The legacy binary
+  management snapshot layout is unchanged.
+- Studio shows the configured limit and source, including `Unlimited (0)`.
+  DA-Web's dynamic stats table also shows both fields; numeric zero means
+  unlimited there.
+- `contrib/oads_hb/oads_stats_display.prg` supplies
+  `OAds_ServerStatsText(hStats)`: a76-column text-only formatter with aligned
+  Current / Max used / Rejected columns. Missing values say Unavailable.
+  Long labels and text wrap. Compile the helper alongside your project,
+  then `QOut(OAds_ServerStatsText(hStats))`. No connection or credentials are
+  printed by this helper.
+- Pritpal Bedi's B_BIG and Vouch logs, screenshots, storm tests and feedback
+  drove these checks. Thanks to Pritpal for the retained-peak, session-limit,
+  management-portal and columnar-display requests and testing.

@@ -3,7 +3,7 @@ Run in the matching MinGW environment: python3 script DLL OLD_LIB OUTPUT BITS.
 Retain the old symbols for legacy shims, add every actual ACE/VFS export,
 and require a PE link probe for the new health function before staging.
 """
-import pathlib, re, subprocess, sys, tempfile
+import pathlib, re, shutil, subprocess, sys, tempfile
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
@@ -31,7 +31,11 @@ with tempfile.TemporaryDirectory() as temp:
         libs.append(library)
     output.parent.mkdir(parents=True, exist_ok=True)
     # MRI scripts accept forward-slash paths; CI paths have no spaces.
-    script = 'CREATE ' + output.as_posix() + '\n' + ''.join('ADDLIB ' + p.as_posix() + '\n' for p in libs) + 'SAVE\nEND\n'
+    def mri_path(path):
+        if shutil.which('cygpath'):
+            return run('cygpath', '-m', str(path), capture_output=True).stdout.strip()
+        return path.as_posix()
+    script = 'CREATE ' + mri_path(output) + '\n' + ''.join('ADDLIB ' + mri_path(p) + '\n' for p in libs) + 'SAVE\nEND\n'
     run('ar', '-M', input=script)
     symbols = run('nm', '-g', str(output), capture_output=True).stdout
     required = ['_OAdsGetServerStats', '_OAdsGetServerStats@12'] if bits == '32' else ['OAdsGetServerStats']

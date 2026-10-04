@@ -66,7 +66,7 @@ void usage(const char* argv0) {
         "a phrase are accepted (--http_port == --http-port), but the\n"
         "canonical form is with underscore, matching openads.ini keys and\n"
         "OPENADS_* env variables.\n"
-        "  --host       bind address (default 0.0.0.0)\n"
+        "  --host       bind address (default 127.0.0.1)\n"
         "  --port       TCP wire port (default 6262, 0 = ephemeral)\n"
         "  --backlog    listen() backlog (default: env OPENADS_SERVER_BACKLOG,\n"
         "               else 256; ini: backlog)\n"

@@ -498,6 +498,15 @@ endif()
 # every tier always ran the 240 s storm cases, which also explains
 # past 30-minute Test timeouts on loaded runners. No embedded quotes
 # around the filter value (they mangle args on Windows under ctest).
+# Keep the daemon's advertised startup default consistent with its safe bind.
+if(TARGET openads_serverd)
+    # CI builds the unit target explicitly before running every CTest.
+    add_dependencies(openads_unit_tests openads_serverd)
+    add_test(NAME serverd_help_default
+        COMMAND ${CMAKE_COMMAND} -DSERVERD=$<TARGET_FILE:openads_serverd>
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/serverd_help_test.cmake)
+endif()
+
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests -tce=*[slow]*,*flaky*)
 add_test(NAME openads_unit_tests_slow COMMAND openads_unit_tests -tc=*[slow]* -tce=*flaky*)
 

@@ -21,3 +21,8 @@ Matching DLL/server kits include the Studio changes. DA-Web is a separate
 PHP deployment: use the DA-Web files from feat/portal-health-mtfix30.
 Details: docs/portal-server-health.md. Usual B_BIG/Vouch application clearance
 is still needed before fork main merge. No live server changes were made.
+
+MinGW link repair: fresh ace32/ace64 import libraries are generated from
+the built DLL exports, including OAdsGetServerStats. The mtfix29 MinGW
+import archive was stale despite the correct DLL; both32-bit calling
+conventions are link-probed before packaging. No application PRG change.

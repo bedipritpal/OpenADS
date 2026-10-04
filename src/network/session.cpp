@@ -12,6 +12,7 @@
 #include "mgmt/error_log.h"
 #include "mgmt/mg_collector.h"
 #include "mgmt/mg_stats.h"
+#include "mgmt/mg_health.h"
 #include "network/mg_wire.h"
 #include "network/mutex_manager.h"
 #include "platform/proc.h"
@@ -5454,7 +5455,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply = err("bad mg request");
                 break;
             }
-            if (srv_->daemon_hardening() && req.value().kind != MgRequestKind::Snapshot && !mg_admin_) {
+            if (srv_->daemon_hardening() && req.value().kind != MgRequestKind::Snapshot &&
+                req.value().kind != MgRequestKind::HealthJson && !mg_admin_) {
                 reply = err("Management administrator required", openads::AE_ACCESS_DENIED); break;
             }
             switch (req.value().kind) {
@@ -5463,6 +5465,13 @@ DispatchResult Session::dispatch(const Frame& f) {
                     std::string snap =
                         encode_mg_snapshot(srv_->build_mg_snapshot());
                     reply.payload.assign(snap.begin(), snap.end());
+                    break;
+                }
+                case MgRequestKind::HealthJson: {
+                    reply.opcode = Opcode::MgReplyAck;
+                    const auto json = openads::mgmt::health_json(
+                        srv_->build_mg_snapshot(), OPENADS_VERSION_STR);
+                    reply.payload.assign(json.begin(), json.end());
                     break;
                 }
                 case MgRequestKind::KillUser: {

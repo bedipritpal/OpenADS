@@ -174,3 +174,29 @@ scalar, usage and semantics fields are included; long labels/text wrap rather
 than being discarded. Compile/run `tests/smoke/harbour/stats_display.prg` with
 the helper for the native sandbox fixture. Added for Pritpal Bedi's stats/log
 review and aligned display request.
+
+### Draw stats in a console/window rectangle
+
+`OAds_ServerStatsShow(hStats, nTop, nLeft, nBottom, nRight)` draws using
+`DispOutAt`, in the current console/CT window coordinates and color. The
+rectangle is inclusive. It clears only that rectangle, clips long lines,
+omits excess rows and returns the number of text rows drawn. It preserves
+cursor position and does not change color or draw a border. For an existing
+box, pass the box's inner rectangle. Omitted coordinates default to the
+current row/column through the current window's maximum row/column. Invalid
+or reversed coordinates return0 without drawing; right/bottom beyond the
+window are clamped. A rectangle narrower than76columns clips the formatter,
+so use at least76columns to see all four columns. It is a display-only helper,
+not a query or scrollable browser. Added following Pritpal Bedi's B_BIG screen
+feedback; `OAds_ServerStatsText` remains available for logs/text output.
+
+```harbour
+nRows := OAds_ServerStatsShow(hStats, nTop+1, nLeft+1, nBottom-1, nRight-1)
+```
+
+Native sandbox tests: `tests/smoke/harbour/stats_show.prg` checks actual GT
+screen cells, color, cursor, bounds, clipping and invalid inputs. Compile
+with the helper and `-gtstd -mt`. The existing text fixture remains unchanged.
+For an actual Clipper Tools window test, also compile/link hbct, define
+`STATS_SHOW_CTW` and run the same fixture. It checks a nonzero-origin CT
+window with local1,1coordinates. The helper adds no hbct dependency to apps.

@@ -48,3 +48,9 @@ assert 'StatsField( xValue, "max_used" )' in helper
 assert 'StatsField( xValue, "rejected" )' in helper
 assert 'SubStr(cLabel,77)' in helper and 'Unlimited (0)' in helper
 assert 'AdsMgConnect(' not in helper
+
+show = helper[helper.index("FUNCTION OAds_ServerStatsShow") :]
+assert "DispOutAt( nTop + nRow, nLeft" in show
+assert "SetPos( nOldRow, nOldCol )" in show and "SetColor(" not in show
+assert "Min( Int( nBottom ), MaxRow( ) )" in show and "Min( Int( nRight ), MaxCol( ) )" in show
+assert "RETURN nCount" in show

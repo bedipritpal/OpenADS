@@ -880,3 +880,67 @@ TEST_CASE("mtfix33 shared count observes local DBFCDX append and peer zap") {
     REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
     s.stop();
 }
+
+TEST_CASE("mtfix34 ordered relative-position reads do not fetch unused physical counts") {
+    nb_wipe();
+    auto dir = nb_tmp_dir();
+    nb_seed_ord(dir);
+    openads::network::Server s;
+    REQUIRE(s.start("127.0.0.1", 0).has_value());
+    ADSHANDLE c = nb_connect_remote(dir, s.port());
+    ADSHANDLE t = nb_open(c, "ord.dbf");
+    UNSIGNED8 tag[] = "BYID";
+    ADSHANDLE i = 0;
+    REQUIRE(AdsGetIndexHandle(t, tag, &i) == AE_SUCCESS);
+    REQUIRE(AdsSetIndexOrderByHandle(t, i) == AE_SUCCESS);
+    REQUIRE(AdsGotoBottom(i) == AE_SUCCESS);
+    const auto before = nb_op(kOpGetRecordCount);
+    double pos = 0;
+    for (int n = 0; n < 10; ++n) {
+        REQUIRE(AdsGetRelKeyPos(t, &pos) == AE_SUCCESS);
+        CHECK(pos == doctest::Approx(1.0));
+    }
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    REQUIRE(AdsSetRelKeyPos(t, 0.5) == AE_SUCCESS);
+    // Existing physical-count-based target math gets one fresh snapshot;
+    // nested ordered navigation must not fetch a second unused one.
+    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+    CHECK(nb_recno(t) == 3u);
+    CHECK(nb_reccount(t) == 3u);
+    CHECK(nb_op(kOpGetRecordCount) == before + 2);
+    REQUIRE(AdsCloseTable(t) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
+    s.stop();
+}
+
+TEST_CASE("mtfix34 natural relative-position uses one fresh count per operation") {
+    nb_wipe();
+    auto dir = nb_tmp_dir();
+    nb_seed(dir, "rel.dbf", 3);
+    openads::network::Server s;
+    REQUIRE(s.start("127.0.0.1", 0).has_value());
+    ADSHANDLE c = nb_connect_remote(dir, s.port());
+    ADSHANDLE t = nb_open(c, "rel.dbf");
+    REQUIRE(AdsGotoBottom(t) == AE_SUCCESS);
+    auto before = nb_op(kOpGetRecordCount);
+    double pos = 0;
+    REQUIRE(AdsGetRelKeyPos(t, &pos) == AE_SUCCESS);
+    CHECK(pos == doctest::Approx(1.0));
+    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+    before = nb_op(kOpGetRecordCount);
+    REQUIRE(AdsSetRelKeyPos(t, 0.5) == AE_SUCCESS);
+    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+    CHECK(nb_recno(t) == 2u);
+    ADSHANDLE peer = nb_connect_remote(dir, s.port());
+    ADSHANDLE b = nb_open(peer, "rel.dbf");
+    REQUIRE(AdsAppendRecord(b) == AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(b) == AE_SUCCESS);
+    REQUIRE(AdsGetRelKeyPos(t, &pos) == AE_SUCCESS);
+    CHECK(pos == doctest::Approx(1.0 / 3.0));
+    CHECK(nb_reccount(t) == 4u);
+    REQUIRE(AdsCloseTable(b) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(peer) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(t) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
+    s.stop();
+}

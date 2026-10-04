@@ -582,3 +582,13 @@ target_link_libraries(remote_test PRIVATE openads_ace)
 add_executable(oads_imac_test bench/oads_imac_test.cpp)
 target_include_directories(oads_imac_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(oads_imac_test PRIVATE openads_ace)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME portal_health_contract COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_contract_test.py)
+endif()
+
+find_program(OPENADS_NODE_EXECUTABLE node)
+if(OPENADS_NODE_EXECUTABLE)
+    add_test(NAME portal_health_js COMMAND ${OPENADS_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_js_test.js)
+endif()

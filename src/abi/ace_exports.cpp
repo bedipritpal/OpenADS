@@ -1752,10 +1752,16 @@ void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
     rt->nav_not_eof = false;
 }
 
+// Owner-selected mtfix32 compatibility by default. Fresh mode is opt-in;
+// cached mode can miss a peer append until its normal invalidation path.
+// Read on each call so a caller can deliberately select either policy.
+bool remote_fresh_counts_enabled() {
+    const char* value = std::getenv("OPENADS_FRESH_COUNTS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
 void remote_ensure_rec_count(openads::network::RemoteTable* rt) {
-    if (rt == nullptr) return;
-    // Physical counts are snapshots. Another workarea, including one on
-    // this same connection, can append without touching this handle.
+    if (rt == nullptr || (rt->rec_count_cached && !remote_fresh_counts_enabled())) return;
     rt->rec_count_cached = false;
     if (auto r = rt->conn->record_count(rt->id)) {
         rt->cached_rec_count = r.value();
@@ -12937,10 +12943,19 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOpti
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        // mtfix33: match Harbour DBFCDX shared RecCount. Neither a
-        // previous reply nor a nav tail certifies cross-session freshness.
-        // Exclusive handles can also have sibling workareas on this session;
-        // without a file-wide invalidation proof, do not reuse their counts.
+        if (!remote_fresh_counts_enabled()) {
+            if (rt->rec_count_cached) {
+                *pulRecordCount = rt->cached_rec_count;
+                return ok();
+            }
+            if (rt->count_bound_ok && rt->count_bound_seq == rt->conn->nav_seq()) {
+                *pulRecordCount = rt->count_bound;
+                rt->cached_rec_count = rt->count_bound;
+                rt->rec_count_cached = true;
+                return ok();
+            }
+        }
+        // Opt-in mode never treats an earlier reply as peer-fresh.
         rt->rec_count_cached = false;
         auto r = rt->conn->record_count(rt->id);
         if (!r) return fail(r.error());

@@ -20,6 +20,7 @@
 #include "openads/ace.h"
 
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -748,6 +749,26 @@ TEST_CASE("Reposition truth: Seek miss certifies EOF locally") {
     s.stop();
 }
 
+struct NbCountPolicy {
+    std::string previous;
+    bool existed;
+    explicit NbCountPolicy(const char* value) {
+        const char* p = std::getenv("OPENADS_FRESH_COUNTS");
+        existed = p != nullptr;
+        if (p) previous = p;
+        set(value);
+    }
+    static void set(const char* value) {
+#ifdef _WIN32
+        _putenv_s("OPENADS_FRESH_COUNTS", value ? value : "");
+#else
+        if (value) setenv("OPENADS_FRESH_COUNTS", value, 1);
+        else unsetenv("OPENADS_FRESH_COUNTS");
+#endif
+    }
+    ~NbCountPolicy() { set(existed ? previous.c_str() : nullptr); }
+};
+
 UNSIGNED32 nb_reccount(ADSHANDLE hTable) {
     UNSIGNED32 v = 0;
     REQUIRE(AdsGetRecordCount(hTable, 0, &v) == AE_SUCCESS);
@@ -755,6 +776,7 @@ UNSIGNED32 nb_reccount(ADSHANDLE hTable) {
 }
 
 TEST_CASE("Count truth: shared calls refresh instead of trusting nav snapshots") {
+    NbCountPolicy policy("1");
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed(dir, "cnt.dbf", 3);
@@ -808,6 +830,7 @@ TEST_CASE("Phantom RecNo derives from flags plus cached count") {
 }
 
 TEST_CASE("mtfix33 shared physical count sees another session append without navigation") {
+    NbCountPolicy policy("1");
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed(dir, "fresh.dbf", 3);
@@ -833,6 +856,7 @@ TEST_CASE("mtfix33 shared physical count sees another session append without nav
 }
 
 TEST_CASE("mtfix33 count refreshes across sibling workareas even under exclusive open") {
+    NbCountPolicy policy("1");
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed(dir, "sibling.dbf", 3);
@@ -856,6 +880,7 @@ TEST_CASE("mtfix33 count refreshes across sibling workareas even under exclusive
 }
 
 TEST_CASE("mtfix33 shared count observes local DBFCDX append and peer zap") {
+    NbCountPolicy policy("1");
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed(dir, "local.dbf", 3);
@@ -882,6 +907,7 @@ TEST_CASE("mtfix33 shared count observes local DBFCDX append and peer zap") {
 }
 
 TEST_CASE("mtfix34 ordered relative-position reads do not fetch unused physical counts") {
+    NbCountPolicy policy("1");
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed_ord(dir);
@@ -914,6 +940,7 @@ TEST_CASE("mtfix34 ordered relative-position reads do not fetch unused physical 
 }
 
 TEST_CASE("mtfix34 natural relative-position uses one fresh count per operation") {
+    NbCountPolicy policy("1");
     nb_wipe();
     auto dir = nb_tmp_dir();
     nb_seed(dir, "rel.dbf", 3);
@@ -946,6 +973,7 @@ TEST_CASE("mtfix34 natural relative-position uses one fresh count per operation"
 }
 
 TEST_CASE("mtfix35 remote physical count forwards disk refresh errors without stale output") {
+    NbCountPolicy policy("1");
     nb_wipe();
     const auto dir = nb_tmp_dir();
     nb_seed(dir, "error.dbf", 3);
@@ -961,4 +989,34 @@ TEST_CASE("mtfix35 remote physical count forwards disk refresh errors without st
     CHECK(AdsCloseTable(a) == AE_SUCCESS);
     CHECK(AdsDisconnect(c) == AE_SUCCESS);
     s.stop();
+}
+
+TEST_CASE("mtfix37 default compatibility reuses count and fresh opt-in sees peer append") {
+    NbCountPolicy policy(nullptr);
+    nb_wipe();
+    const auto dir = nb_tmp_dir();
+    nb_seed(dir, "compat.dbf", 3);
+    openads::network::Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    const auto connection = nb_connect_remote(dir, server.port());
+    const auto table = nb_open(connection, "compat.dbf");
+    CHECK(nb_reccount(table) == 3);
+    const auto before = nb_op(kOpGetRecordCount);
+    CHECK(nb_reccount(table) == 3);
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    const auto peer = nb_connect_remote(dir, server.port());
+    const auto writer = nb_open(peer, "compat.dbf");
+    REQUIRE(AdsAppendRecord(writer) == AE_SUCCESS);
+    REQUIRE(AdsWriteRecord(writer) == AE_SUCCESS);
+    CHECK(nb_reccount(table) == 3); // documented compatibility risk
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    NbCountPolicy::set("1");
+    CHECK(nb_reccount(table) == 4);
+    CHECK(nb_reccount(table) == 4);
+    CHECK(nb_op(kOpGetRecordCount) == before + 2);
+    REQUIRE(AdsCloseTable(writer) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(peer) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(table) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(connection) == AE_SUCCESS);
+    server.stop();
 }

@@ -50,6 +50,7 @@ using openads::abi::lock_retry_policy;
 #include "mgmt/error_log.h"
 #include "mgmt/mg_collector.h"
 #include "mgmt/mg_stats.h"
+#include "mgmt/mg_health.h"
 #include "session/connection.h"
 #include "session/handle_registry.h"
 #include "util/log.h"
@@ -1751,8 +1752,17 @@ void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
     rt->nav_not_eof = false;
 }
 
+// Owner-selected mtfix32 compatibility by default. Fresh mode is opt-in;
+// cached mode can miss a peer append until its normal invalidation path.
+// Read on each call so a caller can deliberately select either policy.
+bool remote_fresh_counts_enabled() {
+    const char* value = std::getenv("OPENADS_FRESH_COUNTS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
 void remote_ensure_rec_count(openads::network::RemoteTable* rt) {
-    if (rt == nullptr || rt->rec_count_cached) return;
+    if (rt == nullptr || (rt->rec_count_cached && !remote_fresh_counts_enabled())) return;
+    rt->rec_count_cached = false;
     if (auto r = rt->conn->record_count(rt->id)) {
         rt->cached_rec_count = r.value();
         rt->rec_count_cached = true;
@@ -2213,7 +2223,8 @@ UNSIGNED32 remote_query_key_num(openads::network::RemoteTable* rt,
 
 UNSIGNED32 remote_goto_key_num(openads::network::RemoteTable* rt,
                                 openads::network::RemoteIndex* ri,
-                                std::uint32_t keyno) {
+                                std::uint32_t keyno,
+                                const std::uint32_t* physical_snapshot = nullptr) {
     if (rt == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     // Scrollbar jump moves the cursor: buffered sets belong to the row
     // under the old position. Land them first (no-op when clean).
@@ -2223,13 +2234,17 @@ UNSIGNED32 remote_goto_key_num(openads::network::RemoteTable* rt,
         auto act = openads::network::remote_activate_index(ri);
         if (!act) return fail(act.error());
     }
-    remote_ensure_rec_count(rt);
+    // mtfix34: ordered position uses scoped key count, not physical count.
+    // Do not ask for a physical value that the branch below discards.
+    if (!remote_table_has_index(rt) && physical_snapshot == nullptr)
+        remote_ensure_rec_count(rt);
     // Clamp to the scoped key count when an order is active -- a KeyGoto
     // past the scope end must land on the last scoped key, not on a
     // physical record outside the scope.
     const std::uint32_t kmax = remote_table_has_index(rt)
         ? remote_ensure_key_count(rt)
-        : (rt->rec_count_cached ? rt->cached_rec_count : 0u);
+        : (physical_snapshot != nullptr ? *physical_snapshot
+             : (rt->rec_count_cached ? rt->cached_rec_count : 0u));
     cli_trace("goto_key_num", "want=%u kmax=%u", keyno, kmax);
     if (kmax > 0 && keyno > kmax) {
         keyno = kmax;
@@ -2268,7 +2283,9 @@ UNSIGNED32 remote_query_rel_key_pos(openads::network::RemoteTable* rt,
         auto act = openads::network::remote_activate_index(ri);
         if (!act) return fail(act.error());
     }
-    remote_ensure_rec_count(rt);
+    // mtfix34: ordered position uses scoped key count, not physical count.
+    // Do not ask for a physical value that the branch below discards.
+    if (!remote_table_has_index(rt)) remote_ensure_rec_count(rt);
     // Relative position is within the active order's key walk, so the
     // denominator is the scoped key count when an order is active --
     // not the physical record count.
@@ -8468,6 +8485,11 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         rt->name = name;
         rt->alias = std::move(alias);
         rt->close_counted = true;
+        rt->production_index_reply = std::move(ot.production_index_reply);
+        if (ot.has_record_length) {
+            rt->cached_record_length = ot.record_length;
+            rt->record_length_cached = true;
+        }
         rt->open_mode_raw = usMode;
         rt->open_exclusive =
             (map_open_mode(usMode) == openads::engine::OpenMode::Exclusive);
@@ -12921,25 +12943,20 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOpti
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        // M12.19 -- record count is invariant outside of explicit
-        // writes (AppendBlank / DeleteRecord / RecallRecord / Pack
-        // / Zap), so cache the value on first hit and serve every
-        // subsequent AdsGetRecordCount + AdsGetRelKeyPos (scrollbar)
-        // call from cache. Each cache hit saves one wire RTT.
-        if (rt->rec_count_cached) {
-            *pulRecordCount = rt->cached_rec_count;
-            return ok();
+        if (!remote_fresh_counts_enabled()) {
+            if (rt->rec_count_cached) {
+                *pulRecordCount = rt->cached_rec_count;
+                return ok();
+            }
+            if (rt->count_bound_ok && rt->count_bound_seq == rt->conn->nav_seq()) {
+                *pulRecordCount = rt->count_bound;
+                rt->cached_rec_count = rt->count_bound;
+                rt->rec_count_cached = true;
+                return ok();
+            }
         }
-        // Certified count from the last nav ack tail (same trust as
-        // the cache above — in-memory server count). Covers the
-        // open→goto→count USE flow with zero extra frames.
-        if (rt->count_bound_ok &&
-            rt->count_bound_seq == rt->conn->nav_seq()) {
-            *pulRecordCount = rt->count_bound;
-            rt->cached_rec_count = rt->count_bound;
-            rt->rec_count_cached = true;
-            return ok();
-        }
+        // Opt-in mode never treats an earlier reply as peer-fresh.
+        rt->rec_count_cached = false;
         auto r = rt->conn->record_count(rt->id);
         if (!r) return fail(r.error());
         rt->cached_rec_count = static_cast<UNSIGNED32>(r.value());
@@ -13058,7 +13075,8 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOpti
         // Multiuser: peer appends bump the on-disk header; re-read so
         // LastRec() / RecCount() match the other stations (and so the
         // browser's EOF fence is not stuck at open-time count).
-        t->refresh_record_count_from_disk();
+        if (auto fresh = t->refresh_record_count_from_disk(); !fresh)
+            return fail(fresh.error());
         *pulRecordCount = t->record_count();
     }
     return ok();
@@ -15829,7 +15847,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 return ok();
             }
         }
-        auto r = rt->conn->open_index(rt->id, path);
+        auto r = rt->production_index_reply.empty()
+            ? rt->conn->open_index(rt->id, path)
+            : openads::network::RemoteConnection::parse_open_index_reply(rt->production_index_reply, path);
+        rt->production_index_reply.clear();
         if (!r) return fail(r.error());
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -38996,7 +39017,7 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
         std::uint32_t target = static_cast<std::uint32_t>(
             pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
         if (target > rc) target = rc;
-        return remote_goto_key_num(rt, ri, target);
+        return remote_goto_key_num(rt, ri, target, &rc);
     }
     if (auto* rt = get_remote_table(h)) {
         remote_ensure_rec_count(rt);
@@ -39009,13 +39030,13 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
             std::uint32_t target = static_cast<std::uint32_t>(
                 pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
             if (target > rc) target = rc;
-            return remote_goto_key_num(rt, nullptr, target);
+            return remote_goto_key_num(rt, nullptr, target, &rc);
         }
         std::uint32_t rn = static_cast<std::uint32_t>(
             pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
         if (rn < 1u) rn = 1u;
         if (rn > rc) rn = rc;
-        return remote_goto_key_num(rt, nullptr, rn);
+        return remote_goto_key_num(rt, nullptr, rn, &rc);
     }
     Table* t = get_table(h);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
@@ -39464,6 +39485,10 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
     be.mg_user = pucUser ? reinterpret_cast<const char*>(pucUser) : std::string();
     std::string srv = pucServer
         ? reinterpret_cast<const char*>(pucServer) : "";
+    // Management accepts the ordinary TCP endpoint spelling as well as
+    // host:port. Do not strip tls://: this backend does not negotiate TLS.
+    if (srv.rfind("tcp://", 0) == 0 || srv.rfind("TCP://", 0) == 0)
+        srv.erase(0, 6);
     // Strip leading / trailing UNC slashes ("\\\\host\\").
     while (!srv.empty() && (srv.front() == '\\' || srv.front() == '/'))
         srv.erase(srv.begin());
@@ -39521,6 +39546,54 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
     ADSHANDLE h = g_mg_next++;
     g_mg_handles.emplace(h, std::move(be));
     *phMgmt = h;
+    return openads::AE_SUCCESS;
+}
+
+UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE hMgmt, UNSIGNED8* json, UNSIGNED32* len) {
+    if (!len) return openads::AE_INTERNAL_ERROR;
+    MgBackend be;
+    {
+        std::lock_guard<std::mutex> lock(g_mg_mu);
+        const auto it = g_mg_handles.find(hMgmt);
+        if (it == g_mg_handles.end()) return openads::AE_INVALID_CONNECTION_HANDLE;
+        be = it->second; // concurrent disconnect cannot invalidate this copy
+    }
+    std::string text;
+    if (!be.remote) {
+        std::lock_guard<std::recursive_mutex> lock(state().mu);
+        text = openads::mgmt::health_json(collect_local_abi_snapshot(), OPENADS_VERSION_STR);
+    } else {
+        openads::network::network_init();
+        auto connected = openads::network::connect_tcp(be.host, be.port);
+        if (!connected) return openads::AE_NO_CONNECTION;
+        auto socket = connected.value();
+        if (!authenticate_mg_socket(socket, be)) {
+            openads::network::sock_close(socket);
+            return openads::AE_ACCESS_DENIED;
+        }
+        openads::network::Frame req;
+        req.opcode = openads::network::Opcode::MgRequest;
+        const auto body = openads::network::encode_mg_request(
+            openads::network::MgRequestKind::HealthJson, 0);
+        req.payload.assign(body.begin(), body.end());
+        if (!openads::network::write_frame(socket, req)) {
+            openads::network::sock_close(socket); return openads::AE_NO_CONNECTION;
+        }
+        auto reply = openads::network::read_frame(socket);
+        openads::network::sock_close(socket);
+        if (!reply) return openads::AE_NO_CONNECTION;
+        if (reply.value().opcode != openads::network::Opcode::MgReplyAck)
+            return openads::AE_FUNCTION_NOT_AVAILABLE;
+        text.assign(reply.value().payload.begin(), reply.value().payload.end());
+        // Fail closed on malformed/oversized replies, not arbitrary remote text.
+        if (text.empty() || text.size() > 65535 || text.front() != '{' || text.back() != '}')
+            return openads::AE_INTERNAL_ERROR;
+    }
+    const UNSIGNED32 needed = static_cast<UNSIGNED32>(text.size() + 1);
+    const UNSIGNED32 capacity = *len;
+    *len = needed;
+    if (!json || capacity < needed) return openads::AE_INSUFFICIENT_BUFFER;
+    std::memcpy(json, text.c_str(), needed);
     return openads::AE_SUCCESS;
 }
 

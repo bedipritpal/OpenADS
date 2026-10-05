@@ -1,3 +1,5 @@
+> Fork owner directives: read [OWNER_DIRECTIVES.md](OWNER_DIRECTIVES.md) before making changes.
+
 # OpenADS
 
 📖 **Docs**:

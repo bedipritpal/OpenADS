@@ -50,7 +50,7 @@ env:
   # path). .github/ is deliberately NOT allowed: a patch must never be
   # able to change workflows, and GitHub also refuses workflow-file
   # pushes made with the built-in token.
-  ALLOWED_PATHS_REGEX: '^(src/|include/|tests/|cmake/|docs/|bindings/|tools/|examples/|CMakeLists\.txt$|CMakePresets\.json$|CHANGELOG\.md$|README\.md$)'
+  ALLOWED_PATHS_REGEX: '^(contrib/oads_hb/|src/|include/|tests/|cmake/|docs/|bindings/|tools/|examples/|CMakeLists\.txt$|CMakePresets\.json$|CHANGELOG\.md$|README\.md$)'
 
 jobs:
   validate:

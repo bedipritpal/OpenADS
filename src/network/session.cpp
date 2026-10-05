@@ -12,6 +12,7 @@
 #include "mgmt/error_log.h"
 #include "mgmt/mg_collector.h"
 #include "mgmt/mg_stats.h"
+#include "mgmt/mg_health.h"
 #include "network/mg_wire.h"
 #include "network/mutex_manager.h"
 #include "platform/proc.h"
@@ -1780,6 +1781,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 client_prefetch_back_ok_ =
                     (caps & openads::network::kCapPrefetchBackward) != 0;
                 // M12.x — client sends [u16 mode] prefix on OpenTable.
+                client_open_setup_metadata_ok_ = (caps & kCapOpenSetupMetadata) != 0;
                 client_open_table_mode_ok_ =
                     (caps & openads::network::kCapOpenTableMode) != 0;
             }
@@ -2231,6 +2233,38 @@ DispatchResult Session::dispatch(const Frame& f) {
                                          bag.begin(), bag.end());
                 }
                 append_open_warm_sections(reply.payload, id, tbl);
+                if (client_open_setup_metadata_ok_ && tbl != nullptr) {
+                    // Reuse the exact OpenIndex handler: per-session bindings,
+                    // rollback on failed index open and unchanged tag metadata.
+                    // Client releases its ABI mutex during OpenTable.
+                    std::vector<std::uint8_t> extra;
+                    unsigned added = 0;
+                    auto add = [&](std::uint8_t tag, const std::vector<std::uint8_t>& bytes) {
+                        extra.push_back(tag);
+                        write_u32_le(static_cast<std::uint32_t>(bytes.size()), extra);
+                        extra.insert(extra.end(), bytes.begin(), bytes.end());
+                        ++added;
+                    };
+                    std::vector<std::uint8_t> len;
+                    write_u32_le(tbl->driver() ? tbl->driver()->record_length() : 0, len);
+                    add(OpenTableAckSections::kRecordLength, len);
+                    if (!bag.empty()) {
+                        Frame index_req; index_req.opcode = Opcode::OpenIndex;
+                        write_u32_le(id, index_req.payload);
+                        index_req.payload.insert(index_req.payload.end(), bag.begin(), bag.end());
+                        auto index_reply = dispatch(index_req);
+                        if (index_reply.reply && index_reply.reply->opcode == Opcode::OpenIndexAck) {
+                            add(OpenTableAckSections::kProductionIndex, index_reply.reply->payload);
+                            if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+                                (void)install_table_order(id, 0);
+                                (void)AdsGotoTop(hit->second);
+                            }
+                        }
+                    }
+                    const std::size_t count_offset = 6u + bag.size();
+                    reply.payload[count_offset] = static_cast<std::uint8_t>(reply.payload[count_offset] + added);
+                    reply.payload.insert(reply.payload.end(), extra.begin(), extra.end());
+                }
             }
             break;
         }
@@ -2559,7 +2593,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             std::uint32_t id = read_u32_le(f.payload.data());
             if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
                 UNSIGNED32 rc = 0;
-                AdsGetRecordCount(cit->second, 0, &rc);
+                auto count_status = AdsGetRecordCount(cit->second, 0, &rc);
+                if (count_status != 0) { reply = err("GetRecordCount: refresh failed", count_status); break; }
                 reply.opcode = Opcode::GetRecordCountAck;
                 write_u32_le(rc, reply.payload);
                 break;
@@ -2572,7 +2607,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!tbl) { reply = err("GetRecordCount: lookup failed"); break; }
             // Refresh the on-disk record count so concurrent appends by
             // other connections are visible (multiuser coherence).
-            tbl->refresh_record_count_from_disk();
+            if (auto fresh = tbl->refresh_record_count_from_disk(); !fresh) {
+                reply = err(fresh.error().message, static_cast<UNSIGNED32>(fresh.error().code)); break;
+            }
             std::uint32_t rc = tbl->record_count();
             reply.opcode = Opcode::GetRecordCountAck;
             write_u32_le(rc, reply.payload);
@@ -5454,7 +5491,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply = err("bad mg request");
                 break;
             }
-            if (srv_->daemon_hardening() && req.value().kind != MgRequestKind::Snapshot && !mg_admin_) {
+            if (srv_->daemon_hardening() && req.value().kind != MgRequestKind::Snapshot &&
+                req.value().kind != MgRequestKind::HealthJson && !mg_admin_) {
                 reply = err("Management administrator required", openads::AE_ACCESS_DENIED); break;
             }
             switch (req.value().kind) {
@@ -5463,6 +5501,13 @@ DispatchResult Session::dispatch(const Frame& f) {
                     std::string snap =
                         encode_mg_snapshot(srv_->build_mg_snapshot());
                     reply.payload.assign(snap.begin(), snap.end());
+                    break;
+                }
+                case MgRequestKind::HealthJson: {
+                    reply.opcode = Opcode::MgReplyAck;
+                    const auto json = openads::mgmt::health_json(
+                        srv_->build_mg_snapshot(), OPENADS_VERSION_STR);
+                    reply.payload.assign(json.begin(), json.end());
                     break;
                 }
                 case MgRequestKind::KillUser: {

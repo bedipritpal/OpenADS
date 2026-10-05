@@ -1,5 +1,8 @@
 #include "network/session.h"
 #include "engine/pbkdf2.h"
+#include "engine/data_dict.h"
+#include "engine/sql_input_limits.h"
+#include "engine/sql_execution_budget.h"
 
 #include "openads_version.h"  // OPENADS_VERSION_STR (CMake-generated)
 
@@ -27,6 +30,8 @@
 #include "session/connection.h"
 #include "sql_backend/enterprise_config.h"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -503,6 +508,7 @@ bool Session::expired() const noexcept {
     const auto now = std::chrono::steady_clock::now();
     return (!reply_bytes_.empty() && now - reply_since_ >= std::chrono::seconds(30)) ||
            (!sess_conn_ && !mg_connected_ && now - created_ >= std::chrono::seconds(30)) ||
+           now - last_read_ >= std::chrono::minutes(5) ||
            (reader_.buffered() != 0 && now - partial_since_ >= std::chrono::seconds(30));
 }
 
@@ -1690,6 +1696,89 @@ DispatchResult Session::dispatch(const Frame& f) {
     if ((f.opcode == Opcode::OpenTable || f.opcode == Opcode::ExecuteSQL) && tbls_.size() + cursor_tbls_.size() >= 256)
         return {err("Session table limit", openads::AE_ACCESS_DENIED), false};
     }
+    // Wire table handlers can operate directly on engine handles, without
+    // ABI ACL checks. Enforce authenticated dictionary authority centrally.
+    if (sess_conn_ && sess_conn_->has_dd() && !sess_conn_->username().empty()) {
+        auto* dd = sess_conn_->dd();
+        const auto& user = sess_conn_->username();
+        const bool admin = dd->is_member_of(user, "DB:Admin");
+        auto object = [&](const std::string& name) {
+            auto fold = [](std::string text) {
+                std::replace(text.begin(), text.end(), '\\', '/');
+                for (auto& ch : text) ch = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(ch)));
+                return text;
+            };
+            auto type = openads::engine::TableType::Cdx;
+            const auto path = fold(sess_conn_->resolve_table_file(name, type));
+            for (const auto& entry : dd->tables()) {
+                type = openads::engine::TableType::Cdx;
+                if (fold(entry.first) == fold(name) ||
+                    fold(sess_conn_->resolve_table_file(entry.first, type)) == path)
+                    return entry.first;
+            }
+            return name;
+        };
+        auto denied = [&]() {
+            return DispatchResult{err("Dictionary permission required", openads::AE_ACCESS_DENIED), false};
+        };
+        switch (f.opcode) {
+            case Opcode::CreateTable: case Opcode::DropTable:
+            case Opcode::CreateIndex: case Opcode::Reindex:
+            case Opcode::PackTable: case Opcode::ZapTable:
+            case Opcode::FileExists: case Opcode::FileErase: case Opcode::FileRename:
+            case Opcode::FileSize: case Opcode::FileMTime: case Opcode::Directory:
+            case Opcode::DirExist: case Opcode::DirMake: case Opcode::DirRemove:
+            case Opcode::FOpen: case Opcode::FCreate: case Opcode::FClose:
+            case Opcode::FRead: case Opcode::FWrite: case Opcode::FSeek:
+            case Opcode::ZipArchive: case Opcode::UnzipArchive: case Opcode::ZipList:
+                if (!admin) return denied();
+                break;
+            default: break;
+        }
+        if (f.opcode == Opcode::OpenTable) {
+            const auto offset = client_open_table_mode_ok_ && f.payload.size() >= 2 ? 2u : 0u;
+            std::string name(f.payload.begin() + offset, f.payload.end());
+            if (name.rfind("tcp://", 0) == 0 || name.rfind("TCP://", 0) == 0) {
+                const auto sep = name.find_last_of("/\\");
+                if (sep != std::string::npos) name = name.substr(sep + 1);
+            }
+            const auto alias = object(name);
+            if (!dd->get_effective_ops(user, alias).select_ ||
+                dd->permitted_columns(user, alias, openads::engine::DataDict::DD_PERM_SELECT))
+                return denied();
+            if (!admin && offset == 2 && read_u16_le(f.payload.data()) ==
+                static_cast<std::uint16_t>(openads::engine::OpenMode::Exclusive))
+                return denied();
+        }
+        enum class Write { None, Insert, Update, Delete } write = Write::None;
+        switch (f.opcode) {
+            case Opcode::AppendBlank: write = Write::Insert; break;
+            case Opcode::SetField: case Opcode::SetFields: case Opcode::SetRecord:
+            case Opcode::RecallRecord: case Opcode::LockRecord: case Opcode::LockTable:
+                write = Write::Update; break;
+            case Opcode::DeleteRecord: write = Write::Delete; break;
+            default: break;
+        }
+        if (write != Write::None && f.payload.size() >= 4) {
+            const auto id = read_u32_le(f.payload.data());
+            auto path = tbl_open_paths_.find(id);
+            if (path == tbl_open_paths_.end()) {
+                // Cursor handles do not retain trustworthy source authority.
+                if (!admin) return denied();
+            } else {
+                const auto alias = object(path->second);
+                const auto ops = dd->get_effective_ops(user, alias);
+                if ((write == Write::Insert && !ops.insert_) ||
+                    (write == Write::Update && !ops.update_) ||
+                    (write == Write::Delete && !ops.delete_)) return denied();
+                const auto bit = write == Write::Insert ? openads::engine::DataDict::DD_PERM_INSERT
+                    : write == Write::Update ? openads::engine::DataDict::DD_PERM_UPDATE
+                    : openads::engine::DataDict::DD_PERM_DELETE;
+                if (dd->permitted_columns(user, alias, bit)) return denied();
+            }
+        }
+    }
     WTRACE("[wire] op=%u\n", (unsigned)f.opcode);
     if (wire_trace_on() && f.payload.size() >= 4) {
         std::uint32_t tid0 = read_u32_le(f.payload.data());
@@ -1895,7 +1984,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                     static_cast<unsigned char>(login_req[1]) == 0);
                 bool require_login = (!login_req.empty() &&
                     login_req != "0" && login_req != "False" && !is_raw_zero);
-                if (require_login) {
+                if (require_login || !user.empty()) {
                     if (user.empty()) {
                         srv_->login_failed(peer_ip_, user, max_attempts);
                         reply = err(srv_->daemon_hardening() ? "Connect: authentication failed" : "Connect: login required but no username supplied",
@@ -1909,14 +1998,21 @@ DispatchResult Session::dispatch(const Frame& f) {
                         break;
                     }
                     std::string stored = dd->get_user_property(user, "prop_1101");
-                    if (stored != pw) {
+                    if (!openads::engine::verify_password(stored, pw)) {
                         srv_->login_failed(peer_ip_, user, max_attempts);
-                        reply = err(srv_->daemon_hardening() ? "Connect: authentication failed" : "Connect: invalid password",
+                        reply = err("Connect: authentication failed",
                                     openads::AE_LOGIN_FAILED);
                         break;
                     }
                 }
                 if (!user.empty()) {
+                    const auto old = dd->get_user_property(user, "prop_1101");
+                    if (!openads::engine::password_is_hash(old)) {
+                        if (auto migrated = dd->set_user_property(user, "prop_1101", pw); !migrated) {
+                            reply = err("Connect: credential migration failed", openads::AE_LOGIN_FAILED);
+                            break;
+                        }
+                    }
                     co.value().set_username(user);
                     if (dd->has_any_acl()) dd->build_perm_cache(user);
                 }
@@ -4556,6 +4652,10 @@ DispatchResult Session::dispatch(const Frame& f) {
         // wire opcodes.
         case Opcode::ExecuteSQL: {
             if (!sess_conn_) { reply = err("ExecuteSQL: not connected"); break; }
+            const std::string sql_text(f.payload.begin(), f.payload.end());
+            if (auto valid = openads::engine::validate_remote_sql_input(sql_text); !valid) {
+                reply = err(valid.error().message, static_cast<UNSIGNED32>(valid.error().code)); break;
+            }
             if (abi_conn_ == 0) {
                 if (!ensure_abi_conn()) {
                     reply = err("ExecuteSQL: AdsConnect60 failed");
@@ -4572,9 +4672,15 @@ DispatchResult Session::dispatch(const Frame& f) {
                             f.payload.size());
             }
             sqlbuf[f.payload.size()] = 0;
+            openads::engine::SqlExecutionScope execution_scope(true);
             ADSHANDLE hCur = 0;
             UNSIGNED32 rrc = AdsExecuteSQLDirect(abi_stmt_,
                                                  sqlbuf.data(), &hCur);
+            if (openads::engine::sql_execution_exhausted()) {
+                if (hCur) AdsCloseTable(hCur);
+                reply = err("ExecuteSQL: execution budget exceeded", openads::AE_ACCESS_DENIED);
+                break;
+            }
             if (rrc != 0) {
                 reply = err("ExecuteSQL: server-side exec failed", rrc);
                 break;
@@ -4907,14 +5013,20 @@ DispatchResult Session::dispatch(const Frame& f) {
                         static thread_local std::vector<UNSIGNED8> out_v(65536 + 1);
                         UNSIGNED8* out = out_v.data();
                         UNSIGNED32 cap = static_cast<UNSIGNED32>(out_v.size());
-                        std::size_t n = std::min<std::size_t>(
-                            cn.size(), sizeof(fbuf) - 1);
+                        if (cn.size() >= sizeof(fbuf)) {
+                            reply = err("Fetch column name exceeds lookup limit");
+                            parse_ok = false; break;
+                        }
+                        std::size_t n = cn.size();
                         std::memcpy(fbuf, cn.data(), n);
                         fbuf[n] = 0;
                         UNSIGNED32 rrc = AdsGetField(hCur, fbuf,
                                                      out, &cap, 0);
-                        if (rrc != 0) cap = 0;
-                        if (srv_->daemon_hardening() && (cap > 65535 || rowbuf.size() + 2 + cap > 16u*1024u*1024u - 16u)) {
+                        if (rrc != 0) {
+                            reply = err("Fetch field read failed", rrc);
+                            parse_ok = false; break;
+                        }
+                        if (cap > 65535 || rowbuf.size() + 2 + cap > 16u*1024u*1024u - 16u) {
                             reply = err("Fetch result exceeds protocol limit"); parse_ok = false; break;
                         }
                         write_u16_le(rowbuf,
@@ -4938,9 +5050,17 @@ DispatchResult Session::dispatch(const Frame& f) {
                         if (fi >= 0) {
                             auto v = tbl->read_field(
                                 static_cast<std::uint16_t>(fi));
-                            if (v) val = v.value().as_string;
+                            if (!v) {
+                                reply = err("Fetch field read failed",
+                                            static_cast<UNSIGNED32>(v.error().code));
+                                parse_ok = false; break;
+                            }
+                            val = v.value().as_string;
+                        } else {
+                            reply = err("Fetch column not found", openads::AE_COLUMN_NOT_FOUND);
+                            parse_ok = false; break;
                         }
-                        if (srv_->daemon_hardening() && (val.size() > 65535 || rowbuf.size() + 2 + val.size() > 16u*1024u*1024u - 16u)) {
+                        if (val.size() > 65535 || rowbuf.size() + 2 + val.size() > 16u*1024u*1024u - 16u) {
                             reply = err("Fetch result exceeds protocol limit"); parse_ok = false; break;
                         }
                         write_u16_le(rowbuf,
@@ -5063,9 +5183,17 @@ DispatchResult Session::dispatch(const Frame& f) {
                             if (fi >= 0) {
                                 auto v = tbl->read_field(
                                     static_cast<std::uint16_t>(fi));
-                                if (v) val = v.value().as_string;
+                                if (!v) {
+                                    reply = err("FetchWhere field read failed",
+                                                static_cast<UNSIGNED32>(v.error().code));
+                                    parse_ok = false; break;
+                                }
+                                val = v.value().as_string;
+                            } else {
+                                reply = err("FetchWhere column not found", openads::AE_COLUMN_NOT_FOUND);
+                                parse_ok = false; break;
                             }
-                            if (srv_->daemon_hardening() && (val.size() > 65535 || rowbuf.size() + 2 + val.size() > 16u*1024u*1024u - 16u)) {
+                            if (val.size() > 65535 || rowbuf.size() + 2 + val.size() > 16u*1024u*1024u - 16u) {
                                 reply = err("FetchWhere result exceeds protocol limit"); parse_ok = false; break;
                             }
                             write_u16_le(rowbuf,
@@ -5245,6 +5373,10 @@ DispatchResult Session::dispatch(const Frame& f) {
                     reply = err("Aggregate: missing n_aggs"); break;
                 }
                 std::uint8_t naggs = f.payload[p++];
+                if (flen > 4096 || for_expr.find('\0') != std::string::npos ||
+                    naggs == 0 || naggs > 32) {
+                    reply = err("Aggregate: expression/spec limit"); break;
+                }
                 struct AggReq { std::uint8_t fn; std::string field; };
                 std::vector<AggReq> specs;
                 specs.reserve(naggs);
@@ -5256,6 +5388,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                     }
                     AggReq s;
                     s.fn = f.payload[p++];
+                    if (s.fn > static_cast<std::uint8_t>(openads::engine::AggFn::Max)) {
+                        reply = err("Aggregate: invalid function"); parse_ok = false; break;
+                    }
                     std::uint8_t nlen = f.payload[p++];
                     if (p + nlen > f.payload.size()) {
                         reply = err("Aggregate: truncated field name");
@@ -5268,6 +5403,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                     specs.push_back(std::move(s));
                 }
                 if (!parse_ok) break;
+                if (p != f.payload.size()) { reply = err("Aggregate: trailing payload"); break; }
 
                 // Base tables only — a SQL cursor aggregates via SQL.
                 if (cursor_tbls_.find(id) != cursor_tbls_.end()) {
@@ -5281,6 +5417,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                 }
                 auto* tbl = sess_conn_->lookup_table(it->second);
                 if (!tbl) { reply = err("Aggregate: lookup failed"); break; }
+                // Bound physical work even if a scope or filter would hide most
+                // records. Do not return a plausible partial aggregate.
+                if (tbl->record_count() > 100000) {
+                    reply = err("Aggregate: scan limit exceeded; use SQL aggregates"); break;
+                }
 
                 auto field_is_numeric =
                     [](openads::drivers::DbfFieldType t) {
@@ -5337,7 +5478,13 @@ DispatchResult Session::dispatch(const Frame& f) {
                 std::uint32_t saved   = tbl->recno();
                 bool          was_eof = tbl->eof();
                 tbl->goto_top();
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                std::uint32_t examined = 0;
+                bool exhausted = false;
                 while (!tbl->eof()) {
+                    if (++examined > 100000 || std::chrono::steady_clock::now() >= deadline) {
+                        exhausted = true; break;
+                    }
                     if (openads::engine::evaluate_index_expr_truthy(
                             *tbl, for_expr)) {
                         for (std::size_t i = 0; i < accs.size(); ++i) {
@@ -5363,6 +5510,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 else
                     tbl->goto_top();
 
+                if (exhausted) { reply = err("Aggregate: execution budget exceeded"); break; }
                 reply.opcode = Opcode::AggregateAck;
                 auto write_u16 = [](std::vector<std::uint8_t>& out,
                                     std::uint16_t v) {
@@ -5373,6 +5521,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                     static_cast<std::uint8_t>(accs.size()));
                 for (auto& a : accs) {
                     openads::engine::AggValue val = a.finalize();
+                    if (val.bytes.size() > 65535 || reply.payload.size() + 3 + val.bytes.size() > 16u * 1024u * 1024u) {
+                        reply = err("Aggregate: result exceeds protocol limit"); break;
+                    }
                     reply.payload.push_back(
                         static_cast<std::uint8_t>(val.type));
                     write_u16(reply.payload,

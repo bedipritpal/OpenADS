@@ -585,3 +585,110 @@ TEST_CASE("script S3: nested cursor re-opened per outer row (C27)") {
     CHECK(br.executed[2].find("id >= 2") != std::string::npos);
     CHECK(br.executed[3].find("id >= 3") != std::string::npos);
 }
+
+TEST_CASE("script: execution budget stops empty and caught infinite loops") {
+    CHECK(fails("WHILE TRUE DO END WHILE;"));
+    CHECK(fails("TRY WHILE TRUE DO END WHILE; CATCH ALL END TRY;"));
+    CHECK(fails("WHILE TRUE DO TRY RAISE; CATCH ALL END TRY; END WHILE;"));
+    CHECK(run_ret("DECLARE @i INTEGER; @i = 0; WHILE @i < 100 DO @i = @i + 1; END WHILE; RETURN @i;").i == 100);
+}
+TEST_CASE("script: SQL literal quoting keeps attacker text inside the value") {
+    CHECK(to_sql_literal(Value::character("x'; DROP TABLE users; --")) == "'x''; DROP TABLE users; --'");
+}
+
+TEST_CASE("script: bounded parser nesting and tokens") {
+    CHECK_FALSE(compile("RETURN " + std::string(200, '(') + "1" + std::string(200, ')') + ";").has_value());
+    std::string unary = "RETURN ";
+    for (int i = 0; i < 200; ++i) unary += "- ";
+    CHECK_FALSE(compile(unary + "1;").has_value());
+    std::string blocks;
+    for (int i = 0; i < 200; ++i) blocks += "IF TRUE THEN ";
+    for (int i = 0; i < 200; ++i) blocks += "ENDIF; ";
+    CHECK_FALSE(compile(blocks).has_value());
+    std::string chain = "RETURN 1";
+    for (int i = 0; i < 5000; ++i) chain += "+1";
+    CHECK_FALSE(compile(chain + ";").has_value());
+}
+
+TEST_CASE("script: ELSE IF recursion is bounded") {
+    std::string source = "IF FALSE THEN ";
+    for (int i = 0; i < 200; ++i) source += "ELSE IF FALSE THEN ";
+    for (int i = 0; i <= 200; ++i) source += "ENDIF; ";
+    CHECK_FALSE(compile(source).has_value());
+}
+
+namespace {
+struct NestedBudgetBridge final : SqlBridge {
+    int calls = 0;
+    bool recursive = false;
+    std::shared_ptr<const Program> inner;
+    explicit NestedBudgetBridge(bool recursion = false) : recursive(recursion) {
+        auto program = compile(recursive ? "RETURN nest();" :
+            "DECLARE @n INTEGER; @n = 0; WHILE @n < 100000 DO @n = @n + 1; END WHILE; RETURN @n;");
+        REQUIRE(program.has_value());
+        inner = std::move(program).value();
+    }
+    bool has_udf(const std::string&) override { return true; }
+    openads::util::Result<Value> call_udf(const std::string&, const std::vector<Value>&) override {
+        ++calls;
+        Executor executor(this);
+        auto result = executor.run(*inner);
+        if (!result) return result.error();
+        return result.value().return_value;
+    }
+    openads::util::Result<std::unique_ptr<SqlCursor>> exec(const std::string&) override {
+        return std::unique_ptr<SqlCursor>{};
+    }
+};
+}
+TEST_CASE("script: nested executors share work and exhaustion escapes outer CATCH") {
+    NestedBudgetBridge bridge;
+    auto program = compile("DECLARE @i INTEGER; DECLARE @v INTEGER; @i = 0; TRY WHILE @i < 10 DO @i = @i + 1; @v = nest(); END WHILE; CATCH ALL END TRY; RETURN 1;");
+    REQUIRE(program.has_value());
+    Executor executor(&bridge);
+    CHECK_FALSE(executor.run(*program.value()).has_value());
+    CHECK(bridge.calls < 10);
+    CHECK(run_ret("RETURN 7;").i == 7);
+}
+TEST_CASE("script: direct UDF executor recursion is bounded and cannot be caught") {
+    NestedBudgetBridge bridge(true);
+    auto program = compile("DECLARE @v INTEGER; TRY @v = nest(); CATCH ALL END TRY; RETURN 1;");
+    REQUIRE(program.has_value());
+    Executor executor(&bridge);
+    CHECK_FALSE(executor.run(*program.value()).has_value());
+    CHECK(bridge.calls <= 8);
+    CHECK(run_ret("RETURN 9;").i == 9);
+}
+
+#include "engine/sql_execution_budget.h"
+
+TEST_CASE("SQL shared budget survives nested scopes and separate script executors") {
+    using namespace openads::engine;
+    {
+        SqlExecutionScope outer(true, 5, 60000);
+        CHECK(sql_execution_step(2));
+        {
+            SqlExecutionScope inner(true, 1000000, 60000);
+            CHECK(sql_execution_step(3));
+            CHECK_FALSE(sql_execution_step());
+        }
+        CHECK(sql_execution_exhausted());
+    }
+    CHECK(sql_execution_step(10000000)); // no active remote SQL scope
+    {
+        SqlExecutionScope outer(true, 8, 60000);
+        auto program = compile("RETURN 1;");
+        REQUIRE(program);
+        Executor first(nullptr), second(nullptr), third(nullptr);
+        REQUIRE(first.run(*program.value()));
+        REQUIRE(second.run(*program.value()));
+        CHECK_FALSE(third.run(*program.value()));
+        CHECK(sql_execution_exhausted());
+    }
+    {
+        SqlExecutionScope expired(true, 1000000, 60000);
+        sql_execution_budget.deadline = std::chrono::steady_clock::now();
+        CHECK_FALSE(sql_execution_step());
+        CHECK(sql_execution_exhausted());
+    }
+}

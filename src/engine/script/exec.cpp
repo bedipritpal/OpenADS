@@ -4,8 +4,10 @@
 // results in docs/script-engine.md §10) — strict typing, three-valued
 // logic, LEAVE/CONTINUE, TRY/CATCH ALL with __errcode/__errtext, RAISE.
 #include "engine/script/exec.h"
+#include "engine/sql_execution_budget.h"
 
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +20,24 @@ using util::Error;
 using util::Result;
 
 namespace {
+
+// One synchronous call tree, including Executors created by a SQL bridge.
+// Only the outermost run resets the budget; CATCH cannot restore it.
+thread_local std::uint64_t remaining_steps_ = 0;
+thread_local unsigned executor_depth_ = 0;
+thread_local bool execution_exhausted_ = false;
+thread_local std::chrono::steady_clock::time_point execution_deadline_;
+
+bool budget_exhausted() {
+    if (!engine::sql_execution_step()) return true;
+    if (remaining_steps_ == 0 || execution_exhausted_) return true;
+    if ((remaining_steps_ & 255u) == 0 &&
+        std::chrono::steady_clock::now() >= execution_deadline_) {
+        execution_exhausted_ = true;
+        return true;
+    }
+    return false;
+}
 
 Error serr(const std::string& what) {
     return Error{kScriptError, 0, "script error: " + what, ""};
@@ -99,8 +119,21 @@ void Executor::set_param(const std::string& name, Value v) {
 }
 
 Result<ExecResult> Executor::run(const Program& p) {
+    if (executor_depth_ == 0) {
+        remaining_steps_ = 1000000;
+        execution_exhausted_ = false;
+        execution_deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    }
+    if (executor_depth_ >= 8) {
+        execution_exhausted_ = true;
+        return serr("script execution recursion limit exceeded");
+    }
+    ++executor_depth_;
+    struct RunGuard { ~RunGuard() { --executor_depth_; } } guard;
     auto f = exec_block(p.stmts);
     if (!f) return f.error();
+    if (budget_exhausted()) return serr("script execution budget exceeded");
+    if (engine::sql_execution_exhausted()) return serr("SQL execution budget exceeded");
     ExecResult r;
     if (f.value().k == Flow::Return) {
         r.returned = true;
@@ -120,6 +153,8 @@ Result<Executor::Flow> Executor::exec_block(const Block& b) {
 }
 
 Result<Executor::Flow> Executor::exec_stmt(const Stmt& s) {
+    if (budget_exhausted()) return serr("script execution budget exceeded");
+    --remaining_steps_;
     switch (s.kind) {
         case StmtKind::Declare: {
             if (s.is_cursor) {
@@ -159,6 +194,8 @@ Result<Executor::Flow> Executor::exec_stmt(const Stmt& s) {
         }
         case StmtKind::While: {
             for (;;) {
+                if (budget_exhausted()) return serr("script execution budget exceeded");
+                --remaining_steps_;
                 auto c = eval(*s.expr);
                 if (!c) return c.error();
                 if (!truthy(c.value())) break;
@@ -189,6 +226,7 @@ Result<Executor::Flow> Executor::exec_stmt(const Stmt& s) {
             // §11 F-probes: body → matching CATCH → FINALLY; FINALLY runs
             // even when the error is uncaught, before it propagates (F3).
             auto f = exec_block(s.body);
+            if (budget_exhausted()) return serr("script execution budget exceeded");
             if (!f) {
                 // Find a matching CATCH: ALL (empty name) matches
                 // everything; a named clause matches the RAISE name
@@ -456,6 +494,8 @@ Result<Value> Executor::eval_subquery(const std::string& raw) {
 // ---- Expression evaluation ----------------------------------------------
 
 Result<Value> Executor::eval(const Expr& e) {
+    if (budget_exhausted()) return serr("script execution budget exceeded");
+    --remaining_steps_;
     switch (e.kind) {
         case ExprKind::Literal: return e.lit;
         case ExprKind::Var: {

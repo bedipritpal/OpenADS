@@ -1871,6 +1871,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                     (caps & openads::network::kCapPrefetchBackward) != 0;
                 // M12.x — client sends [u16 mode] prefix on OpenTable.
                 client_open_setup_metadata_ok_ = (caps & kCapOpenSetupMetadata) != 0;
+                client_locked_row_ok_ = (caps & kCapLockedRow) != 0 &&
+                    std::getenv("OPENADS_NO_LOCKED_ROW_CAP") == nullptr;
                 client_open_table_mode_ok_ =
                     (caps & openads::network::kCapOpenTableMode) != 0;
             }
@@ -2039,12 +2041,19 @@ DispatchResult Session::dispatch(const Frame& f) {
             // the "connected:<dir>" echo against their requested dir
             // before trusting the trailing word (see connect_with_transport).
             {
-                const std::uint32_t scaps =
+                std::uint32_t scaps =
                     openads::network::kCapSetFieldsBatch |
                     openads::network::kCapFlushInCloseAll |
                     openads::network::kCapNavOrderFuse |
                     openads::network::kCapFlushTableDurable |
-                    openads::network::kCapNavBoundaryPair;
+                    openads::network::kCapNavBoundaryPair |
+                    openads::network::kCapLockedRow;
+                // mtfix39 test/diagnostic gate: simulate a pre-fix server
+                // that neither echoes kCapLockedRow nor answers the
+                // current-record flag with a row trailer, so the client
+                // negotiates down to the refresh-after-lock fallback.
+                if (std::getenv("OPENADS_NO_LOCKED_ROW_CAP") != nullptr)
+                    scaps &= ~openads::network::kCapLockedRow;
                 reply.payload.push_back(
                     static_cast<std::uint8_t>( scaps        & 0xFFu));
                 reply.payload.push_back(
@@ -3273,6 +3282,10 @@ DispatchResult Session::dispatch(const Frame& f) {
             // lock lands on nonexistent record 0 and the write guard
             // correctly rejects the later write with 5035.
             if (rn == 0) rn = tbl->recno();
+            // Do not move the client cursor when locking another record.
+            const bool wants_row = f.opcode == Opcode::LockRecord &&
+                client_locked_row_ok_ && f.payload.size() == 9 &&
+                f.payload[8] == 1 && rn == tbl->recno();
             const auto lock_key = (static_cast<std::uint64_t>(id) << 32) | rn;
             if (srv_->daemon_hardening() && f.opcode == Opcode::LockRecord && explicit_record_locks_.count(lock_key) == 0 &&
                 explicit_record_locks_.size() >= 4096) {
@@ -3360,6 +3373,13 @@ DispatchResult Session::dispatch(const Frame& f) {
             reply.opcode = (f.opcode == Opcode::LockRecord)
                 ? Opcode::LockRecordAck
                 : Opcode::UnlockRecordAck;
+            if (wants_row) {
+                // The ABI twin owns indexed writes/locks. Its successful
+                // lock loaded disk bytes under the lock; sync the engine
+                // mirror before packing a natural-order row from it.
+                sync_engine_cursor(id);
+                pack_row_trailer(reply, id, 0);
+            }
             break;
         }
         // M12.36 — lock introspection. Same dual-handle routing as

@@ -15015,7 +15015,8 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     arc2_trace("AdsLockRecord");
     if (auto* rt = get_remote_table(hTable)) {
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
-        auto r = rt->conn->lock_record(rt->id, ulRecord);
+        remote_settle_cursor(rt);
+        auto r = rt->conn->lock_record(rt, ulRecord);
         if (!r) return fail(r.error());
         rt->ever_locked = true;
         // ulRecord == 0 -> the current record (ACE convention). With
@@ -15025,6 +15026,12 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
             ? (rt->row_valid ? rt->current_recno : 0) : ulRecord;
         if (lrec == 0) rt->locks_uncertain = true;
         else rt->held_recs.insert(lrec);
+        // Record the acquired lock before a fallback read can fail. A
+        // failed refresh must not erase ownership of a real held lock.
+        if (!rt->row_valid && lrec != 0 && lrec == rt->current_recno) {
+            auto fresh = rt->conn->refresh_record(rt);
+            if (!fresh) return fail(fresh.error());
+        }
         return ok();
     }
 #if defined(OPENADS_WITH_FIREBIRD)

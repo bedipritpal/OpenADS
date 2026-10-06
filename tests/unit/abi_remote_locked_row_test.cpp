@@ -75,8 +75,22 @@ TEST_CASE("mtfix39 old server without kCapLockedRow refreshes after lock") {
     // Simulated pre-fix server: no capability echo, no row trailer on the
     // LockRecord ack. The client must negotiate down and do a real refresh
     // after acquiring the lock, never serve the stale cached row.
-    setenv("OPENADS_NO_LOCKED_ROW_CAP", "1", 1);
-    struct EnvGuard { ~EnvGuard(){ unsetenv("OPENADS_NO_LOCKED_ROW_CAP"); } } guard;
+    struct EnvGuard {
+        EnvGuard() {
+#ifdef _WIN32
+            _putenv_s("OPENADS_NO_LOCKED_ROW_CAP", "1");
+#else
+            setenv("OPENADS_NO_LOCKED_ROW_CAP", "1", 1);
+#endif
+        }
+        ~EnvGuard() {
+#ifdef _WIN32
+            _putenv_s("OPENADS_NO_LOCKED_ROW_CAP", "");
+#else
+            unsetenv("OPENADS_NO_LOCKED_ROW_CAP");
+#endif
+        }
+    } guard;
     StockFixture f; double n=0;
     f.seek(f.ia); REQUIRE(AdsGetDouble(f.ta,f.qty,&n)==0); REQUIRE(n==100);
     f.seek(f.ib); REQUIRE(AdsLockRecord(f.tb,1)==0); REQUIRE(AdsSetDouble(f.tb,f.qty,95)==0); REQUIRE(AdsUnlockTable(f.tb)==0);

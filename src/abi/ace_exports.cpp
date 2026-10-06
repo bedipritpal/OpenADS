@@ -1,4 +1,8 @@
-﻿#include <cstdarg>
+#include "engine/sql_input_limits.h"
+#include "engine/sql_work_limits.h"
+#include "engine/sql_execution_budget.h"
+#include "engine/pbkdf2.h"
+#include <cstdarg>
 #include "openads/ace.h"
 #include "openads/error.h"
 #include "openads_version.h"  // OPENADS_VERSION_STR (CMake-generated)
@@ -19,6 +23,14 @@ using openads::abi::lock_retry_policy;
 #include "abi/charset.h"
 #include "abi/last_error.h"
 #include "abi/create_table_diag.h"
+
+// One TLS definition per linked image: MinGW cannot coalesce the dynamic
+// initializers emitted for inline thread_local std::string in multiple TUs.
+namespace openads::abi::create_diag {
+thread_local std::string target;
+thread_local std::string correlation;
+}
+
 #include "abi/runtime.h"
 
 #include "engine/aof_eval.h"
@@ -538,6 +550,23 @@ build_projection_aliases(const openads::sql::SelectStmt& st,
         if (k > 0) nm += "_" + std::to_string(k);
     }
     return names;
+}
+
+// Native schema administration is separate from table DML permission.
+// Internal cursor creation is scoped to one connection and one call; neither
+// user-controlled names nor rights flags grant the exemption.
+static thread_local Connection* internal_cursor_create_connection = nullptr;
+struct InternalCursorCreate {
+    Connection* previous;
+    explicit InternalCursorCreate(Connection* c)
+        : previous(internal_cursor_create_connection) { internal_cursor_create_connection = c; }
+    ~InternalCursorCreate() { internal_cursor_create_connection = previous; }
+};
+bool native_schema_denied(Connection* c) {
+    if (!c || !c->has_dd()) return false;
+    if (!c->remote_server() && c->username().empty()) return false;
+    return c->username().empty() || !c->dd()->has_user(c->username()) ||
+        !c->dd()->is_member_of(c->username(), "DB:Admin");
 }
 
 // Projection-aware variant. Called by Get* entry points that take
@@ -6448,6 +6477,44 @@ materialised_cursor_temps() {
     return temps;
 }
 
+// Native row/index/copy entrypoints authorize against the actual DD path,
+// never the caller's alias or rights flag. SQL preflight owns internal reads.
+UNSIGNED32 native_table_authorize(Table* t, std::uint32_t bit, int field = -1) {
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    auto* c = t->owner();
+    if (!c || !c->has_dd() || (!c->remote_server() && c->username().empty())) return 0;
+    for (const auto& temp : materialised_cursor_temps())
+        if (get_table(temp.first) == t) return 0;
+    auto* dd = c->dd();
+    if (c->username().empty() || !dd->has_user(c->username()))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary user required");
+    if (dd->is_member_of(c->username(), "DB:Admin")) return 0;
+    auto alias = ri_alias_for_path(c, t->path());
+    if (alias.empty()) return fail(openads::AE_ACCESS_DENIED, "dictionary table required");
+    const auto ops = dd->get_effective_ops(c->username(), alias);
+    using DD = openads::engine::DataDict;
+    const bool allowed = bit == DD::DD_PERM_SELECT ? ops.select_
+        : bit == DD::DD_PERM_INSERT ? ops.insert_
+        : bit == DD::DD_PERM_UPDATE ? ops.update_ : ops.delete_;
+    if (!allowed) return fail(openads::AE_ACCESS_DENIED, "dictionary operation required");
+    if (auto columns = dd->permitted_columns(c->username(), alias, bit)) {
+        if (field < 0 || field >= t->field_count())
+            return fail(openads::AE_ACCESS_DENIED, "whole-row access requires all columns");
+        auto name = t->field_descriptor(static_cast<std::uint16_t>(field)).name;
+        for (auto& ch : name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (!columns->count(name)) return fail(openads::AE_ACCESS_DENIED, "dictionary column required");
+    }
+    return 0;
+}
+
+UNSIGNED32 native_index_authorize(Table* t) {
+    if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (!native_schema_denied(t->owner())) return 0;
+    for (const auto& temp : materialised_cursor_temps())
+        if (get_table(temp.first) == t) return 0;
+    return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for index maintenance");
+}
+
 // Delete the files of a materialised cursor's temp table: the table itself plus
 // any memo / index companion an application created on it (the ERP runs
 // INDEX ON over the result, producing <stem>.cdx or <stem>.adi).
@@ -6635,9 +6702,13 @@ UNSIGNED32 materialise_temp_adt_open(Connection* c,
     std::vector<UNSIGNED8> def_buf(defs.size() + 1, 0);
     std::memcpy(def_buf.data(), defs.data(), defs.size());
     ADSHANDLE hNew = 0;
-    UNSIGNED32 crc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
+    UNSIGNED32 crc;
+    {
+        InternalCursorCreate internal_create(c);
+        crc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
                                     ADS_ADT, 0, 0, 0, 0,
                                     def_buf.data(), &hNew);
+    }
     if (crc != openads::AE_SUCCESS) return crc;
     AdsCloseTable(hNew);
 
@@ -7598,17 +7669,22 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
                             static_cast<unsigned char>(login_req[1]) == 0);
         bool require_login = (!login_req.empty() && login_req != "0" &&
                               login_req != "False" && !is_raw_zero);
-        if (require_login) {
+        if (require_login || !user.empty()) {
             if (user.empty())
                 return fail(openads::AE_LOGIN_FAILED,
                             "login required but no username supplied");
             if (!dd->has_user(user))
                 return fail(openads::AE_LOGIN_FAILED, "unknown user");
             std::string stored = dd->get_user_property(user, "prop_1101");
-            if (stored != pwd)
+            if (!openads::engine::verify_password(stored, pwd))
                 return fail(openads::AE_LOGIN_FAILED, "invalid password");
         }
         if (!user.empty()) {
+            const auto old = dd->get_user_property(user, "prop_1101");
+            if (!openads::engine::password_is_hash(old)) {
+                if (auto migrated = dd->set_user_property(user, "prop_1101", pwd); !migrated)
+                    return fail(migrated.error());
+            }
             raw->set_username(user);
             // Pre-build effective-permission cache for this user so that
             // subsequent AdsOpenTable / AdsExecuteSQLDirect checks are O(1).
@@ -7645,8 +7721,7 @@ UNSIGNED32 ENTRYPOINT AdsConnect101(UNSIGNED8* pucConnectString,
                          ADSHANDLE* phConnect) {
     arc2_trace("AdsConnect101");
     arc2_trace("AdsConnect101");
-    arc2_log("CONNECT101 connstr=[%s]",
-             pucConnectString ? (const char*)pucConnectString : "(null)");
+    arc2_log("CONNECT101 connection string hidden");
     if (phConnect == nullptr) {
         return fail(openads::AE_INTERNAL_ERROR, "phConnect is null");
     }
@@ -9708,7 +9783,9 @@ UNSIGNED32 ENTRYPOINT AdsCreateTable(ADSHANDLE     hConn,
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         }
     }
-    // Same guard as AdsOpenTable: never CREATE a local file silently in
+        if (native_schema_denied(c) && internal_cursor_create_connection != c)
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table creation");
+// Same guard as AdsOpenTable: never CREATE a local file silently in
     // a remote-only deployment (OPENADS_REMOTE_ONLY_ACCESS).
     const int roa_mode = remote_only_access_mode();
     if (roa_mode == 1) {
@@ -10177,6 +10254,8 @@ UNSIGNED32 ENTRYPOINT AdsDropTable(ADSHANDLE     hConnect,
             return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
         }
     }
+    if (native_schema_denied(c))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table deletion");
     namespace fs = std::filesystem;
     fs::path full = fs::path(c->data_dir()) / rel;
     if (!full.has_extension()) full.replace_extension(".dbf");
@@ -10370,6 +10449,8 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
         return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
     }
 
+    if (native_schema_denied(c))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table restructuring");
     namespace fs = std::filesystem;
     fs::path full = fs::path(c->data_dir()) / rel;
     if (!full.has_extension()) full.replace_extension(".dbf");
@@ -10667,6 +10748,7 @@ UNSIGNED32 ENTRYPOINT AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
     if (pusLen == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null len");
     Table* t = lookup_table_by_index(hIndex);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown index");
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
     openads::drivers::IIndex* idx = iindex_for_handle(hIndex);
     if (!idx) return fail(openads::AE_INTERNAL_ERROR, "index not loaded");
     // Return the key in its STORED encoding -- rddads' OrdKeyVal decodes
@@ -12637,6 +12719,7 @@ UNSIGNED32 ENTRYPOINT AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     *plVal = static_cast<SIGNED32>(v.value().as_double);
@@ -12690,6 +12773,7 @@ UNSIGNED32 ENTRYPOINT AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     *pdVal = v.value().as_double;
@@ -12824,6 +12908,7 @@ UNSIGNED32 ENTRYPOINT AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     const std::string& s = v.value().as_string;
@@ -12914,7 +12999,6 @@ SqlStatement* stmt_lookup(ADSHANDLE h);
 
 UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
-    arc2_trace("AdsGetRecordCount");
     arc2_trace("AdsGetRecordCount");
     // SAP ACE also accepts a SQL *statement* handle here (rows affected /
     // returned by the last execute). ARC relies on this immediately after
@@ -13136,6 +13220,7 @@ UNSIGNED32 ENTRYPOINT AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index_h(hTable, t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) {
         if (is_no_current_record(v.error())) {
@@ -13182,9 +13267,8 @@ UNSIGNED32 ENTRYPOINT AdsGetLastError(UNSIGNED32* pulCode, UNSIGNED8* pucBuf,
                            UNSIGNED16* pusBufLen) {
     arc2_trace("AdsGetLastError");
     arc2_trace("AdsGetLastError");
-    arc2_log("LASTERR code=%d msg=%.120s",
-             (int)openads::abi::last_error_code(),
-             openads::abi::last_error_message().c_str());
+    arc2_log("LASTERR code=%d (message hidden)",
+             (int)openads::abi::last_error_code());
     if (pulCode != nullptr) *pulCode = static_cast<UNSIGNED32>(
         openads::abi::last_error_code());
     if (pucBuf != nullptr && pusBufLen != nullptr) {
@@ -13718,6 +13802,7 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
 #endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_INSERT)) return rc;
     auto r = t->append_record();
     if (!r) return fail(r.error());
     // ACE semantics: a freshly-appended record in a non-exclusive table is
@@ -13870,6 +13955,7 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
 #endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE)) return rc;
     bool is_insert = t->pending_append();
     std::uint32_t event_mask = is_insert ? 1u : 2u;
 
@@ -14072,6 +14158,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteRecord(ADSHANDLE hTable) {
 #endif
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_DELETE)) return rc;
     t->set_pending_append(false);   // abandon any in-flight append
     if (Connection* conn = conn_for_table(t)) {
         if (auto ri = ri_enforce_delete(conn, *t); !ri)
@@ -14141,6 +14228,7 @@ UNSIGNED32 ENTRYPOINT AdsRecallRecord(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_UPDATE)) return rc;
     auto r = t->recall_deleted();
     if (!r) return fail(r.error());
     return ok();
@@ -14293,6 +14381,7 @@ UNSIGNED32 ENTRYPOINT AdsSetString(ADSHANDLE hTable, UNSIGNED8* pucField,
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
     std::string val(reinterpret_cast<const char*>(pucValue), ulLen);
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
     auto r = t->set_field(idx, val);
     if (!r) return fail(r.error());
     return ok();
@@ -14343,6 +14432,7 @@ UNSIGNED32 ENTRYPOINT AdsSetLogical(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
     auto r = t->set_field(idx, bValue != 0);
     if (!r) return fail(r.error());
     return ok();
@@ -14397,6 +14487,7 @@ UNSIGNED32 ENTRYPOINT AdsSetDouble(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
     auto r = t->set_field(idx, dValue);
     if (!r) return fail(r.error());
     return ok();
@@ -14496,6 +14587,7 @@ UNSIGNED32 ENTRYPOINT AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     *pulLen = static_cast<UNSIGNED32>(v.value().as_string.size());
@@ -14594,6 +14686,7 @@ UNSIGNED32 ENTRYPOINT AdsGetString(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     std::string s = v.value().as_string;
@@ -14745,6 +14838,7 @@ UNSIGNED32 ENTRYPOINT AdsSetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
     auto r = t->set_field(idx, utf8);
     if (!r) return fail(r.error());
     return ok();
@@ -14770,6 +14864,7 @@ UNSIGNED32 ENTRYPOINT AdsGetStringW(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index_w(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     return emit_utf16(pucBufW, pulLenW, v.value().as_string);
@@ -14817,6 +14912,7 @@ UNSIGNED32 ENTRYPOINT AdsSetJulian(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
     auto r = t->set_field(idx, val);
     if (!r) return fail(r.error());
     return ok();
@@ -16771,6 +16867,8 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
             static_cast<unsigned long long>(hTable));
         return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     }
+    if (native_schema_denied(t->owner()) && !materialised_cursor_temps().count(hTable))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table maintenance");
     create_index_diag("61 ROUTE native h=%llu", static_cast<unsigned long long>(hTable));
     // Settle any coalesced dirty record first: the build loop below reads
     // rows straight from disk, so a pending buffer edit would be indexed
@@ -17506,6 +17604,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex(ADSHANDLE hTable, UNSIGNED8* pucFile,
         create_index_diag("legacy EXIT unknown-handle 5000 h=%llu", static_cast<unsigned long long>(hTable));
         return fail(openads::AE_INTERNAL_ERROR, "unknown table or null out");
     }
+    if (auto rc = native_index_authorize(t)) return rc;
     create_index_diag("legacy ROUTE native h=%llu", static_cast<unsigned long long>(hTable));
     // Settle any coalesced dirty record first (see AdsCreateIndex61).
     if (auto cr = t->commit_dirty_record(); !cr) return fail(cr.error());
@@ -17664,6 +17763,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteIndex(ADSHANDLE hIndex) {
         auto it = m.find(hIndex);
         if (it != m.end() &&
             path_ends_with_ci(it->second.path, ".cdx")) {
+            if (auto rc = native_index_authorize(it->second.table)) return rc;
             // Flush the in-memory tree before rewriting the struct leaf.
             if (it->second.parked) (void)it->second.parked->flush();
             else if (it->second.table && it->second.table->order() &&
@@ -17720,6 +17820,7 @@ UNSIGNED32 ENTRYPOINT AdsAddCustomKey(ADSHANDLE hIndex) {
     }
     Table* t = it->second.table;
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_index_authorize(t)) return rc;
     auto* idx = iindex_for_binding(it->second);
     if (!idx) return fail(openads::AE_INTERNAL_ERROR, "no IIndex for binding");
 
@@ -17765,6 +17866,7 @@ UNSIGNED32 ENTRYPOINT AdsDeleteCustomKey(ADSHANDLE hIndex) {
     }
     Table* t = it->second.table;
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_index_authorize(t)) return rc;
     auto* idx = iindex_for_binding(it->second);
     if (!idx) return fail(openads::AE_INTERNAL_ERROR, "no IIndex for binding");
 
@@ -17890,6 +17992,7 @@ UNSIGNED32 ENTRYPOINT AdsGetLongLong(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     auto& s = v.value().as_string;
@@ -17926,6 +18029,7 @@ UNSIGNED32 ENTRYPOINT AdsSetFieldRaw(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
     auto r = t->set_field(idx, raw);
     if (!r) return fail(r.error());
     return ok();
@@ -18460,6 +18564,25 @@ openads::engine::DataDict* dd_from_handle(ADSHANDLE hConn) {
     return c->dd();
 }
 
+bool dictionary_admin(Connection* c) {
+    if (!c) return false;
+    if (!c->remote_server() && c->username().empty()) return true;
+    if (!c->has_dd() || c->username().empty()) return false;
+    auto* dd = c->dd();
+    return dd && dd->has_user(c->username()) &&
+        dd->is_member_of(c->username(), "DB:Admin");
+}
+
+// DD-mutating entrypoints keep the legacy silent-success contract when no
+// live dictionary connection exists (hConn=0 doubles, plain directories):
+// there is no dictionary to mutate, so there is nothing to guard. Enforce
+// administrator authority only when a real DD is attached.
+bool dd_mutation_denied(ADSHANDLE hConn) {
+    Connection* c = conn_from_handle(hConn);
+    return c != nullptr && c->has_dd() && !dictionary_admin(c);
+}
+
+
 }  // namespace
 
 UNSIGNED32 ENTRYPOINT AdsDDAddIndexFile(ADSHANDLE hConn,
@@ -18474,6 +18597,8 @@ UNSIGNED32 ENTRYPOINT AdsDDAddIndexFile(ADSHANDLE hConn,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto tbl  = openads::abi::to_internal(pucTable, 0);
@@ -18496,6 +18621,8 @@ UNSIGNED32 ENTRYPOINT AdsDDRemoveIndexFile(ADSHANDLE hConn,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto tbl = openads::abi::to_internal(pucTable, 0);
@@ -18518,14 +18645,17 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateUser(ADSHANDLE hConn, UNSIGNED8* pucGroup,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto user = openads::abi::to_internal(pucUser, 0);
     auto r = dd->create_user(user);
     if (!r) return fail(r.error());
-    if (pucPwd && pucPwd[0] != '\0') {
-        auto pwd = openads::abi::to_internal(pucPwd, 0);
-        dd->set_user_property(user, "prop_1101", pwd);
+    {
+        const auto pwd = pucPwd ? openads::abi::to_internal(pucPwd, 0) : std::string{};
+        if (auto stored = dd->set_user_property(user, "prop_1101", pwd); !stored)
+            return fail(stored.error());
     }
     if (pucDesc && pucDesc[0] != '\0') {
         auto desc = openads::abi::to_internal(pucDesc, 0);
@@ -18546,6 +18676,8 @@ UNSIGNED32 ENTRYPOINT AdsDDDeleteUser(ADSHANDLE hConn, UNSIGNED8* pucUser) {
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto user = openads::abi::to_internal(pucUser, 0);
@@ -18564,6 +18696,8 @@ UNSIGNED32 ENTRYPOINT AdsDDAddUserToGroup(ADSHANDLE hConn,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto group = openads::abi::to_internal(pucGroup, 0);
@@ -18583,6 +18717,8 @@ UNSIGNED32 ENTRYPOINT AdsDDRemoveUserFromGroup(ADSHANDLE hConn,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto group = openads::abi::to_internal(pucGroup, 0);
@@ -18605,6 +18741,8 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto alias = openads::abi::to_internal(pucAlias, 0);
@@ -18645,6 +18783,8 @@ UNSIGNED32 ENTRYPOINT AdsDDModifyLink(ADSHANDLE hConn, UNSIGNED8* pucAlias,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto alias = openads::abi::to_internal(pucAlias, 0);
@@ -18674,6 +18814,8 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateRefIntegrity(ADSHANDLE hConn,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::RiEntry e;
@@ -18698,6 +18840,8 @@ UNSIGNED32 ENTRYPOINT AdsDDRemoveRefIntegrity(ADSHANDLE hConn, UNSIGNED8* pucNam
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -18754,6 +18898,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetDatabaseProperty(ADSHANDLE hConn, UNSIGNED16 usPro
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     std::string val;
@@ -18844,6 +18990,10 @@ UNSIGNED32 ENTRYPOINT AdsDDGetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
     if (pBuf != nullptr && cap > 0) std::memset(pBuf, 0, cap);
     if (dd == nullptr) { *pusLen = 0; return ok(); }
     auto user = openads::abi::to_internal(pucUser, 0);
+    if (usProp == ADS_DD_USER_PASSWORD) {
+        *pusLen = 0;
+        return fail(openads::AE_PROPERTY_NOT_SET, "password is write-only");
+    }
 
     // ADS_DD_USER_BAD_LOGINS (1103) -- always 0, returned as uint16.
     if (usProp == 1103) {
@@ -18889,6 +19039,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetUserProperty(ADSHANDLE hConn, UNSIGNED8* pucUser,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto user = openads::abi::to_internal(pucUser, 0);
@@ -19094,6 +19246,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTableProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto alias = openads::abi::to_internal(pucTable, 0);
@@ -19193,6 +19347,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetUserTableRights(ADSHANDLE hConn, UNSIGNED8* pucTab
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto tbl  = openads::abi::to_internal(pucTable, 0);
@@ -19417,6 +19573,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetFieldProperty(ADSHANDLE hConn, UNSIGNED8* pucTable
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto alias = openads::abi::to_internal(pucTable, 0);
@@ -19598,6 +19756,8 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateTrigger(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::TriggerEntry e;
@@ -19745,6 +19905,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetTriggerProperty(ADSHANDLE hConn, UNSIGNED8* pucNam
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -19841,6 +20003,8 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateProcedure(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::ProcEntry e;
@@ -19941,6 +20105,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetProcProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -19996,6 +20162,8 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateFunction(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::FunctionEntry e;
@@ -20086,6 +20254,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetFunctionProperty(ADSHANDLE hConn, UNSIGNED8* pucNa
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -20122,6 +20292,8 @@ UNSIGNED32 ENTRYPOINT AdsDDCreateView(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     openads::engine::DataDict::ViewEntry e;
@@ -20226,6 +20398,8 @@ UNSIGNED32 ENTRYPOINT AdsDDGrantPermission(ADSHANDLE  hConn,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto objname = openads::abi::to_internal(pucObjectName, 0);
@@ -20302,6 +20476,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetViewProperty(ADSHANDLE hConn, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -20398,6 +20574,8 @@ UNSIGNED32 ENTRYPOINT AdsDDSetRefIntegrityProperty(ADSHANDLE hConn, UNSIGNED8* p
         if (!r) return fail(r.error());
         return ok();
     }
+    if (dd_mutation_denied(hConn))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
     auto* dd = dd_from_handle(hConn);
     if (dd == nullptr) return ok();
     auto name = openads::abi::to_internal(pucName, 0);
@@ -21596,6 +21774,8 @@ UNSIGNED32 ENTRYPOINT AdsPackTable(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (native_schema_denied(t->owner()) && !materialised_cursor_temps().count(hTable))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table maintenance");
     auto r = t->pack();
     if (!r) return fail(r.error());
     return ok();
@@ -21628,6 +21808,8 @@ UNSIGNED32 ENTRYPOINT AdsZapTable(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (native_schema_denied(t->owner()) && !materialised_cursor_temps().count(hTable))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table maintenance");
     auto r = t->zap();
     if (!r) return fail(r.error());
     return ok();
@@ -21644,6 +21826,7 @@ UNSIGNED32 ENTRYPOINT AdsCopyTable(ADSHANDLE   hHandle,
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     if (!t->driver()) return fail(openads::AE_INTERNAL_ERROR, "no driver");
 
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
     namespace fs = std::filesystem;
     auto raw  = openads::abi::to_internal(pucFile, 0);
     fs::path dst(raw);
@@ -21652,6 +21835,13 @@ UNSIGNED32 ENTRYPOINT AdsCopyTable(ADSHANDLE   hHandle,
         dst = src_dir / dst;
     }
     if (!dst.has_extension()) dst.replace_extension(".dbf");
+    if (auto* owner = t->owner()) {
+        auto jailed = openads::platform::resolve_under_any_root(openads::platform::split_data_roots(owner->data_dir()), dst.string());
+        if (!jailed) return fail(openads::AE_ACCESS_DENIED, "copy path outside data directory");
+        dst = *jailed;
+        if (native_schema_denied(owner))
+            return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for file copy");
+    }
 
     // Build a new DBF that mirrors the source schema. Copy live
     // records (deleted rows skipped -- filter options beyond
@@ -21743,6 +21933,10 @@ UNSIGNED32 ENTRYPOINT AdsCopyTableContents(ADSHANDLE hSrc, ADSHANDLE hDst,
     Table* src = get_table(hSrc);
     Table* dst = get_table(hDst);
     if (!src || !dst) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_table_authorize(src, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
+    if (auto rc = native_table_authorize(dst, openads::engine::DataDict::DD_PERM_INSERT)) return rc;
+    if (dst->open_mode() == openads::engine::OpenMode::Read)
+        return fail(openads::AE_ACCESS_DENIED, "copy destination is read-only");
     if (!src->driver() || !dst->driver()) {
         return fail(openads::AE_INTERNAL_ERROR, "no driver");
     }
@@ -21784,6 +21978,8 @@ UNSIGNED32 ENTRYPOINT AdsReindex(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (native_schema_denied(t->owner()) && !materialised_cursor_temps().count(hTable))
+        return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for table maintenance");
     auto r = t->reindex();
     if (!r) return fail(r.error());
     return ok();
@@ -22174,6 +22370,7 @@ UNSIGNED32 ENTRYPOINT AdsGetBinaryLength(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     *pulLength = static_cast<UNSIGNED32>(v.value().as_string.size());
@@ -22192,6 +22389,7 @@ UNSIGNED32 ENTRYPOINT AdsGetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
     if (!resolve_field_index(t, pucField, &idx)) {
         return fail(openads::AE_COLUMN_NOT_FOUND, "");
     }
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT, idx)) return rc;
     auto v = t->read_field(idx);
     if (!v) return fail(v.error());
     const std::string& s = v.value().as_string;
@@ -22292,6 +22490,7 @@ UNSIGNED32 ENTRYPOINT AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (pucBuf != nullptr && ulBytes > 0) {
             payload.assign(reinterpret_cast<const char*>(pucBuf), ulBytes);
         }
+        if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
         auto r = t->set_field_binary(idx, payload, type);
         if (!r) return fail(r.error());
         return ok();
@@ -22336,6 +22535,7 @@ UNSIGNED32 ENTRYPOINT AdsSetBinary(ADSHANDLE hTable, UNSIGNED8* pucField,
         std::string payload = std::move(it->second.payload);
         auto pending_type = it->second.type;
         m.erase(it);
+        if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
         auto r = t->set_field_binary(idx, payload, pending_type);
         if (!r) return fail(r.error());
     }
@@ -22422,6 +22622,7 @@ UNSIGNED32 ENTRYPOINT AdsEncryptTable(ADSHANDLE hTable) {
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
+    if (auto rc = native_index_authorize(t)) return rc;
     Connection* owning = find_owning_connection(t);
     if (!owning) return fail(openads::AE_INVALID_CONNECTION_HANDLE,
                              "table not owned by any connection");
@@ -22453,6 +22654,7 @@ UNSIGNED32 ENTRYPOINT AdsEncryptRecord(ADSHANDLE hTable) {
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
+    if (auto rc = native_index_authorize(t)) return rc;
     if (!t->positioned())
         return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
     Connection* owning = find_owning_connection(t);
@@ -22480,6 +22682,7 @@ UNSIGNED32 ENTRYPOINT AdsDecryptRecord(ADSHANDLE hTable) {
     std::lock_guard<std::recursive_mutex> lk(s.mu);
     Table* t = s.registry.lookup<Table>(hTable, HandleKind::Table);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "invalid table handle");
+    if (auto rc = native_index_authorize(t)) return rc;
     if (!t->positioned())
         return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
     Connection* owning = find_owning_connection(t);
@@ -25087,10 +25290,44 @@ extern "C++" bool dispatch_sp_builtin(
             ? static_cast<std::int32_t>(args[i].number) : 0;
     };
 
+    if ((uname == "SP_CREATEUSER" ||
+        uname == "SP_DROPUSER" ||
+        uname == "SP_CREATEGROUP" ||
+        uname == "SP_DROPGROUP" ||
+        uname == "SP_ADDUSERTOGROUP" ||
+        uname == "SP_REMOVEUSERFROMGROUP" ||
+        uname == "SP_MODIFYUSERPROPERTY" ||
+        uname == "SP_MODIFYGROUPPROPERTY" ||
+        uname == "SP_ADDTABLETODATABASE" ||
+        uname == "SP_REMOVETABLEFROMDATABASE" ||
+        uname == "SP_ADDINDEXFILETODATABASE" ||
+        uname == "SP_MODIFYTABLEPROPERTY" ||
+        uname == "SP_MODIFYFIELDPROPERTY" ||
+        uname == "SP_CREATEREFERENTIALINTEGRITY" ||
+        uname == "SP_DROPREFERENTIALINTEGRITY" ||
+        uname == "SP_CREATELINK" ||
+        uname == "SP_DROPLINK" ||
+        uname == "SP_DISABLETRIGGERS" ||
+        uname == "SP_ENABLETRIGGERS" ||
+        uname == "SP_MODIFYDATABASE" ||
+        uname == "SP_RENAMEDDOBJECT" ||
+        uname == "SP_REMOVEINDEXFILE" ||
+        uname == "SP_MODIFYINDEXPROPERTY" ||
+        uname == "SP_MODIFYPROCEDUREPROPERTY" ||
+        uname == "SP_MODIFYVIEWPROPERTY" ||
+        uname == "SP_MODIFYLINK" ||
+        uname == "SP_MGKILLUSER" ||
+        uname == "SP_MGRESETCOMMSTATS") && !dictionary_admin(c)) {
+        *prc = fail(openads::AE_ACCESS_DENIED, "dictionary administrator required");
+        return true;
+    }
+
     if (uname == "SP_CREATEUSER") {
         if (!dd) { *prc = fail(openads::AE_FUNCTION_NOT_AVAILABLE, "no DD"); return true; }
         if (auto r = dd->create_user(arg(0)); !r) { *prc = fail(r.error()); return true; }
-        if (!arg(1).empty()) dd->set_user_property(arg(0), "prop_1101", arg(1));
+        if (auto saved = dd->set_user_property(arg(0), "prop_1101", arg(1)); !saved) {
+            *prc = fail(saved.error()); return true;
+        }
         if (!arg(2).empty()) dd->set_user_property(arg(0), "prop_1",    arg(2));
         *prc = ok(); return true;
     }
@@ -25268,8 +25505,14 @@ extern "C++" bool dispatch_sp_builtin(
         for (auto& ch : upr) ch = static_cast<char>(
             std::toupper(static_cast<unsigned char>(ch)));
         std::string key;
-        if      (upr == "ADMIN_PASSWORD")          key = "prop_1101";
-        else if (upr == "COMMENT")                key = "prop_1";
+        if (upr == "ADMIN_PASSWORD") {
+            if (auto r = dd->set_user_property("adssys", "prop_1101", arg(1)); !r) {
+                *prc = fail(r.error()); return true;
+            }
+            *prc = ok(); return true;
+        }
+        if (upr == "COMMENT") key = "prop_1";
+
         else if (upr == "DEFAULT_TABLE_PATH")     key = "prop_3";
         else if (upr == "LOG_IN_REQUIRED")        key = "prop_5";
         else if (upr == "ENABLE_INTERNET")        key = "prop_6";
@@ -25511,7 +25754,7 @@ extern "C++" bool dispatch_sp_builtin(
             return true;
         }
         std::string current = dd->get_user_property(user, "prop_1101");
-        if (!current.empty() && current != arg(0)) {
+        if (!openads::engine::verify_password(current, arg(0))) {
             *prc = fail(openads::AE_ACCESS_DENIED, "old password mismatch");
             return true;
         }
@@ -27786,7 +28029,7 @@ struct TriggerBridge final : openads::script::SqlBridge {
         static const bool trig_trace =
             openads::util::client_setting_truthy("OPENADS_TRACE", "trace");
         if (trig_trace)
-            std::fprintf(stderr, "[trig-exec] %.120s\n", sql.c_str());
+            std::fprintf(stderr, "[trig-exec] SQL text hidden\n");
         // 1. INSERT INTO __error Ã¢â‚¬Â¦ VALUES (code, 'msg') -- the classic ADS
         //    way for a trigger to fail the DML. Surface it as an error.
         {
@@ -28875,11 +29118,10 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     // already wired up.
     if (it->second->remote != nullptr) {
         auto sqlstr = openads::abi::to_internal(pucSQL, 0);
-        arc2_log("EXEC remote sql=%.80s", sqlstr.c_str());
+        arc2_log("EXEC remote (SQL text hidden)");
         auto r = it->second->remote->execute_sql(sqlstr);
         if (!r) {
-            arc2_log("EXEC remote FAIL code=%d msg=%.80s",
-                     r.error().code, r.error().message.c_str());
+            arc2_log("EXEC remote FAIL code=%d (message hidden)", r.error().code);
             return fail(r.error());
         }
         std::uint32_t cur_id = r.value();
@@ -29228,7 +29470,14 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 #endif
     Connection* c = it->second->conn;
     if (!c) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    openads::engine::SqlExecutionScope execution_scope(c->remote_server());
+    if (!openads::engine::sql_execution_step())
+        return fail(openads::AE_ACCESS_DENIED, "SQL execution budget exceeded");
     auto sql = openads::abi::to_internal(pucSQL, 0);
+    if (c->remote_server()) {
+        if (auto valid = openads::engine::validate_remote_sql_input(sql); !valid)
+            return fail(valid.error());
+    }
 
     // S3 (Ã‚Â§10 mechanism): full multi-statement scripts route through the
     // script engine; the last SELECT's cursor comes back as the statement
@@ -29364,10 +29613,10 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     if (into_trace)
                         std::fprintf(stderr,
                             "[into] tmp=%s all_images=%d new=%p old=%p "
-                            "sql=%.100s\n",
+                            "(SQL text hidden)\n",
                             tmp_name.c_str(), all_images ? 1 : 0,
                             (const void*)imgs.new_f,
-                            (const void*)imgs.old_f, sql.c_str());
+                            (const void*)imgs.old_f);
                 }
                 if (all_images &&
                     (imgs.new_f != nullptr || imgs.old_f != nullptr)) {
@@ -29541,9 +29790,52 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         }
     }
 
+    auto remote_source_budget = [c](openads::engine::Table* table,
+                                    openads::engine::RemoteSqlShapeBudget& budget)
+        -> openads::util::Result<void> {
+        if (!c->remote_server()) return {};
+        if (!table) return openads::util::Error{7079, 0, "SQL source lookup failed", ""};
+        std::uint64_t width = 5;
+        for (std::uint16_t i = 0; i < table->field_count(); ++i)
+            width += table->field_descriptor(i).length;
+        return budget.add_source(table->record_count(), width);
+    };
+
+    // Native dictionary ACLs are server authorization, not a caller-selectable
+    // statement option. Resolve aliases and physical paths to the same object.
+    auto sql_acl_object = [c](const std::string& name) {
+        if (!c->has_dd()) return name;
+        auto alias = name_to_alias(c->dd(), name);
+        if (!alias.empty()) return alias;
+        auto normalized = [](std::string path) {
+            std::replace(path.begin(), path.end(), '\\', '/');
+            for (auto& ch : path) ch = static_cast<char>(std::tolower(
+                static_cast<unsigned char>(ch)));
+            return path;
+        };
+        auto type = openads::engine::TableType::Cdx;
+        const auto wanted = normalized(c->resolve_table_file(name, type));
+        for (const auto& entry : c->dd()->tables()) {
+            type = openads::engine::TableType::Cdx;
+            if (normalized(c->resolve_table_file(entry.first, type)) == wanted)
+                return entry.first;
+        }
+        return name;
+    };
+    auto sql_select_allowed = [c, &sql_acl_object](const std::string& name)
+        -> openads::util::Result<void> {
+        if (!c->has_dd() || c->username().empty() || name.empty() ||
+            name[0] == '#' || name.rfind("system.", 0) == 0) return {};
+        auto object = sql_acl_object(name);
+        if (!eff_ops(c, object).select_)
+            return openads::util::Error{7079, 0,
+                "dictionary SELECT permission required: " + object, ""};
+        return {};
+    };
+
     // Open a table by name, transparently resolving "system.*" virtual tables
     // to memory tables materialized from DD state.
-    auto open_or_sys = [c, &sql](const std::string& tname,
+    auto open_or_sys_unchecked = [c, &sql](const std::string& tname,
                             openads::engine::TableType  ttype,
                             openads::engine::OpenMode   omode,
                             openads::engine::LockingMode lmode)
@@ -29616,8 +29908,23 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         return ot;
     };
 
-    // Per-operation ACL check for SQL statements when check_rights is set.
-    if (it->second->check_rights != 0 && c->has_dd() && !c->username().empty()) {
+    auto open_or_sys = [&](const std::string& name,
+                           openads::engine::TableType type,
+                           openads::engine::OpenMode mode,
+                           openads::engine::LockingMode locking)
+        -> openads::util::Result<Handle> {
+        if (auto allowed = sql_select_allowed(name); !allowed)
+            return allowed.error();
+        auto opened = open_or_sys_unchecked(name, type, mode, locking);
+        if (!opened) return opened.error();
+        openads::engine::RemoteSqlShapeBudget budget;
+        auto allowed = remote_source_budget(c->lookup_table(opened.value()), budget);
+        if (!allowed) { c->close_table(opened.value()); return allowed.error(); }
+        return opened;
+    };
+
+    // Native DD operation rights cannot be disabled by statement flags.
+    if (c->has_dd() && !c->username().empty()) {
         std::string obj_name;
         enum class SqlOp { None, Select, Insert, Update, Delete, Execute } op =
             SqlOp::None;
@@ -29649,7 +29956,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         }
 
         if (!obj_name.empty() && op != SqlOp::None) {
-            auto ops = eff_ops(c, obj_name);
+            auto ops = eff_ops(c, sql_acl_object(obj_name));
             bool denied = false;
             switch (op) {
                 case SqlOp::Select:  denied = !ops.select_;  break;
@@ -29663,6 +29970,19 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 return fail(openads::AE_ACCESS_DENIED, obj_name.c_str());
         }
     }
+
+    // Schema/file destruction cannot be inferred from table DML grants.
+    // Keep local/no-DD compatibility; live dictionary schema changes need
+    // the same administrator authority as dictionary metadata mutations.
+    if (c->has_dd() && !dictionary_admin(c) &&
+        (openads::sql::sql_is_drop_table(sql) ||
+         openads::sql::sql_is_drop_index(sql) ||
+         openads::sql::sql_is_alter_table(sql) ||
+         openads::sql::sql_is_create_table(sql) ||
+         openads::sql::sql_is_create_index(sql) ||
+         openads::sql::sql_is_create_database(sql)))
+        return fail(openads::AE_ACCESS_DENIED,
+                    "dictionary administrator required for SQL schema changes");
 
     // M10.5/M10.7/M10.9: dispatch on the leading keyword. INSERT /
     // UPDATE / DELETE / CREATE TABLE / CREATE INDEX write through
@@ -30153,6 +30473,8 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     // Loads the DLL, resolves the symbol, registers the proc on the
     // connection. Returns no cursor.
     if (openads::sql::sql_is_create_procedure(sql)) {
+        if (!dictionary_admin(c))
+            return fail(openads::AE_ACCESS_DENIED, "native procedure registration requires administrator");
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         auto cp = openads::sql::parse_create_procedure(sql);
@@ -30272,6 +30594,13 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        // Bound physical target scan work before locks, indexes or row writes.
+        // Reuse SELECT's conservative source limit; local batch SQL is unchanged.
+        openads::engine::RemoteSqlShapeBudget dml_budget;
+        if (auto allowed = remote_source_budget(tbl, dml_budget); !allowed) {
+            c->close_table(th.value());
+            return fail(allowed.error());
+        }
         sql_dml_hold_write_lock(tbl);
         // Keep the structural bag current on every SQL write (see
         // DmlProductionIndexGuard above); no-op when no <base>.cdx/.adi
@@ -30593,6 +30922,13 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        // Bound physical target scan work before locks, indexes or row writes.
+        // Reuse SELECT's conservative source limit; local batch SQL is unchanged.
+        openads::engine::RemoteSqlShapeBudget dml_budget;
+        if (auto allowed = remote_source_budget(tbl, dml_budget); !allowed) {
+            c->close_table(th.value());
+            return fail(allowed.error());
+        }
         sql_dml_hold_write_lock(tbl);
         // Keep the structural bag current on every SQL write (see
         // DmlProductionIndexGuard above); no-op when no <base>.cdx/.adi
@@ -30862,6 +31198,13 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (!th) return fail(th.error());
         openads::engine::Table* tbl = c->lookup_table(th.value());
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
+        // Bound physical target scan work before locks, indexes or row writes.
+        // Reuse SELECT's conservative source limit; local batch SQL is unchanged.
+        openads::engine::RemoteSqlShapeBudget dml_budget;
+        if (auto allowed = remote_source_budget(tbl, dml_budget); !allowed) {
+            c->close_table(th.value());
+            return fail(allowed.error());
+        }
         sql_dml_hold_write_lock(tbl);
         // Keep the structural bag current on every SQL write (see
         // DmlProductionIndexGuard above); no-op when no <base>.cdx/.adi
@@ -31515,6 +31858,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             std::vector<openads::drivers::DbfField> schema;
             std::uint32_t rec_len = 0;
             std::vector<std::vector<std::uint8_t>> rows;
+            openads::engine::RemoteSqlUnionBudget union_budget;
 
             for (std::size_t mi = 0; mi < uparts.size(); ++mi) {
                 // Recurse into the full SELECT executor for this
@@ -31582,6 +31926,13 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                             mt->is_deleted()) continue;
                         if (!mt->passes_filter()) continue;
                         recnos.push_back(r);
+                    }
+                }
+                if (c->remote_server()) {
+                    if (auto allowed = union_budget.add(recnos.size(), rec_len);
+                        !allowed) {
+                        AdsCloseTable(memberCur);
+                        return fail(allowed.error());
                     }
                 }
                 for (std::uint32_t r : recnos) {
@@ -31660,6 +32011,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 std::stable_sort(rows.begin(), rows.end(),
                     [&](const std::vector<std::uint8_t>& a,
                         const std::vector<std::uint8_t>& b) {
+                (void)openads::engine::sql_execution_step();
                         std::string ka(
                             reinterpret_cast<const char*>(a.data() + off), flen);
                         std::string kb(
@@ -31720,6 +32072,169 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
         }
     }
+
+    // Authorize every read source before joins or inline predicate compilers
+    // can materialize data. Inline subqueries do not re-enter the public API.
+    std::function<openads::util::Result<void>(const openads::sql::SelectStmt&)> authorize_select;
+    std::function<openads::util::Result<void>(const openads::sql::WhereExpr*)> authorize_predicate;
+    authorize_predicate = [&](const openads::sql::WhereExpr* node)
+        -> openads::util::Result<void> {
+        if (!node) return {};
+        for (const auto& child : node->children)
+            if (auto r = authorize_predicate(child.get()); !r) return r.error();
+        if (auto r = authorize_predicate(node->child.get()); !r) return r.error();
+        for (const auto* sub : {node->exists_subquery.get(),
+                node->in_clause.subquery.get(), node->cmp.subquery.get()}) {
+            if (!sub) continue;
+            if (c->has_dd() && !c->username().empty()) {
+                auto restricted = [&](const std::string& table) {
+                    return c->dd()->permitted_columns(c->username(), sql_acl_object(table),
+                        openads::engine::DataDict::DD_PERM_SELECT).has_value();
+                };
+                bool hidden = restricted(sub->table);
+                for (const auto& from : sub->from_tables)
+                    hidden = hidden || restricted(from.name);
+                if (sub->inner_join) hidden = hidden || restricted(sub->inner_join->table);
+                if (hidden) return openads::util::Error{7079, 0,
+                    "column-restricted SQL inline subquery sources are not supported", ""};
+            }
+            if (auto r = authorize_select(*sub); !r) return r.error();
+        }
+        return {};
+    };
+    authorize_select = [&](const openads::sql::SelectStmt& select)
+        -> openads::util::Result<void> {
+        if (auto r = sql_select_allowed(select.table); !r) return r.error();
+        // Column ACLs must run before any expression or materialization.
+        // Joins with a restricted source have no trustworthy column lineage
+        // in the current executor, so fail closed rather than copy hidden data.
+        auto columns = [&](const std::string& table) {
+            if (!c->has_dd() || c->username().empty())
+                return std::optional<std::unordered_set<std::string>>{};
+            return c->dd()->permitted_columns(c->username(), sql_acl_object(table),
+                openads::engine::DataDict::DD_PERM_SELECT);
+        };
+        const bool joined = select.inner_join || select.from_tables.size() > 1;
+        if (joined) {
+            bool restricted = columns(select.table).has_value();
+            for (const auto& from : select.from_tables)
+                restricted = restricted || columns(from.name).has_value();
+            if (select.inner_join)
+                restricted = restricted || columns(select.inner_join->table).has_value();
+            if (restricted) return openads::util::Error{7079, 0,
+                "column-restricted SQL joins require explicit lineage support", ""};
+        }
+        if (auto permitted = columns(select.table)) {
+            auto check = [&](std::string column) -> openads::util::Result<void> {
+                if (column.empty()) return {};
+                const auto dot = column.find_last_of('.');
+                if (dot != std::string::npos) column = column.substr(dot + 1);
+                for (auto& ch : column) ch = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(ch)));
+                if (permitted->count(column)) return {};
+                return openads::util::Error{7079, 0,
+                    "dictionary column SELECT permission required: " + column, ""};
+            };
+            std::function<openads::util::Result<void>(const openads::sql::WhereExpr*)> predicate;
+            predicate = [&](const openads::sql::WhereExpr* node)
+                -> openads::util::Result<void> {
+                if (!node) return {};
+                if (node->exists_subquery || node->in_clause.subquery || node->cmp.subquery ||
+                    node->cmp.is_outer_ref)
+                    return openads::util::Error{7079, 0,
+                        "column-restricted SQL inline subqueries require lineage support", ""};
+                using Kind = openads::sql::WhereExpr::Kind;
+                if (node->kind == Kind::Cmp) {
+                    if (auto r = check(node->cmp.column); !r) return r.error();
+                }
+                if (node->kind == Kind::In) {
+                    if (auto r = check(node->in_clause.column); !r) return r.error();
+                }
+                for (const auto& child : node->children)
+                    if (auto r = predicate(child.get()); !r) return r.error();
+                return predicate(node->child.get());
+            };
+            auto arithmetic = [&](const openads::sql::ArithExpr& expr)
+                -> openads::util::Result<void> {
+                if (auto r = check(expr.lhs_column); !r) return r.error();
+                return expr.rhs_is_literal ? openads::util::Result<void>{} : check(expr.rhs_column);
+            };
+            auto aggregate = [&](const openads::sql::Aggregate& item)
+                -> openads::util::Result<void> {
+                if (auto r = check(item.column); !r) return r.error();
+                if (item.arg_expr)
+                    if (auto r = arithmetic(*item.arg_expr); !r) return r.error();
+                return predicate(item.filter.get());
+            };
+            for (const auto& column : select.projection) {
+                if (!column.empty() && column[0] == '$') continue;
+                if (column == "*" || (column.size() > 2 && column.substr(column.size()-2) == ".*")) {
+                    if (select.projection_complex)
+                        return openads::util::Error{7079, 0,
+                            "column-restricted SQL complex wildcard is not supported", ""};
+                    continue;
+                }
+                if (auto r = check(column); !r) return r.error();
+            }
+            if (auto r = predicate(select.where.get()); !r) return r.error();
+            for (const auto& item : select.case_items)
+                for (const auto& branch : item.branches)
+                    if (auto r = predicate(branch.cond.get()); !r) return r.error();
+            for (const auto& item : select.arith_items)
+                if (auto r = arithmetic(item); !r) return r.error();
+            for (const auto& item : select.aggregates)
+                if (auto r = aggregate(item); !r) return r.error();
+            for (const auto& item : select.fn_items) {
+                using Fn = openads::sql::ScalarFnKind;
+                if (item.kind == Fn::Udf || item.kind == Fn::ScriptCall)
+                    return openads::util::Error{7079, 0,
+                        "column-restricted SQL script expressions are not supported", ""};
+                if (auto r = check(item.column); !r) return r.error();
+                for (const auto& arg : item.args) {
+                    if (arg.is_call) return openads::util::Error{7079, 0,
+                        "column-restricted SQL nested calls are not supported", ""};
+                    if (arg.is_column)
+                        if (auto r = check(arg.column); !r) return r.error();
+                }
+            }
+            for (const auto& item : select.window_items) {
+                for (const auto& column : item.partition_by)
+                    if (auto r = check(column); !r) return r.error();
+                if (item.order_by)
+                    if (auto r = check(item.order_by->column); !r) return r.error();
+            }
+            if (select.order_by)
+                if (auto r = check(select.order_by->column); !r) return r.error();
+            for (const auto& item : select.order_by_extra)
+                if (auto r = check(item.column); !r) return r.error();
+            for (const auto& column : select.group_by)
+                if (auto r = check(column); !r) return r.error();
+            std::function<openads::util::Result<void>(const openads::sql::HavingExpr*)> having;
+            having = [&](const openads::sql::HavingExpr* node)
+                -> openads::util::Result<void> {
+                if (!node) return {};
+                if (node->kind == openads::sql::HavingExpr::Kind::Cmp)
+                    if (auto r = aggregate(node->cmp.agg); !r) return r.error();
+                for (const auto& child : node->children)
+                    if (auto r = having(child.get()); !r) return r.error();
+                return having(node->child.get());
+            };
+            if (auto r = having(select.having.get()); !r) return r.error();
+        }
+        for (const auto& from : select.from_tables)
+            if (auto r = sql_select_allowed(from.name); !r) return r.error();
+        if (select.inner_join)
+            if (auto r = sql_select_allowed(select.inner_join->table); !r) return r.error();
+        if (auto r = authorize_predicate(select.where.get()); !r) return r.error();
+        for (const auto& item : select.case_items)
+            for (const auto& branch : item.branches)
+                if (auto r = authorize_predicate(branch.cond.get()); !r) return r.error();
+        for (const auto& aggregate : select.aggregates)
+            if (auto r = authorize_predicate(aggregate.filter.get()); !r) return r.error();
+        return {};
+    };
+    if (auto allowed = authorize_select(parsed.value()); !allowed)
+        return fail(allowed.error());
 
     // ====================================================================
     // ADS dialect -- N-way comma join (3+ tables) with composite keys and
@@ -31803,6 +32318,14 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             close_all();
             return fail(openads::AE_NO_FILE_FOUND,
                         "multi-table join: table open failed");
+        }
+
+        openads::engine::RemoteSqlShapeBudget join_budget;
+        for (auto* source : tbls) {
+            if (auto allowed = remote_source_budget(source, join_budget); !allowed) {
+                close_all();
+                return fail(allowed.error());
+            }
         }
 
         // SAP 2137 -- an unqualified column present in more than one joined
@@ -32715,6 +33238,15 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             return fail(openads::AE_INTERNAL_ERROR, "join post-open");
         }
 
+        openads::engine::RemoteSqlShapeBudget join_budget;
+        for (auto* source : {ltbl, rtbl}) {
+            if (auto allowed = remote_source_budget(source, join_budget); !allowed) {
+                c->close_table(lh.value());
+                c->close_table(rh.value());
+                return fail(allowed.error());
+            }
+        }
+
         // SAP 2137 -- reject an unqualified column present in both joined
         // tables (checked here, where both source schemas are still
         // distinct; the merged cursor below would hide the ambiguity).
@@ -33236,6 +33768,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             }
             std::stable_sort(rows.begin(), rows.end(),
                 [&](const Row& a, const Row& b) {
+                (void)openads::engine::sql_execution_step();
                     for (std::size_t i = 0; i < sks.size(); ++i) {
                         bool less, equal;
                         if (sks[i].numeric) {
@@ -33972,6 +34505,74 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         if (!tbl) return fail(openads::AE_INTERNAL_ERROR, "post-open");
     }
     (void)table_handle;
+
+    // Predicate subqueries below bypass ABI re-entry and may rescan their
+    // source for every outer row. Bound worst-case work before compilation,
+    // while the parsed trees still own all subqueries.
+    if (c->remote_server()) {
+        std::uint64_t visits = 0;
+        constexpr std::uint64_t max_visits = 1000000;
+        std::function<openads::util::Result<void>(
+            const openads::sql::WhereExpr*, std::uint64_t)> check_predicate;
+        check_predicate = [&](const openads::sql::WhereExpr* node,
+                              std::uint64_t outer_rows)
+            -> openads::util::Result<void> {
+            if (!node) return {};
+            for (const auto& child : node->children) {
+                if (auto r = check_predicate(child.get(), outer_rows); !r)
+                    return r.error();
+            }
+            if (auto r = check_predicate(node->child.get(), outer_rows); !r)
+                return r.error();
+            const openads::sql::SelectStmt* sub = node->exists_subquery.get();
+            if (!sub) sub = node->in_clause.subquery.get();
+            if (!sub) sub = node->cmp.subquery.get();
+            if (!sub) return {};
+            // The inline executor only supports a physical single source.
+            // Do not run a derived/join form to estimate its cost.
+            if (!sub->derived_sql.empty() || sub->inner_join ||
+                sub->from_tables.size() > 1 || sub->table.empty())
+                return openads::util::Error{7079, 0,
+                    "remote SQL predicate subquery shape unsupported", ""};
+            auto opened = open_or_sys(sub->table,
+                openads::engine::TableType::Cdx,
+                openads::engine::OpenMode::Read,
+                openads::engine::LockingMode::Compatible);
+            if (!opened) return opened.error();
+            auto* source = c->lookup_table(opened.value());
+            std::uint64_t count = source ? source->record_count() : 0;
+            c->close_table(opened.value());
+            // EXISTS always rescans; IN/scalar may be compile-time, but a
+            // conservative product also covers their correlated forms.
+            if (count != 0 && outer_rows > (max_visits - visits) / count)
+                return openads::util::Error{7079, 0,
+                    "remote SQL predicate subquery work budget exceeded", ""};
+            const auto work = count * outer_rows;
+            visits += work;
+            return check_predicate(sub->where.get(), work);
+        };
+        auto checked = check_predicate(parsed.value().where.get(), tbl->record_count());
+        if (checked) {
+            for (const auto& item : parsed.value().case_items) {
+                for (const auto& branch : item.branches) {
+                    checked = check_predicate(branch.cond.get(), tbl->record_count());
+                    if (!checked) break;
+                }
+                if (!checked) break;
+            }
+        }
+        if (checked) {
+            for (const auto& aggregate : parsed.value().aggregates) {
+                checked = check_predicate(aggregate.filter.get(), tbl->record_count());
+                if (!checked) break;
+            }
+        }
+        if (!checked) {
+            if (table_handle) c->close_table(table_handle);
+            if (derived_cur) AdsCloseTable(derived_cur);
+            return fail(checked.error());
+        }
+    }
 
     // M10.10: aggregate query -- walk matching rows, compute the
     // aggregate accumulators, materialise a 1-row temp DBF with one
@@ -35862,6 +36463,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         }
         std::stable_sort(rows.begin(), rows.end(),
             [&](const Row& a, const Row& b) {
+                (void)openads::engine::sql_execution_step();
                 for (std::size_t i = 0; i < sks.size(); ++i) {
                     bool less, equal;
                     if (sks[i].numeric) {
@@ -36374,6 +36976,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 }
                 std::stable_sort(ents.begin(), ents.end(),
                     [&](const Entry& a, const Entry& b) {
+                (void)openads::engine::sql_execution_step();
                         if (a.pkey != b.pkey) return a.pkey < b.pkey;
                         if (wf.order_by) {
                             return wf.order_by->descending
@@ -36898,7 +37501,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
         auto* dd = c->dd();
         if (dd != nullptr && dd->has_any_column_acl()) {
             allowed_cols = dd->permitted_columns(
-                c->username(), parsed.value().table,
+                c->username(), sql_acl_object(parsed.value().table),
                 openads::engine::DataDict::DD_PERM_SELECT);
         }
     }
@@ -36920,7 +37523,7 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
     // 1..N, its own index space) isolates it from the source: INDEX ON /
     // DBSETORDER behave exactly like DBFCDX / ADS_CDX. Same shape the
     // multi-table / union / aggregate / CASE paths already produce.
-    if (derived_cur == 0 && tbl->has_recno_sequence()) {
+    if (derived_cur == 0 && (tbl->has_recno_sequence() || allowed_cols)) {
         ADSHANDLE conn_h = 0;
         s.registry.for_each_handle([&](Handle h, HandleKind k, void* p) {
             if (k != HandleKind::Connection) return;
@@ -37065,15 +37668,27 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
             // touch the source table's production index. Only the on-disk
             // format changed (index companion is .adi rather than .cdx), which
             // is transparent through the cursor handle.
-            UNSIGNED32 crc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
+            UNSIGNED32 crc;
+    {
+        InternalCursorCreate internal_create(c);
+        crc = AdsCreateTable(conn_h, name_buf.data(), nullptr,
                                             ADS_ADT, 0, 0, 0, 0,
                                             def_buf.data(), &hNew);
+    }
             if (crc == openads::AE_SUCCESS) {
                 openads::engine::Table* tgt =
                     s.registry.lookup<openads::engine::Table>(
                         hNew, HandleKind::Table);
                 if (tgt != nullptr) {
                     std::vector<std::uint32_t> seq = tbl->recno_sequence();
+                    if (!tbl->has_recno_sequence()) {
+                        for (std::uint32_t r = 1; r <= tbl->record_count(); ++r) {
+                            if (auto g = tbl->goto_record(r); !g) continue;
+                            if (!tbl->show_deleted_records() && tbl->is_deleted()) continue;
+                            if (!tbl->passes_filter()) continue;
+                            seq.push_back(r);
+                        }
+                    }
                     for (std::uint32_t r : seq) {
                         if (auto g = tbl->goto_record(r); !g) continue;
                         if (auto ar = tgt->append_record(); !ar) break;
@@ -37139,8 +37754,20 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                 *phCursor = gh_srt;
                 return ok();
             }
+            // A restricted source must never fall back to a live physical
+            // cursor: raw-record reads or new filters could reach hidden data.
+            if (allowed_cols) {
+                if (table_handle != 0) c->close_table(table_handle);
+                return fail(static_cast<int>(crc), "restricted cursor materialization failed");
+            }
             // AdsCreateTable failed -> fall through to the live-cursor return.
         }
+    }
+
+    if (allowed_cols && derived_cur == 0) {
+        if (table_handle != 0) c->close_table(table_handle);
+        return fail(openads::AE_ACCESS_DENIED,
+                    "restricted cursor requires physical materialization");
     }
 
     // M10.46 -- when this query was a derived-table outer SELECT,
@@ -37186,9 +37813,9 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
 }
 
 // Thin export over the SQL dispatcher above: a failing statement also
-// lands in the SAP-style ads_err error log with the statement text --
-// matching ADS, whose error log records the SQL errors (7200 etc.) it
-// raises while serving clients. Success paths pay nothing.
+// lands in the SAP-style ads_err error log with the code but without SQL
+// or error text, which can contain secrets. The requesting caller still
+// receives the full diagnostic. Success paths pay nothing.
 // S4 -- AQE envelope depth guard. Internal recursion (derived tables,
 // INTO snapshots, script-bridge embedded SQL) re-enters
 // AdsExecuteSQLDirect; only the OUTERMOST, client-facing call wraps the
@@ -37201,20 +37828,22 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
                                ADSHANDLE* phCursor) {
     arc2_trace("AdsExecuteSQLDirect");
     arc2_trace("AdsExecuteSQLDirect");
+    if (phCursor) *phCursor = 0;
     struct DepthGuard {
         ~DepthGuard() { --sql_exec_depth_; }
     } depth_guard;
     ++sql_exec_depth_;
-    UNSIGNED32 rc = exec_sql_direct_impl(hStatement, pucSQL, phCursor);
-    if (rc != openads::AE_SUCCESS && sql_exec_depth_ == 1) {
-        std::string sql_text = pucSQL != nullptr
-            ? openads::abi::to_internal(pucSQL, 0) : std::string();
-        std::string env = scriptbridge::sql_error_envelope(
-            static_cast<std::int32_t>(rc),
-            openads::abi::last_error_message(), sql_text);
-        openads::abi::set_last_error(openads::util::Error{
-            7200, 0, std::move(env), ""});
-        rc = 7200;
+    auto* budget_statement = stmt_lookup(hStatement);
+    openads::engine::SqlExecutionScope execution_scope(
+        budget_statement && budget_statement->conn && budget_statement->conn->remote_server());
+    // Re-entry from procedures, triggers and scripts shares this thread's
+    // call-depth budget. A new Executor must not reset recursion protection.
+    UNSIGNED32 rc;
+    if (sql_exec_depth_ > 8) {
+        if (phCursor) *phCursor = 0;
+        rc = fail(openads::AE_ACCESS_DENIED, "SQL execution recursion limit exceeded");
+    } else {
+        rc = exec_sql_direct_impl(hStatement, pucSQL, phCursor);
     }
     // RCB 07/15/2026: SAP ADS positions a SQL result cursor ON the first
     // record after execute; OpenADS was leaving the engine Table at BOF, so a
@@ -37229,14 +37858,26 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirect(ADSHANDLE hStatement, UNSIGNED8* pucSQ
     if (rc == openads::AE_SUCCESS && phCursor != nullptr && *phCursor != 0) {
         (void)AdsGotoTop(*phCursor);
     }
-    if (rc != openads::AE_SUCCESS) {
-        std::string sql = pucSQL != nullptr
+    if (openads::engine::sql_execution_exhausted()) {
+        if (phCursor && *phCursor) { AdsCloseTable(*phCursor); *phCursor = 0; }
+        rc = fail(openads::AE_ACCESS_DENIED, "SQL execution budget exceeded");
+    }
+    if (rc != openads::AE_SUCCESS && sql_exec_depth_ == 1) {
+        std::string sql_text = pucSQL != nullptr
             ? openads::abi::to_internal(pucSQL, 0) : std::string();
-        if (sql.size() > 160) sql.resize(160);
-        std::string msg = openads::abi::last_error_message();
+        std::string env = scriptbridge::sql_error_envelope(
+            static_cast<std::int32_t>(rc),
+            openads::abi::last_error_message(), sql_text);
+        openads::abi::set_last_error(openads::util::Error{
+            7200, 0, std::move(env), ""});
+        rc = 7200;
+    }
+    if (rc != openads::AE_SUCCESS) {
+        // Error text can quote SQL literals, connection strings or user RAISE
+        // messages. Preserve it only for the requesting caller, never at rest.
         openads::mgmt::ErrorLog::instance().log(
             static_cast<std::int32_t>(rc), "SQL", 0,
-            msg.empty() ? sql : (msg + " | " + sql));
+            "SQL execution failed (SQL and error text hidden)");
     }
     return rc;
 }
@@ -37554,6 +38195,10 @@ UNSIGNED32 ENTRYPOINT AdsCopyTableContent(ADSHANDLE hSrc, ADSHANDLE hDst) {
     Table* src = get_table(hSrc);
     Table* dst = get_table(hDst);
     if (!src || !dst) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
+    if (auto rc = native_table_authorize(src, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
+    if (auto rc = native_table_authorize(dst, openads::engine::DataDict::DD_PERM_INSERT)) return rc;
+    if (dst->open_mode() == openads::engine::OpenMode::Read)
+        return fail(openads::AE_ACCESS_DENIED, "copy destination is read-only");
 
     // Build a field-name mapping: for each source field find the
     // matching destination field (by name). Fields that exist only in
@@ -38213,6 +38858,7 @@ UNSIGNED32 ENTRYPOINT AdsGetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
     if (!t->positioned()) {
         *pulLen = 0;
         return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
@@ -38995,6 +39641,7 @@ UNSIGNED32 ENTRYPOINT AdsSetRecord(ADSHANDLE hTable, UNSIGNED8* pucRecord,
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE)) return rc;
     auto r = t->set_record_raw(pucRecord, static_cast<std::size_t>(ulLen));
     if (!r) return fail(r.error());
     return ok();
@@ -39483,6 +40130,8 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
 
     MgBackend be;
     be.mg_user = pucUser ? reinterpret_cast<const char*>(pucUser) : std::string();
+    be.mg_password = pucPwd ? reinterpret_cast<const char*>(pucPwd) : std::string();
+    if (be.mg_user.size() > 256 || be.mg_password.size() > 4096) return openads::AE_LOGIN_FAILED;
     std::string srv = pucServer
         ? reinterpret_cast<const char*>(pucServer) : "";
     // Management accepts the ordinary TCP endpoint spelling as well as
@@ -40567,12 +41216,20 @@ UNSIGNED32 ENTRYPOINT AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     if (!t->driver()) return fail(openads::AE_INTERNAL_ERROR, "no driver");
 
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
     namespace fs = std::filesystem;
     auto raw = openads::abi::to_internal(pucFile, 0);
     fs::path dst(raw);
     if (!dst.is_absolute())
         dst = fs::path(t->path()).parent_path() / dst;
     if (!dst.has_extension()) dst.replace_extension(".dbf");
+    if (auto* owner = t->owner()) {
+        auto jailed = openads::platform::resolve_under_any_root(openads::platform::split_data_roots(owner->data_dir()), dst.string());
+        if (!jailed) return fail(openads::AE_ACCESS_DENIED, "copy path outside data directory");
+        dst = *jailed;
+        if (native_schema_denied(owner))
+            return fail(openads::AE_ACCESS_DENIED, "dictionary administrator required for file copy");
+    }
 
     const auto& src_fields = t->driver()->fields();
     if (src_fields.empty())
@@ -40641,6 +41298,7 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCRC(ADSHANDLE hTable, UNSIGNED32* pulCRC,
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+    if (auto rc = native_table_authorize(t, openads::engine::DataDict::DD_PERM_SELECT)) return rc;
     if (!t->positioned())
         return fail(openads::AE_NO_CURRENT_RECORD, "no current record");
     *pulCRC = openads::engine::crc32_record(t->record_buffer());
@@ -40736,6 +41394,7 @@ UNSIGNED32 ENTRYPOINT AdsSetNull(ADSHANDLE hObj, UNSIGNED8* pId) {
                 as_field(resolve_field_id(hObj, pId, nm, sizeof(nm))), &idx)) {
             return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
+        if (auto rc = native_table_authorize(t, t->pending_append() ? openads::engine::DataDict::DD_PERM_INSERT : openads::engine::DataDict::DD_PERM_UPDATE, idx)) return rc;
         auto r = t->set_field_null(idx);
         if (!r) return fail(r.error());
         return ok();

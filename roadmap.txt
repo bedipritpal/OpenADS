@@ -2,9 +2,7 @@ OpenADS — Roadmap Status
 As of: 2026-06-26
 Current release: v1.4.0 (2026-06-26)
 
-================================================================================
 PHASES COMPLETED
-================================================================================
 
 Phase 0.1.x — Drop-in for the Harbour read/write path                    DONE
   All M0–M8.11 milestones complete. Final 0.1.0 released.
@@ -19,9 +17,7 @@ Phase 0.3.x — Proprietary formats + advanced SQL                    LARGELY DO
   collation, codepage), M12.x (Phase 2 TCP wire server, TLS client,
   transport abstraction, wire-protocol.md) — all complete.
 
-================================================================================
 CURRENT PHASE: 0.3.x — DEFERRED ITEMS (still open)
-================================================================================
 
 These were explicitly deferred during 0.3.x and carry into 1.0.x planning:
 
@@ -102,9 +98,7 @@ These were explicitly deferred during 0.3.x and carry into 1.0.x planning:
      b. Compile smoke.prg against rddads + OpenADS libace.so on Linux.
      c. Run and capture output in ci.yml (compat.yml leg).
 
-================================================================================
 NEXT MILESTONE: 1.0.0 final
-================================================================================
 
 Currently at: v1.0.0-rc29. The 1.0.x milestone defined in the roadmap requires:
 
@@ -151,9 +145,7 @@ Currently at: v1.0.0-rc29. The 1.0.x milestone defined in the roadmap requires:
    - Build-your-own-Harbour-app section needs updating (todo items 7, 11).
    - Explain bindings/php vs bindings/php_ext difference (todo item 6).
 
-================================================================================
 SAP DD PERMISSION SYSTEM — RESEARCH FINDINGS (2026-06-02)
-================================================================================
 
 This section documents what was learned by reverse-engineering pmsys.add
 (a real SAP Data Architect database) and cross-referencing SAP ARC source code
@@ -253,9 +245,7 @@ This section documents what was learned by reverse-engineering pmsys.add
       their parent table's permission record.
   [x] All SAP object type codes are correct (Group=9, View=6, Field=4, etc.).
 
-================================================================================
 DA-WEB (Data Architect Web) — OPEN BUGS AND FEATURES
-================================================================================
 
 These are tracked in DA-Web/todo.txt. Priority order:
 
@@ -307,9 +297,7 @@ MAINTENANCE 2: Cross-platform build verification
     CMake presets. Fix any platform-specific compilation errors found.
   - Run the unit test suite on each platform and document results.
 
-================================================================================
 SUMMARY — NEXT STEPS IN PRIORITY ORDER
-================================================================================
 
 Immediate (bugs, DA-Web):
   1. Fix RI Objects foreign key tag dropdown (DA-Web BUG 1)
@@ -333,3 +321,90 @@ Longer-term (1.0.0 final blockers):
   13. Connection multiplexing and session hardening in openads_serverd
   14. Compatibility test matrix vs Advantage 11.x/12.x installations
   15. Server-side TLS termination
+
+SECURITY: [DONE] Loopback default, explicit non-loopback anonymous opt-in and cleartext startup warnings (TCP/Studio). Native server TLS remains pending.
+SECURITY: [DONE] auth_user verifier storage: salted PBKDF2-SHA256 and constant-time comparison. Dictionary credential migration is implemented on successful login.
+SECURITY: [DONE] Network login cooldown and bounded IP/user counters; applies DD MAX_FAILED_ATTEMPTS.
+SECURITY: [DONE] Remote DD mutations and built-in administration require DB:Admin; named logins always verify passwords; native DLL procedure registration requires admin.
+SECURITY: [DONE] DD salted PBKDF2 storage, successful-login legacy migration, write-only password property and hashed AdsSys recovery verification.
+
+SECURITY: [DONE] Pre-auth frame cap, handshake/idle/partial deadlines, pre-Connect gate, table/cursor and mutex caps; remote mutex fail-fast; SetFields reserve validation. Explicit/AppendBlank locks and fetch scan/reply sizes are capped. SQL append locks and other SQL resource surfaces remain under review.
+SECURITY: [DONE] Remote MgConnect password verification; management mutators require server credentials, anonymous loopback is read-only; raw SQL hidden from management telemetry.
+
+
+SECURITY: [DONE] Script execution step budget prevents empty/caught infinite-loop DoS. SQL literal-escaping regression test. Parser source/token/nesting limits enforced. Wall-clock SQL limits remain under review.
+
+SECURITY: [DONE] Remote Aggregate physical-row/spec/expression/reply budgets and cooperative two-second scan deadline. Local/SQL aggregate paths remain separate.
+
+SECURITY: [DONE] Remote-owned engine tables cap record locks, including SQL automatic/virtual append locks, at4096 before durable append; local behavior retained. Connection-wide SQL resource budgets remain under review.
+
+SECURITY: [DONE] Remote SQL input source/token/parenthesis caps and embeddedNUL rejection, including remote-owned ABI reentry. Recursive procedures/query execution budgets remain under review.
+
+SECURITY: [DONE] SQL reentry depth8 across procedures/triggers/scripts; trigger traces hide SQL. Query execution deadlines remain pending.
+
+SECURITY: [DONE] Optional native TLS data listeners with nonblocking accepted-socket BIO, certificate/key validation and bounded reply backpressure. Studio HTTPS still requires proxy.
+
+SECURITY: [DONE] Conservative remote SELECT source/fanout/fixed-width preflight (100k rows,64MiB); local unchanged. DML, deadlines, memo payloads and repeated stages still pending.
+
+SECURITY: [DONE] Shared nested script budget1M (including expressions), cooperative5s deadline,8 Executor levels and non-catchable exhaustion. Bridge/native blocking work remains separately bounded.
+
+SECURITY: [DONE] No SQL source/error text retained in SQL error logs; debug connection strings/last errors hidden. Caller diagnostics preserved; old logs need operator retention review.
+Security hardening 2026-10-03: remote native UPDATE/DELETE/MERGE target
+preflight before locks/indexes/writes, same 100k/64MiB source bound as SELECT.
+EN/ES: docs/{en,es}/security-sql-dml-preflight.md. Memo/runtime budgets remain.
+Security hardening 2026-10-03: native remote memo reads capped at 8MiB before
+store allocation/growth; FPT/ADM declared payload validated against file size.
+EN/ES: docs/{en,es}/security-memo-read-limits.md. Total SQL allocator budget open.
+Security hardening 2026-10-03: remote UNION/UNION ALL additive staging budget
+100k rows/64MiB before copying each member, including later discarded duplicates.
+EN/ES: docs/{en,es}/security-sql-union-budget.md. Total runtime/allocator budget open.
+
+Security hardening 2026-10-03: native single-source remote SELECT predicate
+subqueries preflight additive1M estimated row visits, source100k/64MiB checked.
+EN/ES: docs/{en,es}/security-sql-predicate-work.md. Join/runtime budgets remain.
+
+SECURITY: Native authenticated DD SQL operation ACLs no longer caller-disabled;
+SELECT primary/join/inline predicate sources checked before materialization.
+EN/ES: docs/{en,es}/security-native-sql-permissions.md. Column/backend audit open.
+
+Security: native dictionary SQL schema/file changes require dictionary administrator;
+full table DML permission no longer permits DROP/ALTER/CREATE schema operations.
+Seguridad: cambios de esquema SQL con diccionario requieren admin, no solo permiso DML.
+
+
+Security: named DD direct wire table operations enforce SELECT/INSERT/UPDATE/DELETE;
+restricted whole-row opens fail closed and schema/file/maintenance operations need admin.
+Seguridad: operaciones de tabla wire DD autorizadas antes del motor, sin confiar en rights cliente.
+
+
+Security: native SQL authorizes column references before predicates and materialization;
+restricted join/inline-subquery/script shapes fail closed until column lineage is available.
+Seguridad: autorización de columnas previa a evaluar SQL; formas sin origen fiable se rechazan.
+
+Security: native DD schema APIs require admin, with narrowly scoped internal cursor creation.
+Seguridad: APIs de esquema nativas DD requieren admin; resultados temporales registrados conservan mantenimiento.
+
+Security: native row/column operations enforce DD ACLs; native copies are jailed and index mutations require admin.
+
+Security: ZIP extraction requires exact uncompressed byte count before success; premature EOF removes partial output.
+
+Security: ZIP extraction canonicalizes destinations under its root, denying existing symlink escapes.
+
+Security: ZIP extraction and target enumeration preserve full entry names and reject embedded NUL.
+
+Security: remote ZIP create/extract/list budgets (100k entries, 1 GiB data, 64 MiB metadata, cooperative 30s engine deadline); local defaults unchanged. Per-request bounds, not aggregate quotas or security-audit completion.
+Security: validate traditional ZIP password header before output creation, including empty encrypted entries; ignore password on plain entries. ZipCrypto retains an 8-bit check and is not authenticated encryption.
+Security: stage ZIP output and extracted files before publishing; preserve prior destinations on validation/stream/publish failure. Per-file replacement only; crash cleanup and concurrent ancestor/symlink races remain open.
+Security: Fetch/FetchWhere reject field-read errors and unknown columns rather than emitting empty successful cells; regression tests verify existing u16 boundaries from 58a357a2 for tables and SQL cursors.
+Security: shared cooperative remote SQL call-tree budget (1M checkpoints/5s) across native table, script/index evaluation and sort comparisons. Not hard cancellation, full memory quotas or rollback; backend and archive race controls remain open.
+Security: remote-scope SQLite VM progress interruption and per-result 100k-row/64MiB accounted memory limit. Not total SQLite allocator quotas, blocked-I/O cancellation or a whole-script rollback guarantee.
+Remote PostgreSQL direct queries: nonblocking single-row streaming + shared
+SQL deadline/steps and 100k rows/64MiB cumulative pre-copy accounting. Budget
+or query/protocol failure closes affected connection; not server cancellation,
+whole-script rollback, libpq hard allocator cap or coverage of navigation/
+metadata/aggregate/write methods. See docs/en/security-postgres-budget.md.
+Remote MariaDB direct queries: continuation query/fetch and unbuffered result,
+shared SQL deadline/steps plus 100k rows/64MiB pre-copy accounting. Error/limit
+shuts down socket and closes affected connection without unread-row drain.
+Not a server cancellation or driver allocator guarantee; other driver methods
+remain outside coverage. See docs/en/security-maria-budget.md.

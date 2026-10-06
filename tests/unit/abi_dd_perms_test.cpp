@@ -253,7 +253,10 @@ TEST_CASE("Perms: AdsDDSetUserTableRights / AdsDDGetUserTableRights round-trip")
     fs::remove_all(dir, ec);
     fs::create_directories(dir);
     make_dbf(dir / "tbl.dbf");
-    make_perm_add(dir);  // no TABLEPERM lines
+    make_perm_add(dir,
+        "USER admin\n"
+        "USERPROP admin;prop_1101=adminpw\n"
+        "MEMBER admin=DB:Admin\n");  // no TABLEPERM lines
 
     ADSHANDLE hConn = connect_as(dir / "test.add", "alice", "pw");
     REQUIRE(hConn != 0);
@@ -261,8 +264,16 @@ TEST_CASE("Perms: AdsDDSetUserTableRights / AdsDDGetUserTableRights round-trip")
     UNSIGNED8 tbl[8]  = "tbl";
     UNSIGNED8 user[8] = "alice";
 
-    // Set alice to level 2.
-    REQUIRE(AdsDDSetUserTableRights(hConn, tbl, user, 2) == 0);
+    // Regular users cannot grant themselves rights. Configure through a
+    // distinct DB:Admin connection, then verify alice sees the stored grant.
+    CHECK(AdsDDSetUserTableRights(hConn, tbl, user, 2) == openads::AE_ACCESS_DENIED);
+    ADSHANDLE hAdmin = connect_as(dir / "test.add", "admin", "adminpw");
+    REQUIRE(hAdmin != 0);
+    REQUIRE(AdsDDSetUserTableRights(hAdmin, tbl, user, 2) == 0);
+    REQUIRE(AdsDisconnect(hAdmin) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    hConn = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(hConn != 0);
 
     UNSIGNED32 lvl = 99;
     REQUIRE(AdsDDGetUserTableRights(hConn, tbl, user, &lvl) == 0);
@@ -320,6 +331,9 @@ TEST_CASE("Perms: AdsDDGetPermissions returns direct or inherited masks") {
         "TABLE tbl=tbl.dbf\n"
         "USER alice\n"
         "USERPROP alice;prop_1101=pw\n"
+        "USER admin\n"
+        "USERPROP admin;prop_1101=adminpw\n"
+        "MEMBER admin=DB:Admin\n"
         "GROUP readers\n"
         "MEMBER alice=readers\n"
         "DBPROP prop_5=1\n");
@@ -331,11 +345,20 @@ TEST_CASE("Perms: AdsDDGetPermissions returns direct or inherited masks") {
     UNSIGNED8 user[] = "alice";
     UNSIGNED8 group[] = "readers";
 
-    REQUIRE(AdsDDGrantPermission(hConn, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+    CHECK(AdsDDGrantPermission(hConn, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+                               group, ADS_PERMISSION_READ) == openads::AE_ACCESS_DENIED);
+    ADSHANDLE hAdmin = connect_as(dir / "test.add", "admin", "adminpw");
+    REQUIRE(hAdmin != 0);
+    REQUIRE(AdsDDGrantPermission(hAdmin, ADS_DD_TABLE_OBJECT, tbl, nullptr,
                                  group,
                                  ADS_PERMISSION_READ | ADS_PERMISSION_INSERT) == 0);
-    REQUIRE(AdsDDGrantPermission(hConn, ADS_DD_TABLE_OBJECT, tbl, nullptr,
+    REQUIRE(AdsDDGrantPermission(hAdmin, ADS_DD_TABLE_OBJECT, tbl, nullptr,
                                  user, ADS_PERMISSION_INHERIT) == 0);
+
+    REQUIRE(AdsDisconnect(hAdmin) == 0);
+    REQUIRE(AdsDisconnect(hConn) == 0);
+    hConn = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(hConn != 0);
 
     UNSIGNED32 mask = 0;
     REQUIRE(AdsDDGetPermissions(hConn, user, ADS_DD_TABLE_OBJECT, tbl, nullptr,
@@ -756,4 +779,372 @@ TEST_CASE("Perms: column-level SELECT enforcement") {
     REQUIRE(AdsCloseSQLStatement(hStmt) == 0);
     REQUIRE(AdsDisconnect(hConn) == 0);
     fs::remove_all(dir);
+}
+
+TEST_CASE("Native SQL DD operation rights cannot be disabled and cover join predicate sources") {
+    auto dir = fs::temp_directory_path() / "openads_sql_dd_all_sources";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    make_dbf(dir / "hidden.dbf");
+    make_dbf(dir / "third.dbf");
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nTABLE hidden=hidden.dbf\nTABLE third=third.dbf\n"
+        "USER alice\nUSERPROP alice;prop_1101=pw\nDBPROP prop_5=1\n"
+        "TABLEPERM tbl;alice=1\nTABLEPERM hidden;alice=0\nTABLEPERM third;alice=1\n");
+    auto connection = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(connection != 0);
+    ADSHANDLE statement = 0;
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    REQUIRE(AdsStmtSetTableRights(statement, 0) == 0);
+    auto execute = [&](const std::string& text, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(text.begin(), text.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    for (const auto& text : {
+            "SELECT * FROM hidden",
+            "SELECT * FROM hidden.dbf",
+            "SELECT tbl.ID FROM tbl INNER JOIN hidden ON tbl.ID = hidden.ID",
+            "SELECT tbl.ID FROM tbl, hidden, third WHERE tbl.ID = hidden.ID AND hidden.ID = third.ID",
+            "SELECT ID FROM tbl WHERE EXISTS (SELECT ID FROM hidden)",
+            "SELECT ID FROM tbl WHERE ID IN (SELECT ID FROM hidden)",
+            "SELECT ID FROM tbl WHERE ID = (SELECT ID FROM hidden)",
+            "UPDATE tbl SET ID = 'EDIT'",
+            "DELETE FROM tbl",
+            "INSERT INTO tbl (ID) VALUES ('EDIT')"}) {
+        ADSHANDLE cursor = 0;
+        INFO(std::string(text));
+        CHECK(execute(text, &cursor) == 7200);
+        CHECK(cursor == 0);
+        UNSIGNED32 code = 0;
+        UNSIGNED8 message[2048]{};
+        UNSIGNED16 length = sizeof(message);
+        REQUIRE(AdsGetLastError(&code, message, &length) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(message)).find("NativeError = 7079") != std::string::npos);
+    }
+    ADSHANDLE cursor = 0;
+    REQUIRE(execute("SELECT ID FROM tbl", &cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Native DD SQL schema changes require administrator rather than DML permission") {
+    const auto dir = fs::temp_directory_path() / "openads_sql_dd_schema_acl";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nUSER alice\nUSERPROP alice;prop_1101=pw\n"
+        "USER admin\nUSERPROP admin;prop_1101=pw\nMEMBER admin=DB:Admin\n"
+        "DBPROP prop_5=1\nTABLEPERM tbl;alice=4\n");
+    const auto connection = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(connection != 0);
+    ADSHANDLE statement = 0;
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    for (const auto& text : {"DROP TABLE tbl", "DROP TABLE tbl.dbf",
+            "ALTER TABLE tbl ADD COLUMN EXTRA CHAR(4)",
+            "CREATE INDEX secret_idx ON tbl (ID)",
+            "DROP INDEX secret_idx ON tbl", "CREATE TABLE created (ID CHAR(4))",
+            "CREATE TABLE copied AS SELECT ID FROM tbl",
+            "CREATE DATABASE 'created.add'"}) {
+        INFO(std::string(text));
+        std::vector<UNSIGNED8> sql(text, text + std::strlen(text));
+        sql.push_back(0);
+        ADSHANDLE cursor = 0;
+        CHECK(AdsExecuteSQLDirect(statement, sql.data(), &cursor) == 7200);
+        CHECK(cursor == 0);
+        UNSIGNED32 code = 0;
+        UNSIGNED8 message[2048]{};
+        UNSIGNED16 length = sizeof(message);
+        REQUIRE(AdsGetLastError(&code, message, &length) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(message)).find("NativeError = 7079") != std::string::npos);
+        CHECK(fs::exists(dir / "tbl.dbf"));
+        CHECK_FALSE(fs::exists(dir / "tbl.cdx"));
+        CHECK_FALSE(fs::exists(dir / "created.dbf"));
+        CHECK_FALSE(fs::exists(dir / "copied.dbf"));
+        CHECK_FALSE(fs::exists(dir / "created.add"));
+    }
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    const auto admin = connect_as(dir / "test.add", "admin", "pw");
+    REQUIRE(admin != 0);
+    REQUIRE(AdsCreateSQLStatement(admin, &statement) == 0);
+    UNSIGNED8 create[] = "CREATE TABLE created (ID CHAR(4))";
+    ADSHANDLE cursor = 0;
+    REQUIRE(AdsExecuteSQLDirect(statement, create, &cursor) == 0);
+    CHECK(fs::exists(dir / "created.dbf"));
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(admin) == 0);
+    fs::remove_all(dir, error);
+}
+
+
+TEST_CASE("Native SQL column ACLs authorize expressions before materializing") {
+    using DD = openads::engine::DataDict;
+    const auto dir = fs::temp_directory_path() / "openads_sql_column_expressions";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    make_dbf4(dir / "tbl.dbf");
+    {
+        std::fstream file(dir / "tbl.dbf", std::ios::binary | std::ios::in | std::ios::out);
+        const char count[4] = {1, 0, 0, 0};
+        file.seekp(4); file.write(count, 4);
+        file.seekp(161); file.write(" ID01SHOWNAMEHIDE", 17);
+        file.put(static_cast<char>(0x1a));
+    }
+    make_dbf4(dir / "other.dbf");
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nTABLE other=other.dbf\n"
+        "USER alice\nUSERPROP alice;prop_1101=pw\nDBPROP prop_5=1\n"
+        "TABLEPERM tbl;alice=1\nTABLEPERM other;alice=1\n");
+    {
+        auto result = DD::open((dir / "test.add").string());
+        REQUIRE(result.has_value());
+        REQUIRE(result.value().grant_column_permission("tbl", "RENT", "alice", DD::DD_PERM_SELECT).has_value());
+        REQUIRE(result.value().grant_column_permission("tbl", "TENANT", "alice", DD::DD_PERM_SELECT).has_value());
+    }
+    const auto connection = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(connection != 0);
+    ADSHANDLE statement = 0;
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    auto execute = [&](const std::string& text, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(text.begin(), text.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    for (const auto& text : {
+            "SELECT DEPOSIT FROM tbl.dbf",
+            "SELECT COUNT(DEPOSIT) FROM tbl",
+            "SELECT SUM(DEPOSIT) FROM tbl",
+            "SELECT UPPER(DEPOSIT) FROM tbl",
+            "SELECT DEPOSIT + 1 FROM tbl",
+            "SELECT CASE WHEN DEPOSIT = 'hide' THEN 'yes' ELSE 'no' END FROM tbl",
+            "SELECT RENT FROM tbl WHERE DEPOSIT = 'hide'",
+            "SELECT RENT FROM tbl ORDER BY DEPOSIT",
+            "SELECT COUNT(*) FROM tbl GROUP BY DEPOSIT",
+            "SELECT COUNT(*) FROM tbl HAVING SUM(DEPOSIT) > 0",
+            "SELECT COUNT(*) FILTER (WHERE DEPOSIT = 'hide') FROM tbl",
+            "SELECT ROW_NUMBER() OVER (PARTITION BY DEPOSIT ORDER BY RENT) FROM tbl",
+            "SELECT tbl.RENT FROM tbl INNER JOIN other ON tbl.RENT = other.RENT",
+            "SELECT RENT FROM other WHERE RENT IN (SELECT DEPOSIT FROM tbl)",
+            "SELECT RENT FROM tbl WHERE EXISTS (SELECT RENT FROM other)"}) {
+        ADSHANDLE cursor = 0;
+        INFO(std::string(text));
+        CHECK(execute(text, &cursor) == 7200);
+        CHECK(cursor == 0);
+        UNSIGNED32 code = 0;
+        UNSIGNED8 message[2048]{};
+        UNSIGNED16 length = sizeof(message);
+        REQUIRE(AdsGetLastError(&code, message, &length) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(message)).find("NativeError = 7079") != std::string::npos);
+    }
+    for (const auto& text : {"SELECT RENT FROM tbl", "SELECT RENT FROM tbl.dbf",
+            "SELECT COUNT(RENT) FROM tbl", "SELECT UPPER(RENT) FROM tbl",
+            "SELECT RENT + 1 FROM tbl",
+            "SELECT RENT FROM tbl WHERE RENT = 'show' ORDER BY RENT"}) {
+        ADSHANDLE cursor = 0;
+        INFO(std::string(text));
+        REQUIRE(execute(text, &cursor) == 0);
+        REQUIRE(cursor != 0);
+        CHECK(AdsCloseTable(cursor) == 0);
+    }
+    for (const auto& text : {"SELECT * FROM tbl", "SELECT * FROM tbl.dbf"}) {
+        ADSHANDLE cursor = 0;
+        REQUIRE(execute(text, &cursor) == 0);
+        UNSIGNED16 count = 0;
+        REQUIRE(AdsGetNumFields(cursor, &count) == 0);
+        CHECK(count == 2);
+        REQUIRE(AdsGotoTop(cursor) == 0);
+        UNSIGNED8 raw[256]{};
+        UNSIGNED32 raw_length = sizeof(raw);
+        REQUIRE(AdsGetRecord(cursor, raw, &raw_length) == 0);
+        CHECK(std::string(reinterpret_cast<char*>(raw), raw_length).find("HIDE") == std::string::npos);
+        UNSIGNED8 forbidden[] = "DEPOSIT", value[32]{};
+        UNSIGNED32 value_length = sizeof(value);
+        CHECK(AdsGetString(cursor, forbidden, value, &value_length, 0) != 0);
+        CHECK(AdsCloseTable(cursor) == 0);
+    }
+    CHECK(AdsCloseSQLStatement(statement) == 0);
+    CHECK(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Native DD direct schema APIs deny nonadmin but cursor materialization is private") {
+    const auto dir = fs::temp_directory_path() / "openads_dd_native_schema_api";
+    std::error_code error;
+    fs::remove_all(dir, error); fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    {
+        std::fstream file(dir / "tbl.dbf", std::ios::binary | std::ios::in | std::ios::out);
+        const char count[4] = {1, 0, 0, 0};
+        file.seekp(4); file.write(count, 4);
+        file.seekp(65); file.write(" DATA", 5); file.put(static_cast<char>(0x1a));
+    }
+
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nUSER alice\nUSERPROP alice;prop_1101=pw\n"
+        "USER admin\nUSERPROP admin;prop_1101=pw\nMEMBER admin=DB:Admin\n"
+        "DBPROP prop_5=1\nTABLEPERM tbl;alice=4\n");
+    auto connection = connect_as(dir / "test.add", "alice", "pw");
+    REQUIRE(connection != 0);
+    UNSIGNED8 name[] = "tbl", created[] = "_srt_user", defs[] = "ID,Character,4";
+    ADSHANDLE table = 0;
+    CHECK(AdsCreateTable(connection, created, nullptr, ADS_ADT, 0, 0, 0, 0, defs, &table) == 7079);
+    CHECK_FALSE(fs::exists(dir / "_srt_user.dbf"));
+    CHECK(AdsDropTable(connection, name, 1) == 7079);
+    UNSIGNED8 add[] = "EXTRA,Character,4";
+    CHECK(AdsRestructureTable(connection, name, nullptr, 0, 0, 0, 0, add, nullptr, nullptr) == 7079);
+    REQUIRE(AdsOpenTable(connection, name, nullptr, ADS_CDX, 0, 0, 0, ADS_SHARED, &table) == 0);
+    CHECK(AdsPackTable(table) == 7079);
+    CHECK(AdsZapTable(table) == 7079);
+    CHECK(AdsReindex(table) == 7079);
+    UNSIGNED8 bag[] = "tbl.cdx", tag[] = "TEST", expr[] = "ID";
+    ADSHANDLE index = 0;
+    CHECK(AdsCreateIndex61(table, bag, tag, expr, nullptr, nullptr, ADS_COMPOUND, 512, &index) == 7079);
+    CHECK_FALSE(fs::exists(dir / "tbl.cdx"));
+    REQUIRE(AdsCloseTable(table) == 0);
+    ADSHANDLE statement = 0, cursor = 0;
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    UNSIGNED8 sql[] = "SELECT ID FROM tbl ORDER BY ID";
+    REQUIRE(AdsExecuteSQLDirect(statement, sql, &cursor) == 0);
+    REQUIRE(cursor != 0);
+    CHECK(AdsPackTable(cursor) == 0);
+    CHECK(AdsZapTable(cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    CHECK(fs::exists(dir / "tbl.dbf"));
+    connection = connect_as(dir / "test.add", "admin", "pw");
+    REQUIRE(connection != 0);
+    REQUIRE(AdsCreateTable(connection, created, nullptr, ADS_ADT, 0, 0, 0, 0, defs, &table) == 0);
+    REQUIRE(AdsCloseTable(table) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Native DD row APIs ignore rights bypass and caller alias") {
+    const auto dir = fs::temp_directory_path() / "openads_native_row_acl";
+    std::error_code error;
+    fs::remove_all(dir, error); fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf");
+    {
+        std::fstream file(dir / "tbl.dbf", std::ios::binary | std::ios::in | std::ios::out);
+        const char count[4] = {1, 0, 0, 0};
+        file.seekp(4); file.write(count, 4);
+        file.seekp(65); file.write(" DATA", 5); file.put(static_cast<char>(0x1a));
+    }
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nUSER alice\nUSERPROP alice;prop_1101=pw\n"
+        "DBPROP prop_5=1\nTABLEPERM tbl;alice=1\n");
+    ADSHANDLE connection = connect_as(dir / "test.add", "alice", "pw"), table = 0;
+    REQUIRE(connection != 0);
+    UNSIGNED8 name[] = "tbl.dbf", alias[] = "public", field[] = "ID", value[] = "LEAK";
+    REQUIRE(AdsOpenTable(connection, name, alias, ADS_CDX, 0, 0, 0, ADS_SHARED, &table) == 0);
+    REQUIRE(AdsGotoTop(table) == 0);
+    CHECK(AdsSetString(table, field, value, 4) == 7079);
+    CHECK(AdsSetLong(table, field, 123) == 7079);
+    CHECK(AdsSetFieldRaw(table, field, value, 4) == 7079);
+    CHECK(AdsSetRecord(table, value, 4) == 7079);
+    CHECK(AdsAppendRecord(table) == 7079);
+    CHECK(AdsDeleteRecord(table) == 7079);
+    CHECK(AdsRecallRecord(table) == 7079);
+    UNSIGNED8 output[32]{}; UNSIGNED32 length = sizeof(output);
+    CHECK(AdsGetString(table, field, output, &length, 0) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(output), 4) == "DATA");
+    UNSIGNED8 copy[] = "copied.dbf";
+    CHECK(AdsCopyTable(table, 0, copy) == 7079);
+    CHECK(AdsCopyTableStructure(table, copy) == 7079);
+    CHECK_FALSE(fs::exists(dir / "copied.dbf"));
+    REQUIRE(AdsCloseTable(table) == 0); REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Native DD raw row reads cannot bypass column grants") {
+    using DD = openads::engine::DataDict;
+    const auto dir = fs::temp_directory_path() / "openads_native_column_acl";
+    std::error_code error;
+    fs::remove_all(dir, error); fs::create_directories(dir);
+    make_dbf4(dir / "tbl.dbf");
+    {
+        std::fstream file(dir / "tbl.dbf", std::ios::binary | std::ios::in | std::ios::out);
+        const char count[4] = {1, 0, 0, 0};
+        file.seekp(4); file.write(count, 4);
+        file.seekp(161); file.write(" ID01SHOWNAMEHIDE", 17); file.put(static_cast<char>(0x1a));
+    }
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nUSER alice\nUSERPROP alice;prop_1101=pw\n"
+        "DBPROP prop_5=1\nTABLEPERM tbl;alice=1\n");
+    {
+        auto dd = DD::open((dir / "test.add").string()); REQUIRE(dd.has_value());
+        REQUIRE(dd.value().grant_column_permission("tbl", "RENT", "alice", DD::DD_PERM_SELECT).has_value());
+    }
+    auto connection = connect_as(dir / "test.add", "alice", "pw"); REQUIRE(connection != 0);
+    auto table = open_tbl(connection, 0, ADS_READONLY); REQUIRE(table != 0);
+    REQUIRE(AdsGotoTop(table) == 0);
+    UNSIGNED8 field[] = "DEPOSIT", allowed[] = "RENT", value[256]{};
+    UNSIGNED32 length = sizeof(value);
+    CHECK(AdsGetString(table, field, value, &length, 0) == 7079);
+    length = sizeof(value); CHECK(AdsGetFieldRaw(table, field, value, &length) == 7079);
+    length = sizeof(value); CHECK(AdsGetRecord(table, value, &length) == 7079);
+    UNSIGNED32 crc = 0; CHECK(AdsGetRecordCRC(table, &crc, 0) == 7079);
+    length = sizeof(value); CHECK(AdsGetString(table, allowed, value, &length, 0) == 0);
+    CHECK(std::string(reinterpret_cast<char*>(value), 4) == "SHOW");
+    REQUIRE(AdsCloseTable(table) == 0); REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Native DD index deletion and copy destination require authority") {
+    const auto dir = fs::temp_directory_path() / "openads_native_index_copy_acl";
+    std::error_code error;
+    fs::remove_all(dir, error); fs::create_directories(dir);
+    make_dbf(dir / "tbl.dbf"); make_dbf(dir / "dst.dbf");
+    openads_test::make_dd(dir / "test.add",
+        "TABLE tbl=tbl.dbf\nTABLE dst=dst.dbf\nUSER alice\nUSERPROP alice;prop_1101=pw\n"
+        "USER admin\nUSERPROP admin;prop_1101=pw\nMEMBER admin=DB:Admin\n"
+        "DBPROP prop_5=1\nTABLEPERM tbl;alice=4\nTABLEPERM dst;alice=1\n");
+    auto admin = connect_as(dir / "test.add", "admin", "pw"); REQUIRE(admin != 0);
+    auto table = open_tbl(admin, 0); REQUIRE(table != 0);
+    UNSIGNED8 bag[] = "tbl.cdx", tag[] = "IDTAG", expression[] = "ID";
+    ADSHANDLE index = 0;
+    REQUIRE(AdsCreateIndex61(table, bag, tag, expression, nullptr, nullptr, ADS_COMPOUND, 512, &index) == 0);
+    REQUIRE(AdsCloseTable(table) == 0); REQUIRE(AdsDisconnect(admin) == 0);
+    auto alice = connect_as(dir / "test.add", "alice", "pw"); REQUIRE(alice != 0);
+    table = open_tbl(alice, 0); REQUIRE(table != 0);
+    ADSHANDLE indexes[10]{}; UNSIGNED16 count = 10;
+    REQUIRE(AdsOpenIndex(table, bag, indexes, &count) == 0); REQUIRE(count > 0);
+    ADSHANDLE created_index = 0;
+    CHECK(AdsCreateIndex(table, bag, tag, expression, nullptr, ADS_COMPOUND, ADS_STRING, &created_index) == 7079);
+    CHECK(AdsDeleteIndex(indexes[0]) == 7079);
+    CHECK(AdsAddCustomKey(indexes[0]) == 7079);
+    CHECK(AdsDeleteCustomKey(indexes[0]) == 7079);
+    UNSIGNED8 destination[] = "dst"; ADSHANDLE target = 0;
+    REQUIRE(AdsOpenTable(alice, destination, nullptr, ADS_CDX, 0, 0, 0, ADS_SHARED, &target) == 0);
+    CHECK(AdsCopyTableContents(table, target, 0) == 7079);
+    CHECK(AdsCopyTableContent(table, target) == 7079);
+    REQUIRE(AdsCloseTable(target) == 0); REQUIRE(AdsCloseTable(table) == 0);
+    REQUIRE(AdsDisconnect(alice) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Native free-table copy rejects paths outside the data root") {
+    const auto dir = fs::temp_directory_path() / "openads_native_copy_jail";
+    const auto outside = fs::temp_directory_path() / "openads_native_copy_sentinel.dbf";
+    std::error_code error;
+    fs::remove_all(dir, error); fs::create_directories(dir); make_dbf(dir / "tbl.dbf");
+    std::ofstream(outside) << "sentinel";
+    auto connection = connect_as(dir, nullptr, nullptr); REQUIRE(connection != 0);
+    auto table = open_tbl(connection, 0); REQUIRE(table != 0);
+    auto path = outside.string(); std::vector<UNSIGNED8> name(path.begin(), path.end()); name.push_back(0);
+    CHECK(AdsCopyTable(table, 0, name.data()) == 7079);
+    CHECK(AdsCopyTableStructure(table, name.data()) == 7079);
+    std::ifstream input(outside); std::string contents; input >> contents;
+    CHECK(contents == "sentinel");
+    REQUIRE(AdsCloseTable(table) == 0); REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error); fs::remove(outside, error);
 }

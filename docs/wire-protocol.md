@@ -1325,3 +1325,72 @@ ads_dd_create_trigger($conn,
 
 ads_disconnect($conn);
 ```
+
+
+## Safe listener defaults (security hardening)
+
+`openads_serverd` now binds `127.0.0.1` by default, including the setup
+wizard. Explicit `host` values in existing INI files still override this default. Existing clients and wire payloads are unchanged.
+A non-loopback bind without `auth_user` is rejected unless the operator
+explicitly selects `--allow_anonymous` (`allow_anonymous=true` in INI).
+The same gate applies to an enabled Studio listener without `http_user`.
+All non-loopback TCP listeners emit a cleartext warning, including those
+with authentication. **This is exposure mitigation, not native TLS**:
+use the documented TLS proxy, and firewall its cleartext backend so only
+the proxy can reach it. Do not expose TCP credentials to untrusted networks.
+## Server credential storage
+
+Credentials supplied with `auth_user` are converted at registration into salted
+PBKDF2-HMAC-SHA256 verifiers (100,000 iterations, 128-bit OS-generated salt).
+Authentication compares the derived fixed-size verifier in constant time.
+The wire protocol is unchanged. This does not hide secrets supplied in argv
+or INI and does not encrypt TCP. Dictionary password migration is separate.
+
+
+Login failures are tracked across connections by peer IP and username in a
+bounded registry. Retrying before the exponential 1-60 second cooldown expires
+is rejected without sleeping a worker. At the configured failure threshold the
+block is 5 minutes; inactive counters expire after 15 minutes. The default is
+5 failures. Dictionary `ADS_DD_MAX_FAILED_ATTEMPTS` (`prop_11`, decimal or u16)
+sets a threshold clamped to 1-100; zero retains the safe default. An attacker
+may still deny login to a known account; this is a trade-off of account lockout.
+Behind a TCP proxy all clients may share the proxy IP. Tune deployment and
+consider dedicated source-IP-preserving proxies; no forwarded-IP header is trusted.
+## Dictionary administration authority
+
+Named dictionary logins must verify their password even when LOG_IN_REQUIRED
+is disabled. Remote dictionary writes (user/group CRUD, property changes,
+permissions and metadata) require verified DB:Admin membership, including
+AdsSys. Mutating built-in stored procedures enforce the same check at dispatch.
+CREATE PROCEDURE registering a native DLL requires administrator authority.
+Anonymous local setup retains compatibility; anonymous remote setup is denied.
+This closes authorization bypasses, not application SQL concatenation: clients
+must still bind values rather than concatenate untrusted strings into SQL.
+
+## Session resource and authentication boundaries
+
+Before successful Connect, frames are limited to 64 KiB and only Hello,
+Connect, MgConnect and Disconnect are accepted. After Connect the existing 16 MiB cap
+remains. Connect rejects embedded NULs, malformed optional capability tails,
+and a second Connect on the same session. Coalesced frames are dispatched
+one by one, so a failed Connect cannot authorize a following operation.
+Handshake deadline is 30 seconds; idle deadline is 5 minutes; an incomplete
+frame has an absolute 30-second deadline, so drip-feeding cannot keep it alive.
+Sessions may open at most 256 tables/cursors and create 64 named mutexes.
+**Compatibility change:** remote Mutex Lock no longer waits on contention:
+it fails immediately (the caller must retry). Even a 30-second wait would
+block a reactor worker and all of its other sessions. Local MutexManager's
+API is unchanged. SetFields counts are validated against remaining bytes
+before reserve and capped at 2048 fields per batch.
+
+Explicit and AppendBlank record locks are capped at 4096 per session; SQL-generated append locks remain under review.
+
+
+Management handshake: MgConnect accepts [u16 user_len][user] followed by
+[u16 password_len][password]. The password tail is required when server
+credentials are configured. Legacy empty/user-only handshakes are restricted
+to loopback read-only snapshots when no server credentials exist. Mutating
+management requests require a verified server credential on that same socket.
+A management connection cannot switch to database operations. New AdsMgConnect
+clients resend the verified credential handshake for each snapshot/mutator.
+Like database Connect, these credentials require TLS protection in transit.

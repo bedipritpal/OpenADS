@@ -1,6 +1,9 @@
 #include "doctest.h"
+#include "test_dd_make.h"
 #include "openads/ace.h"
 #include "engine/data_dict.h"
+#include "engine/sql_input_limits.h"
+#include "engine/sql_work_limits.h"
 #include "network/client.h"
 #include "network/server.h"
 #include "network/socket.h"
@@ -1782,6 +1785,97 @@ TEST_CASE("Network failed Connect does not authorize a coalesced management muta
     server.stop();
 }
 
+TEST_CASE("Network aggregate rejects invalid function and excessive specs") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_aggregate_limits";
+    fs::create_directories(dir);
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0));
+    auto connection = connect_tcp("127.0.0.1", server.port());
+    REQUIRE(connection);
+    Socket socket = connection.value();
+    Frame request;
+    request.opcode = Opcode::Connect;
+    const auto path = dir.string();
+    request.payload = {static_cast<std::uint8_t>(path.size()), static_cast<std::uint8_t>(path.size() >> 8)};
+    request.payload.insert(request.payload.end(), path.begin(), path.end());
+    request.payload.insert(request.payload.end(), {0, 0, 0, 0});
+    REQUIRE(write_frame(socket, request));
+    auto response = read_frame(socket);
+    REQUIRE(response);
+    REQUIRE(response.value().opcode == Opcode::ConnectAck);
+    request.opcode = Opcode::Aggregate;
+    for (const auto& payload : {
+            std::vector<std::uint8_t>{1, 0, 0, 0, 0, 0, 1, 255, 0},
+            std::vector<std::uint8_t>{1, 0, 0, 0, 0, 0, 33}}) {
+        request.payload = payload;
+        REQUIRE(write_frame(socket, request));
+        response = read_frame(socket);
+        REQUIRE(response);
+        CHECK(response.value().opcode == Opcode::Error);
+        REQUIRE(response.value().payload.size() >= 4);
+        const std::string message(response.value().payload.begin() + 4, response.value().payload.end());
+        CHECK(message.find("Aggregate:") != std::string::npos);
+        CHECK(message.find("bad table id") == std::string::npos);
+    }
+    sock_close(socket);
+    server.stop();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("Remote SQL input resource shape ignores literals and comments") {
+    using openads::engine::validate_remote_sql_input;
+    CHECK(validate_remote_sql_input("SELECT '" + std::string(1000, '(') + "'"));
+    CHECK(validate_remote_sql_input("SELECT [" + std::string(1000, '(') + "]"));
+    CHECK(validate_remote_sql_input("SELECT 1 /*" + std::string(1000, '(') + "*/"));
+    CHECK(validate_remote_sql_input("SELECT 1 --" + std::string(1000, '(')));
+    CHECK_FALSE(validate_remote_sql_input("SELECT " + std::string(129, '(') + "1" + std::string(129, ')')));
+    CHECK_FALSE(validate_remote_sql_input(std::string(1024u * 1024u + 1, 'x')));
+    CHECK_FALSE(validate_remote_sql_input(std::string("SELECT 1\0DROP TABLE users", 25)));
+    std::string long_query = "SELECT 1";
+    for (int i = 0; i < 3000; ++i) long_query += " + 1";
+    CHECK_FALSE(validate_remote_sql_input(long_query));
+}
+
+TEST_CASE("Network ExecuteSQL rejects embedded NUL and excessive nesting") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_sql_input_limits";
+    fs::create_directories(dir);
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0));
+    auto connection = connect_tcp("127.0.0.1", server.port());
+    REQUIRE(connection);
+    Socket socket = connection.value();
+    Frame request;
+    request.opcode = Opcode::Connect;
+    const auto path = dir.string();
+    request.payload = {static_cast<std::uint8_t>(path.size()), static_cast<std::uint8_t>(path.size() >> 8)};
+    request.payload.insert(request.payload.end(), path.begin(), path.end());
+    request.payload.insert(request.payload.end(), {0, 0, 0, 0});
+    REQUIRE(write_frame(socket, request));
+    auto response = read_frame(socket);
+    REQUIRE(response);
+    REQUIRE(response.value().opcode == Opcode::ConnectAck);
+    request.opcode = Opcode::ExecuteSQL;
+    for (const auto& sql : {
+            std::string("SELECT 1\0DROP TABLE users", 25),
+            "SELECT " + std::string(129, '(') + "1" + std::string(129, ')')}) {
+        request.payload.assign(sql.begin(), sql.end());
+        REQUIRE(write_frame(socket, request));
+        response = read_frame(socket);
+        REQUIRE(response);
+        CHECK(response.value().opcode == Opcode::Error);
+        REQUIRE(response.value().payload.size() >= 4);
+        const std::string message(response.value().payload.begin() + 4, response.value().payload.end());
+        CHECK(message.find("SQL ") == 0);
+    }
+    sock_close(socket);
+    server.stop();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 #if defined(OPENADS_WITH_TLS)
 #include "network/tls_transport.h"
 #include "network/worker_pool.h"
@@ -1968,5 +2062,450 @@ TEST_CASE("daemon policy preserves AdsConnect60 authenticated table reads") {
     REQUIRE(AdsDisconnect(hConn) == 0);
 
     srv.stop();
+}
+
+TEST_CASE("remote SQL shape budget checks overflow and conservative outer-join fanout") {
+    using Budget = openads::engine::RemoteSqlShapeBudget;
+    Budget boundary;
+    CHECK(boundary.add_source(100000, 16).has_value());
+    Budget too_many;
+    CHECK_FALSE(too_many.add_source(100001, 16).has_value());
+    Budget join;
+    REQUIRE(join.add_source(1000, 16).has_value());
+    CHECK_FALSE(join.add_source(1000, 16).has_value());
+    Budget wide;
+    CHECK_FALSE(wide.add_source(100000, 1024).has_value());
+    Budget empty_outer;
+    REQUIRE(empty_outer.add_source(0, 16).has_value());
+    CHECK_FALSE(empty_outer.add_source(100001, 16).has_value());
+    Budget huge;
+    CHECK_FALSE(huge.add_source(UINT64_MAX, UINT64_MAX).has_value());
+}
+
+TEST_CASE("remote SQL join preflight rejects fanout before materialization; local unchanged") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_sql_join_budget";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "a.dbf", std::vector<std::string>(400, "SAME"));
+    m12_write_dbf(dir / "b.dbf", std::vector<std::string>(400, "SAME"));
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + dir.string();
+    ADSHANDLE connection = 0, statement = 0;
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri.data()), ADS_REMOTE_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    auto execute = [&](const std::string& query, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(query.begin(), query.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    ADSHANDLE cursor = 0;
+    CHECK(execute("SELECT a.TAG FROM a.dbf a INNER JOIN b.dbf b ON a.TAG = b.TAG", &cursor) != 0);
+    CHECK(cursor == 0);
+    REQUIRE(execute("SELECT COUNT(*) FROM a.dbf", &cursor) == 0);
+    REQUIRE(cursor != 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    server.stop();
+    // Direct local SQL remains available for larger trusted batch work.
+    std::string local = dir.string();
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(local.data()), ADS_LOCAL_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    REQUIRE(execute("SELECT COUNT(*) FROM a.dbf a INNER JOIN b.dbf b ON a.TAG = b.TAG", &cursor) == 0);
+    REQUIRE(cursor != 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("remote DML target preflight rejects before any row changes and keeps connection usable") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_sql_dml_budget";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "big.dbf", std::vector<std::string>(100001, "SAME"));
+    m12_write_dbf(dir / "small.dbf", {"SAME"});
+    auto read_bytes = [](const fs::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(file), {});
+    };
+    const auto original = read_bytes(dir / "big.dbf");
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + dir.string();
+    ADSHANDLE connection = 0, statement = 0;
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri.data()), ADS_REMOTE_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    auto execute = [&](const std::string& query, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(query.begin(), query.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    for (const auto& query : {
+            "UPDATE big.dbf SET TAG = 'EDIT'",
+            "DELETE FROM big.dbf",
+            "MERGE INTO big.dbf ON TAG = 'SAME' WHEN MATCHED THEN UPDATE SET TAG = 'EDIT'"}) {
+        ADSHANDLE cursor = 0;
+        INFO(std::string(query));
+        CHECK(execute(query, &cursor) != 0);
+        CHECK(cursor == 0);
+        UNSIGNED32 code = 0;
+        UNSIGNED16 length = 2048;
+        UNSIGNED8 message[2048]{};
+        REQUIRE(AdsGetLastError(&code, message, &length) == 0);
+        // ExecuteSQL intentionally returns generic text over the wire.
+        CHECK(code == 7200);
+        CHECK(std::string(reinterpret_cast<char*>(message)).find("server-side exec failed") != std::string::npos);
+    }
+    ADSHANDLE cursor = 0;
+    REQUIRE(execute("UPDATE small.dbf SET TAG = 'EDIT'", &cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    server.stop();
+    CHECK(read_bytes(dir / "big.dbf") == original);
+    // Trusted local batch scan remains available, even above the remote bound.
+    std::string local = dir.string();
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(local.data()), ADS_LOCAL_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    REQUIRE(execute("UPDATE big.dbf SET TAG = 'EDIT' WHERE TAG = 'NONE'", &cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("remote SQL UNION additive budget checks rows bytes and overflow") {
+    using Budget = openads::engine::RemoteSqlUnionBudget;
+    Budget rows;
+    REQUIRE(rows.add(60000, 16).has_value());
+    CHECK_FALSE(rows.add(60000, 16).has_value());
+    Budget bytes;
+    REQUIRE(bytes.add(40000, 1024).has_value());
+    CHECK_FALSE(bytes.add(40000, 1024).has_value());
+    Budget exact;
+    REQUIRE(exact.add(100000, 16).has_value());
+    CHECK(exact.add(0, 16).has_value());
+    CHECK_FALSE(exact.add(1, 16).has_value());
+    Budget overflow;
+    CHECK_FALSE(overflow.add(UINT64_MAX, UINT64_MAX).has_value());
+}
+
+TEST_CASE("remote UNION rejects combined staging even when each member fits; local unchanged") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_sql_union_budget";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "a.dbf", std::vector<std::string>(60000, "SAME"));
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + dir.string();
+    ADSHANDLE connection = 0, statement = 0;
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri.data()), ADS_REMOTE_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    auto execute = [&](const std::string& query, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(query.begin(), query.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    ADSHANDLE cursor = 0;
+    for (const auto& query : {
+            "SELECT TAG FROM a.dbf UNION ALL SELECT TAG FROM a.dbf",
+            "SELECT TAG FROM a.dbf UNION SELECT TAG FROM a.dbf"}) {
+        INFO(std::string(query));
+        CHECK(execute(query, &cursor) != 0);
+        CHECK(cursor == 0);
+        UNSIGNED32 code = 0;
+        UNSIGNED16 length = 2048;
+        UNSIGNED8 message[2048]{};
+        REQUIRE(AdsGetLastError(&code, message, &length) == 0);
+        CHECK(code == 7200);
+        CHECK(std::string(reinterpret_cast<char*>(message)).find("server-side exec failed") != std::string::npos);
+    }
+    REQUIRE(execute("SELECT COUNT(*) FROM a.dbf", &cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    server.stop();
+    std::string local = dir.string();
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(local.data()), ADS_LOCAL_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    REQUIRE(execute("SELECT TAG FROM a.dbf UNION ALL SELECT TAG FROM a.dbf", &cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("remote predicate subquery preflight rejects quadratic scans before cursor exposure") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_sql_predicate_budget";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "a.dbf", std::vector<std::string>(1001, "SAME"));
+    m12_write_dbf(dir / "b.dbf", std::vector<std::string>(1001, "SAME"));
+    m12_write_dbf(dir / "small.dbf", {"SAME"});
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + dir.string();
+    ADSHANDLE connection = 0, statement = 0;
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri.data()), ADS_REMOTE_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    auto execute = [&](const std::string& query, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(query.begin(), query.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    for (const auto& query : {
+            "SELECT TAG FROM a.dbf WHERE EXISTS (SELECT TAG FROM b.dbf WHERE TAG = 'NONE')",
+            "SELECT TAG FROM a.dbf WHERE TAG IN (SELECT TAG FROM b.dbf)",
+            "SELECT TAG FROM a.dbf WHERE TAG = (SELECT TAG FROM b.dbf)"}) {
+        ADSHANDLE cursor = 0;
+        INFO(std::string(query));
+        CHECK(execute(query, &cursor) == 7200);
+        CHECK(cursor == 0);
+    }
+    ADSHANDLE cursor = 0;
+    REQUIRE(execute("SELECT TAG FROM small.dbf WHERE EXISTS (SELECT TAG FROM b.dbf)", &cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    server.stop();
+    std::string local = dir.string();
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(local.data()), ADS_LOCAL_SERVER,
+                        nullptr, nullptr, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    REQUIRE(execute("SELECT TAG FROM a.dbf WHERE TAG IN (SELECT TAG FROM b.dbf)", &cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("remote SQL DD named-user rights reject ignored-rights join and inline subquery") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_remote_sql_dd_acl";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "allowed.dbf", {"SAME"});
+    m12_write_dbf(dir / "hidden.dbf", {"SECR"});
+    openads_test::make_dd(dir / "test.add",
+        "TABLE allowed=allowed.dbf\nTABLE hidden=hidden.dbf\n"
+        "USER alice\nUSERPROP alice;prop_1101=pw\nDBPROP prop_5=1\n"
+        "TABLEPERM allowed;alice=1\nTABLEPERM hidden;alice=0\n");
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + (dir / "test.add").string();
+    UNSIGNED8 user[] = "alice", password[] = "pw";
+    ADSHANDLE connection = 0, statement = 0;
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri.data()), ADS_REMOTE_SERVER,
+                        user, password, 0, &connection) == 0);
+    REQUIRE(AdsCreateSQLStatement(connection, &statement) == 0);
+    auto execute = [&](const std::string& text, ADSHANDLE* cursor) {
+        std::vector<UNSIGNED8> sql(text.begin(), text.end());
+        sql.push_back(0);
+        return AdsExecuteSQLDirect(statement, sql.data(), cursor);
+    };
+    for (const auto& text : {
+            "SELECT * FROM hidden",
+            "SELECT allowed.TAG FROM allowed INNER JOIN hidden ON allowed.TAG = hidden.TAG",
+            "SELECT TAG FROM allowed WHERE EXISTS (SELECT TAG FROM hidden)",
+            "UPDATE allowed SET TAG = 'EDIT'",
+            "DROP TABLE allowed", "ALTER TABLE allowed ADD COLUMN EXTRA CHAR(4)",
+            "CREATE TABLE denied (TAG CHAR(4))", "CREATE INDEX denied ON allowed (TAG)",
+            "CREATE DATABASE 'denied.add'"}) {
+        ADSHANDLE cursor = 0;
+        INFO(std::string(text));
+        CHECK(execute(text, &cursor) == 7200);
+        CHECK(cursor == 0);
+    }
+    ADSHANDLE cursor = 0;
+    CHECK(fs::exists(dir / "allowed.dbf"));
+    CHECK_FALSE(fs::exists(dir / "denied.dbf"));
+    CHECK_FALSE(fs::exists(dir / "denied.add"));
+    REQUIRE(execute("SELECT TAG FROM allowed", &cursor) == 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(connection) == 0);
+    server.stop();
+    fs::remove_all(dir, error);
+}
+
+
+TEST_CASE("wire DD table rights authorize direct engine reads writes and maintenance") {
+    namespace fs = std::filesystem;
+    using DD = openads::engine::DataDict;
+    const auto dir = fs::temp_directory_path() / "openads_wire_dd_table_acl";
+    std::error_code error;
+    fs::remove_all(dir, error);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "readable.dbf", {"READ"});
+    m12_write_dbf(dir / "hidden.dbf", {"HIDE"});
+    m12_write_dbf(dir / "columns.dbf", {"COLS"});
+    m12_write_dbf(dir / "writable.dbf", {"EDIT"});
+    openads_test::make_dd(dir / "test.add",
+        "TABLE readable=readable.dbf\nTABLE hidden=hidden.dbf\n"
+        "TABLE columns=columns.dbf\nTABLE writable=writable.dbf\n"
+        "USER alice\nUSERPROP alice;prop_1101=pw\nDBPROP prop_5=1\n"
+        "TABLEPERM readable;alice=1\nTABLEPERM hidden;alice=0\n"
+        "TABLEPERM columns;alice=1\nTABLEPERM writable;alice=3\n");
+    {
+        auto result = DD::open((dir / "test.add").string());
+        REQUIRE(result.has_value());
+        REQUIRE(result.value().grant_column_permission("columns", "TAG", "alice", DD::DD_PERM_SELECT).has_value());
+    }
+    Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + (dir / "test.add").string();
+    UNSIGNED8 user[] = "alice", password[] = "pw";
+    ADSHANDLE connection = 0;
+    REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri.data()), ADS_REMOTE_SERVER,
+                        user, password, 0, &connection) == 0);
+    auto open = [&](const std::string& name, ADSHANDLE* table) {
+        std::vector<UNSIGNED8> bytes(name.begin(), name.end()); bytes.push_back(0);
+        return AdsOpenTable(connection, bytes.data(), nullptr, ADS_CDX, 0, 0, 0, ADS_SHARED, table);
+    };
+    for (const auto& name : {"hidden", "hidden.dbf", "columns", "columns.dbf"}) {
+        ADSHANDLE table = 0;
+        INFO(std::string(name));
+        CHECK(open(name, &table) == 7079);
+        CHECK(table == 0);
+    }
+    ADSHANDLE table = 0;
+    REQUIRE(open("readable", &table) == 0);
+    REQUIRE(AdsGotoTop(table) == 0);
+    UNSIGNED8 field[] = "TAG", value[] = "FAIL";
+    CHECK(AdsSetString(table, field, value, 4) == 7079);
+    CHECK(AdsAppendRecord(table) == 7079);
+    CHECK(AdsDeleteRecord(table) == 7079);
+    CHECK(AdsLockRecord(table, 1) == 7079);
+    CHECK(AdsZapTable(table) == 7079);
+    CHECK(AdsPackTable(table) == 7079);
+    CHECK(AdsReindex(table) == 7079);
+    REQUIRE(AdsCloseTable(table) == 0);
+    REQUIRE(open("writable", &table) == 0);
+    REQUIRE(AdsGotoTop(table) == 0);
+    REQUIRE(AdsLockRecord(table, 1) == 0);
+    UNSIGNED8 edit[] = "PASS";
+    CHECK(AdsSetString(table, field, edit, 4) == 0);
+    CHECK(AdsFlushFileBuffers(table) == 0);
+    REQUIRE(AdsCloseTable(table) == 0);
+    UNSIGNED8 name[] = "hidden";
+    CHECK(AdsDropTable(connection, name, 1) == 7079);
+    CHECK(fs::exists(dir / "hidden.dbf"));
+    REQUIRE(AdsDisconnect(connection) == 0);
+    server.stop();
+    fs::remove_all(dir, error);
+}
+
+TEST_CASE("Fetch and FetchWhere refuse values beyond u16 without truncation") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_fetch_wire_limits";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    std::string root = dir.string();
+    std::vector<UNSIGNED8> rootbuf(root.begin(), root.end());
+    rootbuf.push_back(0);
+    ADSHANDLE local = 0, table = 0;
+    REQUIRE(AdsConnect60(rootbuf.data(), ADS_LOCAL_SERVER, nullptr, nullptr, 0, &local) == 0);
+    UNSIGNED8 name[] = "limits.dbf", definition[] = "TEXT,M,10,0", field[] = "TEXT";
+    REQUIRE(AdsCreateTable(local, name, nullptr, ADS_CDX, 0, 0, 0, 0, definition, &table) == 0);
+    for (std::size_t size : {65535u, 65536u, 70000u}) {
+        std::string value(size, 'X');
+        REQUIRE(AdsAppendRecord(table) == 0);
+        REQUIRE(AdsSetString(table, field, reinterpret_cast<UNSIGNED8*>(value.data()),
+                             static_cast<UNSIGNED32>(value.size())) == 0);
+        REQUIRE(AdsWriteRecord(table) == 0);
+    }
+    REQUIRE(AdsCloseTable(table) == 0);
+    REQUIRE(AdsDisconnect(local) == 0);
+    openads::network::Server server;
+    REQUIRE(server.start("127.0.0.1", 0));
+    openads::network::RemoteConnection client;
+    REQUIRE(client.connect("127.0.0.1", server.port(), root));
+    const auto opened = client.open_table("limits.dbf");
+    REQUIRE(opened);
+    const auto id = opened.value().id;
+    for (int mode = 0; mode < 2; ++mode) {
+        REQUIRE(client.goto_record(id, 1));
+        if (mode == 0) {
+            auto good = client.fetch_batch(id, 1, {"TEXT"});
+            REQUIRE(good);
+            REQUIRE(good.value().size() == 1);
+            CHECK(good.value()[0][0] == std::string(65535, 'X'));
+        } else {
+            auto good = client.fetch_where(id, 1, "", {"TEXT"});
+            REQUIRE(good);
+            REQUIRE(good.value().rows.size() == 1);
+            CHECK(good.value().rows[0][0] == std::string(65535, 'X'));
+        }
+        for (std::uint32_t row : {2u, 3u}) {
+            REQUIRE(client.goto_record(id, row));
+            if (mode == 0) CHECK_FALSE(client.fetch_batch(id, 1, {"TEXT"}));
+            else CHECK_FALSE(client.fetch_where(id, 1, "", {"TEXT"}));
+        }
+    }
+    auto cursor = client.execute_sql("SELECT TEXT FROM limits");
+    REQUIRE(cursor);
+    REQUIRE(client.goto_top(cursor.value()));
+    auto cursor_good = client.fetch_batch(cursor.value(), 1, {"TEXT"});
+    REQUIRE(cursor_good);
+    REQUIRE(cursor_good.value().size() == 1);
+    CHECK(cursor_good.value()[0][0] == std::string(65535, 'X'));
+    CHECK_FALSE(client.fetch_batch(cursor.value(), 1, {"TEXT"}));
+    REQUIRE(client.goto_top(cursor.value()));
+    CHECK_FALSE(client.fetch_batch(cursor.value(), 1, {"MISSING"}));
+    REQUIRE(client.close_table(cursor.value()));
+    REQUIRE(client.goto_record(id, 1));
+    CHECK_FALSE(client.fetch_batch(id, 1, {"MISSING"}));
+    CHECK_FALSE(client.fetch_where(id, 1, "", {"MISSING"}));
+    REQUIRE(client.close_table(id));
+    client.disconnect();
+    server.stop();
+    fs::remove_all(dir, ec);
+}
+
+#include "engine/sql_execution_budget.h"
+
+TEST_CASE("SQL execution budget returns failure rather than a partial success cursor") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_sql_shared_steps";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB", "CCCC"});
+    auto root = dir.string();
+    std::vector<UNSIGNED8> path(root.begin(), root.end());
+    path.push_back(0);
+    ADSHANDLE conn = 0, statement = 0;
+    REQUIRE(AdsConnect60(path.data(), ADS_LOCAL_SERVER, nullptr, nullptr, 0, &conn) == 0);
+    REQUIRE(AdsCreateSQLStatement(conn, &statement) == 0);
+    UNSIGNED8 sql[] = "SELECT TAG FROM data WHERE TAG <> 'NOPE' ORDER BY TAG";
+    ADSHANDLE cursor = 0;
+    {
+        openads::engine::SqlExecutionScope small(true, 2, 60000);
+        CHECK(AdsExecuteSQLDirect(statement, sql, &cursor) != 0);
+        CHECK(cursor == 0);
+        CHECK(openads::engine::sql_execution_exhausted());
+    }
+    REQUIRE(AdsExecuteSQLDirect(statement, sql, &cursor) == 0);
+    REQUIRE(cursor != 0);
+    REQUIRE(AdsCloseTable(cursor) == 0);
+    REQUIRE(AdsCloseSQLStatement(statement) == 0);
+    REQUIRE(AdsDisconnect(conn) == 0);
     fs::remove_all(dir, ec);
 }

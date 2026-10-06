@@ -92,6 +92,7 @@ private:
     std::unordered_map<std::string, Cursor> cursors_;  // key: upper-cased
     std::unique_ptr<SqlCursor> last_select_;  // → ExecResult::last_select
     std::string user_;
+
     Value err_code_;   // __errcode / __errtext inside CATCH
     Value err_text_;
 

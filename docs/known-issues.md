@@ -164,3 +164,29 @@ just quarantine; until then the quarantine holds the gate.
   fixed v1.5.1 (Fase 2).
 
 See `CHANGELOG.md` for the full per-release breakdown.
+
+## Safe listener defaults (security hardening)
+
+`openads_serverd` now binds `127.0.0.1` by default, including the setup
+wizard. Explicit `host` values in existing INI files still override this default. Existing clients and wire payloads are unchanged.
+A non-loopback bind without `auth_user` is rejected unless the operator
+explicitly selects `--allow_anonymous` (`allow_anonymous=true` in INI).
+The same gate applies to an enabled Studio listener without `http_user`.
+All non-loopback TCP listeners emit a cleartext warning, including those
+with authentication. **This is exposure mitigation, not native TLS**:
+use the documented TLS proxy, and firewall its cleartext backend so only
+the proxy can reach it. Do not expose TCP credentials to untrusted networks.
+Credential hardening: new DD passwords use salted PBKDF2-SHA256. Existing
+plaintext password entries are verified in constant time and migrated after
+successful named login; unknown or invalid users are never migrated. Password
+property 1101 is now write-only through AdsDDGetUserProperty. This deliberately
+breaks applications that read passwords back. Named logins now require a valid
+password even if LOG_IN_REQUIRED is disabled, preventing AdsSys impersonation.
+Legacy anonymous local dictionary setup still works; it is not a network grant.
+
+Security hardening limits: network Mutex Lock is now fail-fast on contention,
+not an infinite wait for timeout=0. Applications must retry. Network idle
+sessions expire after 5 minutes; handshake and incomplete frames after 30
+seconds. Maximum 256 tables/cursors and 64 created mutexes per connection.
+
+Explicit and AppendBlank record locks are capped at 4096 per session; SQL-generated append locks remain under review.

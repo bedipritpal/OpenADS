@@ -32,3 +32,17 @@ cleanup, preserved handshake/management/partial-frame clocks and TLS idle
 resume. CTest also runs a real 310-second dedicated-mode idle soak. The
 clock has no runtime configuration or protocol surface; ordinary execution
 uses the steady clock.
+
+## Optional daemon idle policy
+
+`established_session_idle_seconds = 0` in the SERVER openads.ini is the
+safe default: no established database-session idle cutoff. A positive value
+opts into a cutoff in seconds, for example 3600 for one hour. The matching
+`--established_session_idle_seconds N` CLI flag overrides the INI value.
+Restart the server after changing it. Negative, malformed and overflowing
+values are rejected. No OAds_Settings/client DLL change is required.
+
+Enabling this deliberately disconnects inactive database users and releases
+their workareas/locks. It is not a test for a dead transport. Use it only
+when that administrative policy is intended. Management and stalled-frame
+security timers are separate and unchanged.

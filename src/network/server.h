@@ -86,6 +86,15 @@ public:
     void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
     bool daemon_hardening() const noexcept { return daemon_hardening_; }
 
+    // Daemon-only opt-in policy, configured before start. Zero never expires
+    // established DBF sessions for application inactivity.
+    void set_established_session_idle_seconds(std::uint32_t seconds) noexcept {
+        established_session_idle_seconds_ = seconds;
+    }
+    std::uint32_t established_session_idle_seconds() const noexcept {
+        return established_session_idle_seconds_;
+    }
+
     // Configure before start; production uses the steady clock. A test clock
     // lets both session schedulers exercise long idle periods deterministically.
     using SessionClock = std::chrono::steady_clock::time_point (*)() noexcept;
@@ -230,6 +239,7 @@ private:
 
     bool daemon_hardening_ = false;
     SessionClock session_clock_ = nullptr;
+    std::uint32_t established_session_idle_seconds_ = 0;
     Socket                   listener_;
     std::uint16_t            port_ = 0;
     // Multi-port: extra listeners with their own data directories.

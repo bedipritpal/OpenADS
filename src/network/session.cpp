@@ -522,9 +522,12 @@ bool Session::expired_at(std::chrono::steady_clock::time_point now) const noexce
     // their established session until EOF/reset, Disconnect or shutdown;
     // accepted-socket TCP keepalive detects unreachable peers separately.
     // Management and unfinished handshakes retain their existing limits.
+    // A finite DBF timeout is an explicit daemon administrator opt-in.
     return (!reply_bytes_.empty() && now - reply_since_ >= kReplyDrainTimeout) ||
            (!sess_conn_ && !mg_connected_ && now - created_ >= kHandshakeTimeout) ||
            (mg_connected_ && now - last_read_ >= kManagementIdleTimeout) ||
+           (sess_conn_ && srv_->established_session_idle_seconds() != 0 &&
+            now - last_read_ >= std::chrono::seconds(srv_->established_session_idle_seconds())) ||
            (reader_.buffered() != 0 && now - partial_since_ >= kPartialFrameTimeout);
 }
 

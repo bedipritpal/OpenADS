@@ -29,7 +29,7 @@ struct IdleFixture {
     std::unique_ptr<WorkerPool> pool;
     Socket listener;
     std::uint16_t port = 0;
-    explicit IdleFixture(bool reactor, bool fake = true) {
+    explicit IdleFixture(bool reactor, bool fake = true, std::uint32_t idle_seconds = 0) {
         idle_offset.store(0);
         std::error_code ec; std::filesystem::remove_all(dir,ec); std::filesystem::create_directories(dir);
         auto str=dir.string(); std::vector<UNSIGNED8> path(str.begin(),str.end()); path.push_back(0);
@@ -40,6 +40,7 @@ struct IdleFixture {
         REQUIRE(AdsAppendRecord(t)==0); REQUIRE(AdsSetDouble(t,qty,100)==0);
         REQUIRE(AdsWriteRecord(t)==0); REQUIRE(AdsCloseTable(t)==0); REQUIRE(AdsDisconnect(c)==0);
         server.set_daemon_hardening(true);
+        server.set_established_session_idle_seconds(idle_seconds);
         if(fake) server.set_session_clock(idle_now);
         if(reactor) {
             auto l=listen_tcp({"127.0.0.1",0,16}); REQUIRE(l); listener=l.value();
@@ -155,6 +156,20 @@ TEST_CASE("mtfix41 daemon dead peer releases login lock in both schedulers") {
             if(!acquired) std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         REQUIRE(acquired); REQUIRE(other.unlock_table(b)); other.disconnect(); dead.disconnect();
+        CHECK(empty_sessions(f.server));
+    }
+}
+
+TEST_CASE("mtfix41 daemon opt in established idle expiry releases login lock") {
+    for(bool reactor : {false,true}) {
+        IdleFixture f(reactor,true,60);
+        RemoteConnection holder; f.connect(holder); auto a=f.open(holder);
+        REQUIRE(holder.goto_record(a,1)); REQUIRE(holder.lock_record(a,1));
+        idle_offset.store(61); CHECK(empty_sessions(f.server));
+        // A new live session can acquire the expired owner's physical lock.
+        RemoteConnection next; f.connect(next); auto b=f.open(next);
+        REQUIRE(next.goto_record(b,1)); REQUIRE(next.lock_record(b,1));
+        REQUIRE(next.unlock_table(b)); next.disconnect(); holder.disconnect();
         CHECK(empty_sessions(f.server));
     }
 }

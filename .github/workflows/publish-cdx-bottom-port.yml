@@ -1,0 +1,226 @@
+name: Publish reviewed CDX bottom port (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-reviewed-cdx-bottom
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'bedipritpal/OpenADS'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify upstream, apply reviewed patch, verify tree, publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=f60c7b35befcf1f9af5c5e0f974e96928996bc82
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          test -z "$(git ls-remote origin refs/heads/port/cdx-bottom-navigation-upstream)"
+          git fetch https://github.com/FiveTechSoft/OpenADS.git "$base"
+          git checkout -b port/cdx-bottom-navigation-upstream "$base"
+          cat > "$RUNNER_TEMP/port.patch" <<'OPENADS_REVIEWED_PORT_PATCH'
+          diff --git a/src/drivers/cdx/cdx_index.cpp b/src/drivers/cdx/cdx_index.cpp
+          index 252522d7..e80f918a 100644
+          --- a/src/drivers/cdx/cdx_index.cpp
+          +++ b/src/drivers/cdx/cdx_index.cpp
+          @@ -1206,31 +1206,42 @@ util::Result<SeekOutcome> CdxIndex::seek_first() {
+           }
+           
+           util::Result<SeekOutcome> CdxIndex::seek_last() {
+          -    // seek_first() already reloads the header when the bag changed.
+          -    if (root_page_ == 0) {
+          -        if (auto r = reload_header_if_changed_(); !r) return r.error();
+          -        if (root_page_ == 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+          -    }
+          +    // Absolute navigation must observe peer appends/rebuilds, even when
+          +    // this handle already has a non-zero (but stale) root.
+          +    if (auto r = reload_header_if_changed_(); !r) return r.error();
+               cur_leaf_ = 0; cur_index_ = -1; cur_decoded_.clear();
+          +    if (root_page_ == 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+           
+          -    auto first = seek_first();
+          -    if (!first) return first.error();
+          -    if (!first.value().positioned) return first;
+          -
+          -    while (true) {
+          -        auto pg = get_page_(cur_leaf_);
+          +    // Each branch entry carries the maximum key of its child. The final
+          +    // entry therefore points at the rightmost subtree, including duplicate
+          +    // keys. Descend that edge rather than decoding every leaf from the left.
+          +    std::uint32_t cur = root_page_;
+          +    for (unsigned depth = 0; ; ++depth) {
+          +        if (depth >= 64) {
+          +            return util::Error{6106, 0, "Corrupt CDX: branch cycle or excessive depth", ""};
+          +        }
+          +        auto pg = get_page_(cur);
+                   if (!pg) return pg.error();
+          -        std::uint32_t right = read_u32_le(pg.value()->data() + 8);
+          -        if (right == 0xFFFFFFFFu || right == 0) break;
+          -        // Probe forward over any empty leaves; only move if a non-empty
+          -        // leaf remains, so holes don't cut the walk short of the true last.
+          -        std::uint32_t probe = right;
+          -        std::vector<std::pair<std::string, std::uint32_t>> nxt;
+          -        if (auto sk = skip_empty_leaves_right_(probe, nxt); !sk) return sk.error();
+          -        if (nxt.empty()) break;
+          -        cur_leaf_ = probe;
+          -        cur_decoded_ = std::move(nxt);
+          -    }
+          +        const auto* base = pg.value()->data();
+          +        const std::uint16_t attr = read_u16_le(base);
+          +        if (attr & CDX_NODE_LEAF) { cur_leaf_ = cur; break; }
+          +        const std::uint16_t nkeys = read_u16_le(base + 2);
+          +        if (nkeys == 0) return SeekOutcome{SeekHit::AfterEnd, 0, false};
+          +        const std::size_t stride = static_cast<std::size_t>(key_size_) + 8;
+          +        const std::size_t end = CDX_INT_HEADSIZE + nkeys * stride;
+          +        if (end > CDX_PAGE_LEN) {
+          +            return util::Error{6106, 0, "Corrupt CDX: branch entries exceed page", ""};
+          +        }
+          +        const auto* cp = base + end - 4;
+          +        cur = (static_cast<std::uint32_t>(cp[0]) << 24) |
+          +              (static_cast<std::uint32_t>(cp[1]) << 16) |
+          +              (static_cast<std::uint32_t>(cp[2]) << 8) |
+          +               static_cast<std::uint32_t>(cp[3]);
+          +    }
+          +    // Erase may leave empty leaves at the physical right edge. Walk left
+          +    // only over those holes, preserving the true last live key.
+          +    if (auto sk = skip_empty_leaves_left_(cur_leaf_, cur_decoded_); !sk)
+          +        return sk.error();
+               if (cur_decoded_.empty()) {
+                   return SeekOutcome{SeekHit::AfterEnd, 0, false};
+               }
+          diff --git a/tests/unit/cdx_index_test.cpp b/tests/unit/cdx_index_test.cpp
+          index a23c1eec..7550f683 100644
+          --- a/tests/unit/cdx_index_test.cpp
+          +++ b/tests/unit/cdx_index_test.cpp
+          @@ -3,6 +3,7 @@
+           #include "drivers/index_trait.h"
+           #include "engine/index_expr.h"
+           
+          +#include <algorithm>
+           #include <cstdint>
+           #include <filesystem>
+           #include <fstream>
+          @@ -522,3 +523,78 @@ TEST_CASE("CdxIndex create resets page allocator tail after recreate at same pat
+               CHECK(small_sz * 3 < big_sz);
+               fs::remove(p);
+           }
+          +
+          +TEST_CASE("CdxIndex seek_last descends multilevel duplicate-key branches and refreshes peers") {
+          +    const auto p = fs::temp_directory_path() / "openads_cdx_last_multilevel.cdx";
+          +    fs::remove(p);
+          +    {
+          +    auto c = CdxIndex::create(p.string(), "T1", "TAG", 19, false, false);
+          +    REQUIRE(c.has_value());
+          +    CdxIndex writer = std::move(c).value();
+          +    auto empty = writer.seek_last();
+          +    REQUIRE(empty.has_value());
+          +    CHECK_FALSE(empty.value().positioned);
+          +    std::vector<std::pair<std::string, std::uint32_t>> keys;
+          +    // Enough leaves for more than one branch level; duplicate keys cross
+          +    // leaf boundaries and must end at the highest record number.
+          +    for (std::uint32_t rn = 1; rn <= 20000; ++rn)
+          +        keys.emplace_back(std::string(19, 'A'), rn);
+          +    REQUIRE(writer.build_bulk(std::move(keys)).has_value());
+          +    REQUIRE(writer.flush().has_value());
+          +    CdxIndex reader;
+          +    REQUIRE(reader.open(p.string(), IndexOpenMode::Shared).has_value());
+          +    auto last = reader.seek_last();
+          +    REQUIRE(last.has_value());
+          +    REQUIRE(last.value().positioned);
+          +    CHECK(last.value().recno == 20000);
+          +    CHECK(reader.current_key() == std::string(19, 'A'));
+          +    auto prev = reader.prev();
+          +    REQUIRE(prev.has_value());
+          +    CHECK(prev.value().recno == 19999);
+          +    REQUIRE(writer.insert(20001, std::string(19, 'Z')).has_value());
+          +    REQUIRE(writer.flush().has_value());
+          +    last = reader.seek_last();
+          +    REQUIRE(last.has_value());
+          +    CHECK(last.value().recno == 20001);
+          +    CHECK(reader.current_key() == std::string(19, 'Z'));
+          +    } // Close the CDX handles before deleting the fixture on Windows.
+          +    fs::remove(p);
+          +}
+          +
+          +TEST_CASE("CdxIndex seek_last skips empty rightmost leaves and handles an erased tree") {
+          +    const auto p = fs::temp_directory_path() / "openads_cdx_last_holes.cdx";
+          +    fs::remove(p);
+          +    {
+          +    auto c = CdxIndex::create(p.string(), "T1", "TAG", 19, false, false);
+          +    REQUIRE(c.has_value());
+          +    CdxIndex ix = std::move(c).value();
+          +    std::vector<std::pair<std::string, std::uint32_t>> keys;
+          +    for (std::uint32_t rn = 1; rn <= 300; ++rn) {
+          +        const std::string k = std::to_string(rn) + std::string(19 - std::to_string(rn).size(), ' ');
+          +        keys.emplace_back(k, rn);
+          +    }
+          +    REQUIRE(ix.build_bulk(keys).has_value());
+          +    REQUIRE(ix.flush().has_value());
+          +    // Compare against a full forward walk after removing the final half
+          +    // of sorted keys, including multiple physical tail leaves.
+          +    std::sort(keys.begin(), keys.end());
+          +    for (std::size_t i = 150; i < keys.size(); ++i)
+          +        REQUIRE(ix.erase(keys[i].second, keys[i].first).has_value());
+          +    REQUIRE(ix.flush().has_value());
+          +    auto last = ix.seek_last();
+          +    REQUIRE(last.has_value());
+          +    REQUIRE(last.value().positioned);
+          +    CHECK(last.value().recno == keys[149].second);
+          +    CHECK(ix.current_key() == keys[149].first);
+          +    auto prev = ix.prev();
+          +    REQUIRE(prev.has_value());
+          +    CHECK(prev.value().recno == keys[148].second);
+          +    for (std::size_t i = 0; i < 150; ++i)
+          +        REQUIRE(ix.erase(keys[i].second, keys[i].first).has_value());
+          +    REQUIRE(ix.flush().has_value());
+          +    last = ix.seek_last();
+          +    REQUIRE(last.has_value());
+          +    CHECK_FALSE(last.value().positioned);
+          +    } // Close the CDX handles before deleting the fixture on Windows.
+          +    fs::remove(p);
+          +}
+          diff --git a/docs/cdx-bottom-navigation.md b/docs/cdx-bottom-navigation.md
+          new file mode 100644
+          --- /dev/null
+          +++ b/docs/cdx-bottom-navigation.md
+          @@ -0,0 +1,21 @@
+          +# CDX bottom navigation
+          +
+          +`DbGoBottom()` / `AdsGotoBottom()` on a CDX order now reaches the rightmost
+          +B-tree leaf directly instead of walking every leaf from the left. The index
+          +header is refreshed first so a changed peer root is not ignored. Empty leaves
+          +at the right edge are skipped toward the last live key.
+          +
+          +The change retains the existing key/record-number ordering, duplicate-key
+          +behavior and index cursor interface. An empty or fully erased tree still has
+          +no positioned key. A malformed branch that exceeds the page or reaches the
+          +64-level traversal limit returns an error rather than walking indefinitely.
+          +
+          +This is the CDX navigation work developed from Pritpal Bedi's B_BIG trace and
+          +carried in the bedipritpal/OpenADS mtfix41 release. It does not change record
+          +locks, physical record-count policy, the Harbour RDD core, the wire protocol,
+          +network security settings or build/release workflows.
+          +
+          +Regression coverage includes a multilevel tree with 20,000 duplicate keys,
+          +a peer append after a reader has opened the index, backward movement from the
+          +last key, erased rightmost leaves, an empty index and a fully erased tree.
+          +No quantified latency or page-read improvement is claimed by these tests.
+          OPENADS_REVIEWED_PORT_PATCH
+          test "$(sha256sum "$RUNNER_TEMP/port.patch" | cut -d' ' -f1)" = "23e325bfc10bf5fb3fb80fecae4473ebcf8451bee75fbc2497ba564dd7250fa0"
+          git apply --check "$RUNNER_TEMP/port.patch"
+          git apply --index "$RUNNER_TEMP/port.patch"
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test -z "$(git diff --cached --name-only -- .github/)"
+          test "$(git write-tree)" = "8f205aa12245dea49a3a0d17178a1567a18782f7"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Port reviewed CDX right-edge bottom navigation'
+          test "$(git rev-list --count "$base"..HEAD)" -eq 1
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          git push origin HEAD:refs/heads/port/cdx-bottom-navigation-upstream
+          rm "$RUNNER_TEMP/port.patch"

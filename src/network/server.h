@@ -86,6 +86,14 @@ public:
     void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
     bool daemon_hardening() const noexcept { return daemon_hardening_; }
 
+    // Configure before start; production uses the steady clock. A test clock
+    // lets both session schedulers exercise long idle periods deterministically.
+    using SessionClock = std::chrono::steady_clock::time_point (*)() noexcept;
+    void set_session_clock(SessionClock clock) noexcept { session_clock_ = clock; }
+    std::chrono::steady_clock::time_point session_now() const noexcept {
+        return session_clock_ ? session_clock_() : std::chrono::steady_clock::now();
+    }
+
     // M12.9 — auth. When at least one credential is registered, every
     // Connect frame must carry a matching user / password pair; an
     // empty map accepts any client (back-compat / dev mode).
@@ -221,6 +229,7 @@ private:
     void reap_finished_threads_();
 
     bool daemon_hardening_ = false;
+    SessionClock session_clock_ = nullptr;
     Socket                   listener_;
     std::uint16_t            port_ = 0;
     // Multi-port: extra listeners with their own data directories.

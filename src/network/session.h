@@ -59,6 +59,8 @@ public:
     // Accessor for the reactor: the connection socket this Session owns.
     Socket socket() const noexcept { return s_; }
     bool expired() const noexcept;
+    // Explicit time argument keeps daemon lifecycle policy testable without sleeps.
+    bool expired_at(std::chrono::steady_clock::time_point now) const noexcept;
     std::uint8_t poll_events() const noexcept;
     bool buffered_read() const noexcept;
 

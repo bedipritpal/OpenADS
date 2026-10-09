@@ -337,6 +337,7 @@ Frame err(const std::string& msg,
 Session::Session(Server& srv, Socket s, std::string default_data_dir,
                  std::uint16_t listener_port)
     : srv_(&srv), s_(s), sid_(0), default_data_dir_(std::move(default_data_dir)) {
+    created_ = last_read_ = partial_since_ = reply_since_ = srv.session_now();
     // studio.web.0.4 — register an entry in the live sessions
     // registry so the Studio "Sessions" tab can list this peer.
     Server::SessionInfo init;
@@ -368,7 +369,7 @@ bool Session::queue_reply(const Frame& frame) {
     if (!encoded || !reply_bytes_.empty()) return false;
     reply_bytes_ = std::move(encoded).value();
     reply_offset_ = 0;
-    reply_since_ = std::chrono::steady_clock::now();
+    reply_since_ = srv_->session_now();
     return flush_reply();
 }
 bool Session::flush_reply() {
@@ -503,13 +504,28 @@ bool Session::process_frame(const Frame& f) {
     return !close_after_reply_ || !reply_bytes_.empty();
 }
 
+namespace {
+constexpr auto kHandshakeTimeout = std::chrono::seconds(30);
+constexpr auto kPartialFrameTimeout = std::chrono::seconds(30);
+constexpr auto kReplyDrainTimeout = std::chrono::seconds(30);
+constexpr auto kManagementIdleTimeout = std::chrono::minutes(5);
+}
+
 bool Session::expired() const noexcept {
+    return expired_at(srv_->session_now());
+}
+
+bool Session::expired_at(std::chrono::steady_clock::time_point now) const noexcept {
     if (!srv_->daemon_hardening()) return false;
-    const auto now = std::chrono::steady_clock::now();
-    return (!reply_bytes_.empty() && now - reply_since_ >= std::chrono::seconds(30)) ||
-           (!sess_conn_ && !mg_connected_ && now - created_ >= std::chrono::seconds(30)) ||
-           now - last_read_ >= std::chrono::minutes(5) ||
-           (reader_.buffered() != 0 && now - partial_since_ >= std::chrono::seconds(30));
+    // DBF users can read a screen or leave a module open while holding login
+    // locks. Application silence is not evidence of transport death. Keep
+    // their established session until EOF/reset, Disconnect or shutdown;
+    // accepted-socket TCP keepalive detects unreachable peers separately.
+    // Management and unfinished handshakes retain their existing limits.
+    return (!reply_bytes_.empty() && now - reply_since_ >= kReplyDrainTimeout) ||
+           (!sess_conn_ && !mg_connected_ && now - created_ >= kHandshakeTimeout) ||
+           (mg_connected_ && now - last_read_ >= kManagementIdleTimeout) ||
+           (reader_.buffered() != 0 && now - partial_since_ >= kPartialFrameTimeout);
 }
 
 bool Session::handle_readable() {
@@ -556,7 +572,7 @@ bool Session::handle_readable() {
     } else {
         if (r.value() == 0) return false;
         received = r.value();
-        last_read_ = std::chrono::steady_clock::now();
+        last_read_ = srv_->session_now();
     }
     const bool had_partial = reader_.buffered() != 0;
     reader_.set_payload_limit(sess_conn_ ? kMaxFramePayload : 64 * 1024);

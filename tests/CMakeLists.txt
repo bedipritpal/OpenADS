@@ -331,6 +331,7 @@ add_executable(openads_unit_tests
     unit/legacy_crt_shims_test.cpp
     unit/dd_native_codec_test.cpp
     unit/dll_test.cpp
+    unit/network_daemon_idle_test.cpp
     unit/network_client_test.cpp
     unit/abi_dd_invoicing_test.cpp
     unit/abi_fetch_where_test.cpp
@@ -509,6 +510,9 @@ if(TARGET openads_serverd)
         COMMAND ${CMAKE_COMMAND} -DSERVERD=$<TARGET_FILE:openads_serverd>
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/serverd_help_test.cmake)
 endif()
+
+add_test(NAME daemon_idle_real_clock_soak COMMAND ${CMAKE_COMMAND} -E env OPENADS_IDLE_SOAK=1 $<TARGET_FILE:openads_unit_tests> "--test-case=mtfix41 daemon real clock idle soak")
+set_tests_properties(daemon_idle_real_clock_soak PROPERTIES TIMEOUT 420)
 
 add_test(NAME openads_unit_tests COMMAND openads_unit_tests -tce=*[slow]*,*flaky*)
 add_test(NAME openads_unit_tests_slow COMMAND openads_unit_tests -tc=*[slow]* -tce=*flaky*)

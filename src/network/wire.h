@@ -695,6 +695,11 @@ inline constexpr std::uint32_t kCapNavBoundaryPair = 0x00000100u;
 // so the section list stays extensible in both directions.
 inline constexpr std::uint32_t kCapOpenSetupMetadata = 0x00000200u;
 
+// Fresh current row read while the real record lock is held. Request
+// LockRecord appends u8 wants_row; ack appends the existing row trailer.
+// Both peers must advertise this bit; old peers keep opcode-only locks.
+inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
+
 namespace OpenTableAckSections {
     constexpr std::uint8_t kRecordLength = 3;
     constexpr std::uint8_t kProductionIndex = 4;

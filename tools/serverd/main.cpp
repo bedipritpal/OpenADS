@@ -70,6 +70,7 @@ void usage(const char* argv0) {
         "  --port       TCP wire port (default 6262, 0 = ephemeral)\n"
         "  --backlog    listen() backlog (default: env OPENADS_SERVER_BACKLOG,\n"
         "               else 256; ini: backlog)\n"
+        "  --established_session_idle_seconds N  DBF idle cutoff (seconds; default 0=never)\n"
         "  --max_sessions N  cap on concurrent client sessions\n"
         "               (default: env OPENADS_SERVER_MAX_SESSIONS, else 500;\n"
         "               0 = unlimited; ini: max_sessions)\n"
@@ -136,6 +137,7 @@ struct Args {
     // env-loaded EnterpriseConfig default (500) applies; an explicit
     // --max-sessions / max_sessions= ini key overrides it.
     std::uint32_t max_sessions = 0;
+    std::uint32_t established_session_idle_seconds = 0;
     bool has_max_sessions = false;
     std::string max_sessions_source;
     std::uint16_t http_port   = 0;
@@ -180,6 +182,20 @@ bool parse_args(int argc, char** argv, Args& out) {
         if      (flag_eq(a, "host")      && i + 1 < argc) out.host    = argv[++i];
         else if (flag_eq(a, "port")      && i + 1 < argc) out.port    = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         else if (flag_eq(a, "backlog")   && i + 1 < argc) out.backlog = std::atoi(argv[++i]);
+        else if (flag_eq(a, "established_session_idle_seconds") && i + 1 < argc) {
+            const std::string value = argv[++i];
+            std::uint64_t seconds = 0;
+            if (value.empty()) return false;
+            for (char digit : value) {
+                if (digit < '0' || digit > '9' || seconds > 429496729u ||
+                    (seconds == 429496729u && digit > '5')) {
+                    std::fprintf(stderr, "--established_session_idle_seconds must be 0..4294967295\n");
+                    return false;
+                }
+                seconds = seconds * 10 + static_cast<unsigned>(digit - '0');
+            }
+            out.established_session_idle_seconds = static_cast<std::uint32_t>(seconds);
+        }
         else if (flag_eq(a, "max_sessions") && i + 1 < argc) {
             out.max_sessions = static_cast<std::uint32_t>(std::atoi(argv[++i]));
             out.has_max_sessions = true;
@@ -267,6 +283,8 @@ void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
     if (cfg.has_host)      out.host      = cfg.host;
     if (cfg.has_port)      out.port      = cfg.port;
     if (cfg.has_backlog)   out.backlog   = cfg.backlog;
+    if (cfg.has_established_session_idle_seconds)
+        out.established_session_idle_seconds = cfg.established_session_idle_seconds;
     if (cfg.has_max_sessions) {
         out.max_sessions = cfg.max_sessions;
         out.has_max_sessions = true;
@@ -481,6 +499,7 @@ int run_server(const Args& args, bool console) {
 
     openads::network::Server srv;
     srv.set_daemon_hardening(true);
+    srv.set_established_session_idle_seconds(args.established_session_idle_seconds);
     if (!args.tls_cert_file.empty()) {
 #if defined(OPENADS_WITH_TLS)
         auto read_pem = [](const std::string& path) {

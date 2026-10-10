@@ -50,6 +50,19 @@ jobs:
           archive=$(find build-gcc10 -name "libopenace$bits.a" | head -1)
           test -n "$archive"
           cp "$archive" output/libopenace32.a
+          if [ "$arch" = x86 ]; then
+            curl -fsSL https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.2.0/libstdc%2B%2B-v3/libsupc%2B%2B/atexit_thread.cc -o output/gcc10_tls_thiscall.cc
+            python3 - <<'PYFIX'
+          from pathlib import Path
+          p=Path('output/gcc10_tls_thiscall.cc')
+          s=p.read_text().replace('    void (*destructor)(void *);','    void (__attribute__((thiscall)) *destructor)(void *);').replace('  new_elt->destructor = dtor;','  new_elt->destructor = reinterpret_cast<void (__attribute__((thiscall)) *)(void *)>(dtor);')
+          p.write_text(s)
+          PYFIX
+            "$trip-g++-posix" -O2 -c output/gcc10_tls_thiscall.cc -o output/gcc10_tls_thiscall.o
+            "$trip-ar" r output/libopenace32.a output/gcc10_tls_thiscall.o
+            curl -fsSL https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.2.0/COPYING3 -o output/COPYING3
+            curl -fsSL https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.2.0/COPYING.RUNTIME -o output/COPYING.RUNTIME
+          fi
           "$trip-nm" -u output/libopenace32.a > output/undefined-symbols.txt
           ! grep -E '__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' output/undefined-symbols.txt
           "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp output/libopenace32.a -static -lws2_32 -lpsapi -o output/static-smoke.exe
@@ -91,6 +104,8 @@ jobs:
         shell: pwsh
         run: |
           & ./static-kit/static-smoke.exe
+          Write-Host "Smoke exit: $LASTEXITCODE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./static-kit/whole-archive-smoke.exe
+          Write-Host "Smoke exit: $LASTEXITCODE"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

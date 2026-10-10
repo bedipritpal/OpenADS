@@ -1,4 +1,4 @@
-name: mtfix42 GCC10 static compatibility (Pritpal Bedi)
+name: mtfix42 Winlibs GCC10.2 matched static (Pritpal Bedi)
 on:
   push:
     branches: [security/mtfix42-gcc10-static]
@@ -6,106 +6,77 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: windows-2022
     timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86, x64]
+        include:
+          - arch: x86
+            bits: 32
+            folder: mingw32
+            url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z
+            checksum_url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256
+          - arch: x64
+            bits: 64
+            folder: mingw64
+            url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z
+            checksum_url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256
     steps:
       - uses: actions/checkout@v5
         with:
           ref: 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
           persist-credentials: false
-      - name: Pin stock Harbour source
+      - name: Download and verify Winlibs GCC10.2
+        shell: pwsh
         run: |
-          git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour"
-          git -C "$RUNNER_TEMP/harbour" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
-      - name: Build exact mtfix42 with GCC10 and inspect static imports
-        env:
-          ARCH: ${{ matrix.arch }}
-          WINEDEBUG: -all
+          Invoke-WebRequest '${{ matrix.url }}' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+          $sum = (Invoke-WebRequest '${{ matrix.checksum_url }}').Content
+          $expected = [regex]::Match($sum, '[a-fA-F0-9]{64}').Value.ToLower()
+          $actual = (Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected) { throw 'Toolchain digest mismatch' }
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:RUNNER_TEMP/winlibs/${{ matrix.folder }}/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Exact-source build and full static validation
         shell: bash
+        env:
+          BITS: ${{ matrix.bits }}
         run: |
           set -euxo pipefail
-          arch=$ARCH
-          case $arch in x86) trip=i686-w64-mingw32;bits=32;; x64) trip=x86_64-w64-mingw32;bits=64;; esac
-          # Exact mtfix42 runtime sources; job branch contains only this build orchestration.
           test "$(git rev-parse HEAD)" = 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y cmake make gcc-mingw-w64-$([ "$arch" = x86 ] && echo i686 || echo x86-64)-posix g++-mingw-w64-$([ "$arch" = x86 ] && echo i686 || echo x86-64)-posix wine64 wine32
-          "$trip-g++-posix" --version
-          "$trip-g++-posix" -dumpfullversion | grep '^10'
           mkdir -p output
-          cat > toolchain.cmake <<TC
-          set(CMAKE_SYSTEM_NAME Windows)
-          set(CMAKE_C_COMPILER $trip-gcc-posix)
-          set(CMAKE_CXX_COMPILER $trip-g++-posix)
-          set(CMAKE_AR $trip-ar)
-          set(CMAKE_RC_COMPILER $trip-windres)
-          TC
-          cmake -S . -B build-gcc10 -DCMAKE_TOOLCHAIN_FILE="$PWD/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
-          cmake --build build-gcc10 --target openads_ace_static openads_static_archive_smoke -j2
-          archive=$(find build-gcc10 -name "libopenace$bits.a" | head -1)
-          test -n "$archive"
-          cp "$archive" output/libopenace32.a
-          if [ "$arch" = x86 ]; then
-            curl -fsSL https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.2.0/libstdc%2B%2B-v3/libsupc%2B%2B/atexit_thread.cc -o output/gcc10_tls_thiscall.cc
-            python3 - <<'PYFIX'
-          from pathlib import Path
-          p=Path('output/gcc10_tls_thiscall.cc')
-          s=p.read_text().replace('    void (*destructor)(void *);','    void (__attribute__((thiscall)) *destructor)(void *);').replace('  new_elt->destructor = dtor;','  new_elt->destructor = reinterpret_cast<void (__attribute__((thiscall)) *)(void *)>(dtor);')
-          p.write_text(s)
-          PYFIX
-            "$trip-g++-posix" -O2 -c output/gcc10_tls_thiscall.cc -o output/gcc10_tls_thiscall.o
-            "$trip-ar" r output/libopenace32.a output/gcc10_tls_thiscall.o
-            curl -fsSL https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.2.0/COPYING3 -o output/COPYING3
-            curl -fsSL https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.2.0/COPYING.RUNTIME -o output/COPYING.RUNTIME
-          fi
-          "$trip-nm" -u output/libopenace32.a > output/undefined-symbols.txt
-          ! grep -E '__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' output/undefined-symbols.txt
-          "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp output/libopenace32.a -static -lws2_32 -lpsapi -o output/static-smoke.exe
-          "$trip-objdump" -p output/static-smoke.exe > output/static-smoke-imports.txt
-          ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/static-smoke-imports.txt
-          "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp -Wl,--whole-archive output/libopenace32.a -Wl,--no-whole-archive -static -lws2_32 -lpsapi -o output/whole-archive-smoke.exe
-          "$trip-objdump" -p output/whole-archive-smoke.exe > output/whole-archive-imports.txt
-          "$trip-addr2line" -Cfipe output/static-smoke.exe 0x0098b340 > output/wine-x86-fault-address.txt
-          set +e
-          wine output/static-smoke.exe > output/wine-smoke.log 2>&1
-          echo $? > output/wine-smoke-exit.txt
-          set -e
+          gcc -v 2> output/toolchain.txt
+          test "$(gcc -dumpfullversion)" = 10.2.0
+          g++ -print-file-name=libstdc++.a > output/runtime-path.txt
+          nm -C "$(g++ -print-file-name=libstdc++.a)" > output/runtime-symbols.txt
+          echo '#include <bits/c++config.h>' > config-check.cpp
+          g++ -dM -E config-check.cpp > output/runtime-macros.txt
+          grep '_GLIBCXX_HAVE_TLS 1' output/runtime-macros.txt
+          grep '__once_callable' output/runtime-symbols.txt
+          cmake -S . -B build-winlibs -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build-winlibs --target openads_ace_static openads_static_archive_smoke -j2
+          cp "build-winlibs/src/libopenace$BITS.a" output/libopenace32.a
+          nm -u output/libopenace32.a > output/undefined-symbols.txt
+          ! grep -E '__get_once_mutex|__once_functor|__set_once_functor_lock_ptr|__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' output/undefined-symbols.txt
+          g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp output/libopenace32.a -static -lws2_32 -lpsapi -o output/static-smoke.exe
+          g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp -Wl,--whole-archive output/libopenace32.a -Wl,--no-whole-archive -static -lws2_32 -lpsapi -o output/whole-archive-smoke.exe
+          objdump -p output/whole-archive-smoke.exe > output/whole-archive-imports.txt
+          ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/whole-archive-imports.txt
+          ./output/static-smoke.exe
+          ./output/whole-archive-smoke.exe
+          git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour"
+          git -C "$RUNNER_TEMP/harbour" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
           for unit in ads1 adsfunc adsmgmnt adsx; do
-           "$trip-gcc-posix" -c "$RUNNER_TEMP/harbour/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour/include" -I"$RUNNER_TEMP/harbour/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
+            gcc -c "$RUNNER_TEMP/harbour/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour/include" -I"$RUNNER_TEMP/harbour/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
           done
-          "$trip-ar" rcs output/librddads_openads_static.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
-          sha256sum output/*.a > output/SHA256SUMS.txt
+          ar rcs output/librddads_openads_static.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
           git rev-parse HEAD > output/source-commit.txt
-          "$trip-g++-posix" --version > output/toolchain.txt
+          sha256sum output/*.a > output/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: mtfix42-gcc10-static-${{ matrix.arch }}
+          name: mtfix42-winlibs102-static-${{ matrix.arch }}
           path: output/
           if-no-files-found: error
           retention-days: 14
-  windows-validation:
-    needs: build
-    runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x86, x64]
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: mtfix42-gcc10-static-${{ matrix.arch }}
-          path: static-kit
-      - name: Native Windows static smoke
-        shell: pwsh
-        run: |
-          & ./static-kit/static-smoke.exe
-          Write-Host "Smoke exit: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & ./static-kit/whole-archive-smoke.exe
-          Write-Host "Smoke exit: $LASTEXITCODE"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -502,15 +502,6 @@ endif()
 # every tier always ran the 240 s storm cases, which also explains
 # past 30-minute Test timeouts on loaded runners. No embedded quotes
 # around the filter value (they mangle args on Windows under ctest).
-# Keep the daemon's advertised startup default consistent with its safe bind.
-if(TARGET openads_serverd)
-    # CI builds the unit target explicitly before running every CTest.
-    add_dependencies(openads_unit_tests openads_serverd)
-    add_test(NAME serverd_help_default
-        COMMAND ${CMAKE_COMMAND} -DSERVERD=$<TARGET_FILE:openads_serverd>
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/serverd_help_test.cmake)
-endif()
-
 add_test(NAME daemon_idle_real_clock_soak COMMAND ${CMAKE_COMMAND} -E env OPENADS_IDLE_SOAK=1 $<TARGET_FILE:openads_unit_tests> "--test-case=mtfix41 daemon real clock idle soak")
 set_tests_properties(daemon_idle_real_clock_soak PROPERTIES TIMEOUT 420)
 
@@ -588,14 +579,3 @@ target_link_libraries(remote_test PRIVATE openads_ace)
 add_executable(oads_imac_test bench/oads_imac_test.cpp)
 target_include_directories(oads_imac_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(oads_imac_test PRIVATE openads_ace)
-
-find_package(Python3 COMPONENTS Interpreter QUIET)
-if(Python3_Interpreter_FOUND)
-    add_test(NAME mingw_import_parser COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/mingw_import_parser_test.py)
-    add_test(NAME portal_health_contract COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_contract_test.py)
-endif()
-
-find_program(OPENADS_NODE_EXECUTABLE node)
-if(OPENADS_NODE_EXECUTABLE)
-    add_test(NAME portal_health_js COMMAND ${OPENADS_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_js_test.js)
-endif()

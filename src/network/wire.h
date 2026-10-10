@@ -682,6 +682,12 @@ inline constexpr std::uint32_t kCapFlushTableDurable = 0x00000080u;
 // new server reads as "fused, no pair" -- bit-exact with the old parse.
 inline constexpr std::uint32_t kCapNavBoundaryPair = 0x00000100u;
 
+// Fresh current row read while the real record lock is held. Request
+// LockRecord appends u8 wants_row; ack appends the existing row trailer.
+// Both peers must advertise this bit; old peers keep opcode-only locks.
+inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
+
+
 // Warm OpenTableAck sections (USE latency). After the fixed
 // `[u32 id][u16 bag_len][bag]` prefix, the ack carries
 // `[u8 section_count]` then that many TLVs:
@@ -693,12 +699,8 @@ inline constexpr std::uint32_t kCapNavBoundaryPair = 0x00000100u;
 // empty when absent) and fall back to DescribeTable + GotoTop; new
 // clients skip both round-trips. Unknown tags are skipped by length,
 // so the section list stays extensible in both directions.
-inline constexpr std::uint32_t kCapOpenSetupMetadata = 0x00000200u;
 
-// Fresh current row read while the real record lock is held. Request
-// LockRecord appends u8 wants_row; ack appends the existing row trailer.
-// Both peers must advertise this bit; old peers keep opcode-only locks.
-inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
+inline constexpr std::uint32_t kCapOpenSetupMetadata = 0x00000200u;
 
 namespace OpenTableAckSections {
     constexpr std::uint8_t kRecordLength = 3;

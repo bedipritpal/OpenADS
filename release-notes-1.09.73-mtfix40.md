@@ -1,5 +1,7 @@
 # OpenADS 1.09.73-mtfix40: remote-file wait and thread-admission test build
 
+> Historical fork test-build notes. This document describes the original bedipritpal/OpenADS build, not validation or packaging of the upstream port. See docs/upstream-mtfix39-41-port.md for port scope and validation.
+
 Built for Pritpal Bedi - bedipritpal/OpenADS, forked from FiveTechSoft/OpenADS.
 Pritpal supplied the B_BIG source, remote frame trace, client-storm crash report and application testing that led to this build.
 

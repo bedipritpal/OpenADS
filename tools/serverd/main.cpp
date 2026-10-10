@@ -279,8 +279,8 @@ bool parse_args(int argc, char** argv, Args& out) {
 // file actually set are touched, so this sits cleanly between the built-in
 // defaults (Args ctor) and the command line: defaults < config file < CLI.
 void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
-    if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
     if (cfg.has_host)      out.host      = cfg.host;
+    if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
     if (cfg.has_port)      out.port      = cfg.port;
     if (cfg.has_backlog)   out.backlog   = cfg.backlog;
     if (cfg.has_established_session_idle_seconds)
@@ -498,7 +498,6 @@ int run_server(const Args& args, bool console) {
     }
 
     openads::network::Server srv;
-    srv.set_daemon_hardening(true);
     srv.set_established_session_idle_seconds(args.established_session_idle_seconds);
     if (!args.tls_cert_file.empty()) {
 #if defined(OPENADS_WITH_TLS)

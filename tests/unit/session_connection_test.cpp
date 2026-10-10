@@ -1,7 +1,6 @@
 #include "doctest.h"
 #include "openads/error.h"
 #include "session/connection.h"
-#include "platform/file.h"
 #include "util/log.h"
 
 #include <array>
@@ -525,41 +524,6 @@ TEST_CASE("shared resolve log dedups across twin connections") {
     }
     std::error_code ec;
     fs::remove_all(dir, ec);
-}
-
-TEST_CASE("server data jail: Connection refuses escape, local resolve is unchanged") {
-    auto base = tmp_dir("jail_connection");
-    auto root = base / "data";
-    fs::create_directories(root);
-    write_minimal_dbf(root / "normal.dbf");
-    write_minimal_dbf(base / "outside.dbf");
-    {
-    auto opened = Connection::open(root.string());
-    REQUIRE(opened.has_value());
-    Connection c = std::move(opened).value();
-    auto type = TableType::Cdx;
-    // Without serverd activation even a remote-marked resolver is legacy.
-    c.set_remote_server(true);
-    CHECK_FALSE(c.resolve_table_file("../outside.dbf", type).empty());
-    auto installed = openads::platform::File::set_data_jail({root.string()});
-    REQUIRE(installed.has_value());
-    struct Clear { ~Clear() { openads::platform::File::clear_data_jail(); } } clear;
-    CHECK(c.resolve_table_file("../outside.dbf", type).empty());
-    CHECK_FALSE(c.resolve_table_file("normal.dbf", type).empty());
-    auto good = c.open_table("normal.dbf", TableType::Cdx);
-    CHECK(good.has_value());
-    if (good) c.close_table(good.value());
-#ifndef _WIN32
-    fs::create_symlink(base / "outside.dbf", root / "outside_link.dbf");
-    CHECK(c.resolve_table_file("outside_link.dbf", type).empty());
-    fs::create_symlink("normal.dbf", root / "inside_link.dbf");
-    CHECK_FALSE(c.open_table("inside_link.dbf", TableType::Cdx).has_value());
-#endif
-    openads::platform::File::clear_data_jail();
-    c.set_remote_server(false);
-    CHECK_FALSE(c.resolve_table_file((base / "outside.dbf").string(), type).empty());
-    }
-    fs::remove_all(base);
 }
 
 TEST_CASE("Connection remote archive listing and extraction enforce engine budgets") {

@@ -81,12 +81,7 @@ public:
     bool               running() const noexcept { return running_.load(); }
     void               stop() noexcept;
 
-    // Explicit daemon policy. Embedded/LOCAL servers retain their legacy defaults.
-    // Configure before registering credentials or starting any listener.
-    void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
-    bool daemon_hardening() const noexcept { return daemon_hardening_; }
-
-    // Daemon-only opt-in policy, configured before start. Zero never expires
+    // Opt-in established-session policy, configured before start. Zero never expires
     // established DBF sessions for application inactivity.
     void set_established_session_idle_seconds(std::uint32_t seconds) noexcept {
         established_session_idle_seconds_ = seconds;
@@ -237,7 +232,6 @@ private:
     // sessions_mu_ (this takes it).
     void reap_finished_threads_();
 
-    bool daemon_hardening_ = false;
     SessionClock session_clock_ = nullptr;
     std::uint32_t established_session_idle_seconds_ = 0;
     Socket                   listener_;

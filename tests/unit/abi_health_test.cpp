@@ -6,6 +6,8 @@
 #include "openads/ace.h"
 #include <string>
 #include <vector>
+#include <thread>
+#include <cstdlib>
 
 TEST_CASE("health JSON is aggregate-only with wide counters and honest unknowns") {
     openads::mgmt::MgSnapshot snap;
@@ -52,7 +54,6 @@ TEST_CASE("health C ABI validates management handles and never truncates JSON") 
 TEST_CASE("health remote query uses management authentication and server-side measurement") {
     openads::network::Server server;
     server.set_max_sessions(123, "openads.ini:max_sessions");
-    server.set_daemon_hardening(true);
     server.add_credential("admin", "test-only-password");
     REQUIRE(server.start("127.0.0.1", 0));
     openads::network::Server::SessionInfo info;
@@ -81,12 +82,12 @@ TEST_CASE("health remote query uses management authentication and server-side me
     CHECK(json.find("/private") == std::string::npos);
     CHECK(json.find("test-only-password") == std::string::npos);
     CHECK(AdsMgDisconnect(handle) == 0);
+    UNSIGNED8 wrong_password[] = "wrong";
+    CHECK(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), user, wrong_password, &handle) != 0);
     // The additive read is allowed for the EXISTING credential-free loopback
     // management session, but never for a socket without MgConnect.
     server.stop();
-    server.set_daemon_hardening(true);
     openads::network::Server loopback;
-    loopback.set_daemon_hardening(true);
     REQUIRE(loopback.start("127.0.0.1", 0));
     endpoint = "127.0.0.1:" + std::to_string(loopback.port());
     REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), nullptr, nullptr, &handle) == 0);
@@ -152,4 +153,70 @@ TEST_CASE("health explicit zero session cap remains unlimited") {
     openads::mgmt::MgSnapshot local;
     json = openads::mgmt::health_json(local, "test");
     CHECK(json.find("\"max_sessions\":null") != std::string::npos);
+}
+
+TEST_CASE("health older and malformed server replies fail without writing caller buffer") {
+    using namespace openads::network;
+    REQUIRE(network_init());
+    auto listening = listen_tcp({"127.0.0.1", 0, 4});
+    REQUIRE(listening);
+    auto listener = listening.value();
+    auto port = socket_local_port(listener);
+    REQUIRE(port);
+    Frame response;
+    response.opcode = Opcode::Error;
+    SUBCASE("older server rejects additive request") {}
+    SUBCASE("empty JSON reply") { response.opcode = Opcode::MgReplyAck; }
+    SUBCASE("non JSON reply") {
+        response.opcode = Opcode::MgReplyAck;
+        response.payload = {'b', 'a', 'd'};
+    }
+    SUBCASE("oversized JSON reply") {
+        response.opcode = Opcode::MgReplyAck;
+        response.payload.assign(65536, ' ');
+        response.payload.front() = '{'; response.payload.back() = '}';
+    }
+    std::thread fake([&] {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            auto accepted = accept_one(listener);
+            if (!accepted) return;
+            auto socket = accepted.value();
+            auto handshake = read_frame(socket);
+            if (!handshake) { sock_close(socket); return; }
+            Frame ack; ack.opcode = Opcode::MgConnectAck;
+            if (!write_frame(socket, ack)) { sock_close(socket); return; }
+            if (attempt == 1) {
+                auto request = read_frame(socket);
+                if (request) (void)write_frame(socket, response);
+            }
+            sock_close(socket);
+        }
+    });
+    std::string endpoint = "127.0.0.1:" + std::to_string(port.value());
+    ADSHANDLE handle = 0;
+    const auto connected = AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), nullptr, nullptr, &handle);
+    char buffer[] = "XXXX";
+    UNSIGNED32 size = sizeof(buffer);
+    const auto result = connected == 0
+        ? OAdsGetServerStats(handle, reinterpret_cast<UNSIGNED8*>(buffer), &size) : connected;
+    fake.join(); sock_close(listener);
+    REQUIRE(connected == 0);
+    CHECK(result == (response.opcode == Opcode::Error ? AE_FUNCTION_NOT_AVAILABLE : AE_INTERNAL_ERROR));
+    CHECK(std::string(buffer) == "XXXX");
+    CHECK(size == sizeof(buffer));
+    CHECK(AdsMgDisconnect(handle) == 0);
+}
+
+TEST_CASE("health default session cap and environment source match admission config") {
+    openads::network::Server server;
+    REQUIRE(server.start("127.0.0.1", 0));
+    const char* raw = std::getenv("OPENADS_SERVER_MAX_SESSIONS");
+    std::uint32_t cap = 500;
+    std::string source = "default";
+    if (raw && std::string(raw) == "0") { cap = 0; source = "environment:OPENADS_SERVER_MAX_SESSIONS"; }
+    if (raw && std::string(raw) == "11") { cap = 11; source = "environment:OPENADS_SERVER_MAX_SESSIONS"; }
+    const auto snapshot = server.build_mg_snapshot();
+    CHECK(snapshot.max_sessions == cap);
+    CHECK(snapshot.max_sessions_source == source);
+    server.stop();
 }

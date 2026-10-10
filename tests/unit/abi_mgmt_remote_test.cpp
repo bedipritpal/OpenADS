@@ -76,7 +76,6 @@ TEST_CASE("AdsMgGetInstallInfo over the wire reports the SERVER's version") {
 TEST_CASE("Remote management requires configured server credentials") {
     using openads::network::Server;
     Server server;
-    server.set_daemon_hardening(true);
     server.add_credential("admin", "secret");
     REQUIRE(server.start("127.0.0.1", 0));
     std::string address = "127.0.0.1:" + std::to_string(server.port());
@@ -99,7 +98,6 @@ TEST_CASE("Remote management requires configured server credentials") {
 TEST_CASE("Unauthenticated loopback management cannot reset statistics") {
     using openads::network::Server;
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.start("127.0.0.1", 0));
     std::string address = "127.0.0.1:" + std::to_string(server.port());
     std::vector<UNSIGNED8> host(address.begin(), address.end());

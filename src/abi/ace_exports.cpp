@@ -1781,17 +1781,8 @@ void remote_clear_nav_boundaries(openads::network::RemoteTable* rt) {
     rt->nav_not_eof = false;
 }
 
-// Owner-selected mtfix32 compatibility by default. Fresh mode is opt-in;
-// cached mode can miss a peer append until its normal invalidation path.
-// Read on each call so a caller can deliberately select either policy.
-bool remote_fresh_counts_enabled() {
-    const char* value = std::getenv("OPENADS_FRESH_COUNTS");
-    return value != nullptr && std::strcmp(value, "1") == 0;
-}
-
 void remote_ensure_rec_count(openads::network::RemoteTable* rt) {
-    if (rt == nullptr || (rt->rec_count_cached && !remote_fresh_counts_enabled())) return;
-    rt->rec_count_cached = false;
+    if (rt == nullptr || rt->rec_count_cached) return;
     if (auto r = rt->conn->record_count(rt->id)) {
         rt->cached_rec_count = r.value();
         rt->rec_count_cached = true;
@@ -8560,6 +8551,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         rt->name = name;
         rt->alias = std::move(alias);
         rt->close_counted = true;
+        rt->prod_bag_path = ot.prod_bag_path;
         rt->production_index_reply = std::move(ot.production_index_reply);
         if (ot.has_record_length) {
             rt->cached_record_length = ot.record_length;
@@ -13032,6 +13024,7 @@ SqlStatement* stmt_lookup(ADSHANDLE h);
 UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOption,
                              UNSIGNED32* pulRecordCount) {
     arc2_trace("AdsGetRecordCount");
+    arc2_trace("AdsGetRecordCount");
     // SAP ACE also accepts a SQL *statement* handle here (rows affected /
     // returned by the last execute). ARC relies on this immediately after
     // AdsExecuteSQLDirectW(stmt, sql, NULL) â€” e.g. sp_SetApplicationID â€”
@@ -13059,20 +13052,25 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordCount(ADSHANDLE hTable, UNSIGNED16 bFilterOpti
     }
     if (auto* rt = get_remote_table(hTable)) {
         if (pulRecordCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        if (!remote_fresh_counts_enabled()) {
-            if (rt->rec_count_cached) {
-                *pulRecordCount = rt->cached_rec_count;
-                return ok();
-            }
-            if (rt->count_bound_ok && rt->count_bound_seq == rt->conn->nav_seq()) {
-                *pulRecordCount = rt->count_bound;
-                rt->cached_rec_count = rt->count_bound;
-                rt->rec_count_cached = true;
-                return ok();
-            }
+        // M12.19 -- record count is invariant outside of explicit
+        // writes (AppendBlank / DeleteRecord / RecallRecord / Pack
+        // / Zap), so cache the value on first hit and serve every
+        // subsequent AdsGetRecordCount + AdsGetRelKeyPos (scrollbar)
+        // call from cache. Each cache hit saves one wire RTT.
+        if (rt->rec_count_cached) {
+            *pulRecordCount = rt->cached_rec_count;
+            return ok();
         }
-        // Opt-in mode never treats an earlier reply as peer-fresh.
-        rt->rec_count_cached = false;
+        // Certified count from the last nav ack tail (same trust as
+        // the cache above — in-memory server count). Covers the
+        // open→goto→count USE flow with zero extra frames.
+        if (rt->count_bound_ok &&
+            rt->count_bound_seq == rt->conn->nav_seq()) {
+            *pulRecordCount = rt->count_bound;
+            rt->cached_rec_count = rt->count_bound;
+            rt->rec_count_cached = true;
+            return ok();
+        }
         auto r = rt->conn->record_count(rt->id);
         if (!r) return fail(r.error());
         rt->cached_rec_count = static_cast<UNSIGNED32>(r.value());
@@ -15982,10 +15980,14 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 return ok();
             }
         }
-        auto r = rt->production_index_reply.empty()
-            ? rt->conn->open_index(rt->id, path)
-            : openads::network::RemoteConnection::parse_open_index_reply(rt->production_index_reply, path);
-        rt->production_index_reply.clear();
+        const bool use_open_metadata = !rt->production_index_reply.empty() &&
+            !bag_stem_ci(path).empty() &&
+            bag_stem_ci(path) == bag_stem_ci(rt->prod_bag_path);
+        auto r = use_open_metadata
+            ? openads::network::RemoteConnection::parse_open_index_reply(
+                  rt->production_index_reply, path)
+            : rt->conn->open_index(rt->id, path);
+        if (use_open_metadata) rt->production_index_reply.clear();
         if (!r) return fail(r.error());
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -39952,7 +39954,7 @@ struct MgBackend {
     // round-trip so the mgmt session registers under a real name instead
     // of "(anonymous)". Empty is still valid (pre-existing behavior).
     std::string   mg_user;
-    std::string   mg_password; // remote management only
+    std::string   mg_password;
 };
 
 // MgConnect payload: [u16 user_len][user][u16 password_len][password].
@@ -40135,8 +40137,7 @@ bool send_mg_mutator(const MgBackend& be,
     if (!sock.has_value()) return false;
     openads::network::Socket s = sock.value();
     if (!authenticate_mg_socket(s, be)) {
-        openads::network::sock_close(s);
-        return false;
+        openads::network::sock_close(s); return false;
     }
     openads::network::Frame req;
     req.opcode = openads::network::Opcode::MgRequest;
@@ -40144,8 +40145,8 @@ bool send_mg_mutator(const MgBackend& be,
     req.payload.assign(body.begin(), body.end());
     bool ok = openads::network::write_frame(s, req).has_value();
     if (ok) {
-        auto reply = openads::network::read_frame(s);
-        ok = reply && reply.value().opcode == openads::network::Opcode::MgReplyAck;
+        auto ack = openads::network::read_frame(s);
+        ok = ack && ack.value().opcode == openads::network::Opcode::MgReplyAck;
     }
     openads::network::sock_close(s);
     return ok;
@@ -40206,9 +40207,6 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
     }
 
     if (be.remote) {
-        be.mg_password = pucPwd ? reinterpret_cast<const char*>(pucPwd) : std::string();
-        if (be.mg_user.size() > 256 || be.mg_password.size() > 4096)
-            return openads::AE_LOGIN_FAILED;
         // Validate the server is reachable up front with a MgConnect
         // handshake, so a down server fails here (AE_NO_CONNECTION)
         // rather than later with a misleading handle error.
@@ -40273,7 +40271,7 @@ UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE hMgmt, UNSIGNED8* json, UNSIG
         if (reply.value().opcode != openads::network::Opcode::MgReplyAck)
             return openads::AE_FUNCTION_NOT_AVAILABLE;
         text.assign(reply.value().payload.begin(), reply.value().payload.end());
-        // Fail closed on malformed/oversized replies, not arbitrary remote text.
+        // Bound the reply and require a JSON object envelope. This is not a full JSON parser.
         if (text.empty() || text.size() > 65535 || text.front() != '{' || text.back() != '}')
             return openads::AE_INTERNAL_ERROR;
     }

@@ -1697,7 +1697,6 @@ TEST_CASE("Enterprise pool: Data Dictionary connection + DD-resolved SQL over th
 
 TEST_CASE("Network login throttling survives reconnect and isolates IP/account counters") {
     Server server;
-    server.set_daemon_hardening(true);
     CHECK(server.login_allowed("192.0.2.1", "alice"));
     server.login_failed("192.0.2.1", "alice", 1);
     CHECK_FALSE(server.login_allowed("192.0.2.1", "alice"));
@@ -1711,7 +1710,6 @@ TEST_CASE("Network login throttling survives reconnect and isolates IP/account c
 
 TEST_CASE("Network requires Connect before mutex or DD operations") {
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.start("127.0.0.1", 0));
     for (auto opcode : {Opcode::Mutex, Opcode::DDCreateUser, Opcode::ExecuteSQL, Opcode::MgRequest}) {
         auto connection = connect_tcp("127.0.0.1", server.port());
@@ -1730,7 +1728,6 @@ TEST_CASE("Network requires Connect before mutex or DD operations") {
 
 TEST_CASE("Network management session cannot switch to database operations") {
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.start("127.0.0.1", 0));
     auto connection = connect_tcp("127.0.0.1", server.port());
     REQUIRE(connection);
@@ -1752,7 +1749,6 @@ TEST_CASE("Network management session cannot switch to database operations") {
 
 TEST_CASE("Network failed Connect does not authorize a coalesced management mutator") {
     Server server;
-    server.set_daemon_hardening(true);
     server.add_credential("admin", "secret");
     REQUIRE(server.start("127.0.0.1", 0));
     auto connection = connect_tcp("127.0.0.1", server.port());
@@ -1937,7 +1933,6 @@ TEST_CASE("native TLS listener validates config and serves encrypted Hello") {
     server_config.cert_pem = tls_test_cert;
     server_config.key_pem = tls_test_key;
     Server server;
-    server.set_daemon_hardening(true);
     openads::network::TlsConfig invalid;
     CHECK_FALSE(server.set_tls(invalid).has_value());
     invalid.cert_pem = tls_test_cert;
@@ -1970,7 +1965,6 @@ TEST_CASE("native TLS single-worker pool serves a client while another handshake
     config.cert_pem = tls_test_cert;
     config.key_pem = tls_test_key;
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.set_tls(config).has_value());
     openads::network::WorkerPool pool(server, 1);
     pool.start();
@@ -2019,7 +2013,7 @@ TEST_CASE("mtfix41 daemon TLS established idle resumes in dedicated and reactor"
     std::error_code ec; fs::create_directories(dir,ec);
     for(bool reactor : {false,true}) {
         tls_idle_offset.store(0);
-        Server server; server.set_daemon_hardening(true); server.set_session_clock(tls_idle_now);
+        Server server; server.set_session_clock(tls_idle_now);
         openads::network::TlsConfig sc; sc.cert_pem=tls_test_cert; sc.key_pem=tls_test_key;
         REQUIRE(server.set_tls(sc));
         std::unique_ptr<openads::network::WorkerPool> pool;
@@ -2048,62 +2042,6 @@ TEST_CASE("mtfix41 daemon TLS established idle resumes in dedicated and reactor"
     tls_idle_offset.store(0); fs::remove_all(dir,ec);
 }
 #endif
-
-TEST_CASE("daemon policy preserves AdsConnect60 authenticated table reads") {
-    namespace fs = std::filesystem;
-    auto dir = fs::temp_directory_path() / "openads_daemon_table_regression";
-    std::error_code ec;
-    fs::remove_all(dir, ec);
-    fs::create_directories(dir);
-    m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB"});
-
-    Server srv;
-    srv.set_daemon_hardening(true);
-    srv.add_credential("reader", "secret");
-    REQUIRE(srv.start("127.0.0.1", 0).has_value());
-
-    char uri[256];
-    std::snprintf(uri, sizeof(uri),
-                  "tcp://127.0.0.1:%u/%s",
-                  static_cast<unsigned>(srv.port()),
-                  dir.string().c_str());
-
-    UNSIGNED8 srvbuf[256];
-    std::memcpy(srvbuf, uri, std::strlen(uri) + 1);
-    UNSIGNED8 leaf[64] = "data.dbf";
-
-    ADSHANDLE hConn = 0;
-    REQUIRE(AdsConnect60(srvbuf, ADS_REMOTE_SERVER,
-                         (UNSIGNED8*)"reader", (UNSIGNED8*)"secret", 0, &hConn) == 0);
-
-    ADSHANDLE hTable = 0;
-    REQUIRE(AdsOpenTable(hConn, leaf, nullptr, ADS_CDX,
-                         0, 0, 0, 0, &hTable) == 0);
-
-    UNSIGNED32 cnt = 0;
-    REQUIRE(AdsGetRecordCount(hTable, 0, &cnt) == 0);
-    CHECK(cnt == 2);
-
-    REQUIRE(AdsGotoTop(hTable) == 0);
-    UNSIGNED8  buf[16] = {0};
-    UNSIGNED32 cap = sizeof(buf);
-    REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
-    std::string s((char*)buf, cap);
-    while (!s.empty() && s.back() == ' ') s.pop_back();
-    CHECK(s == "AAAA");
-
-    REQUIRE(AdsSkip(hTable, 1) == 0);
-    cap = sizeof(buf); std::memset(buf, 0, sizeof(buf));
-    REQUIRE(AdsGetField(hTable, (UNSIGNED8*)"TAG", buf, &cap, 0) == 0);
-    std::string s2((char*)buf, cap);
-    while (!s2.empty() && s2.back() == ' ') s2.pop_back();
-    CHECK(s2 == "BBBB");
-
-    REQUIRE(AdsCloseTable(hTable) == 0);
-    REQUIRE(AdsDisconnect(hConn) == 0);
-
-    srv.stop();
-}
 
 TEST_CASE("remote SQL shape budget checks overflow and conservative outer-join fanout") {
     using Budget = openads::engine::RemoteSqlShapeBudget;

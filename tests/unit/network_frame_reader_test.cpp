@@ -96,22 +96,18 @@ TEST_CASE("FrameReader enforces preauth header limit and permits authenticated u
 
 TEST_CASE("FrameReader rejects unknown opcode without waiting for its body") {
     FrameReader reader;
-    reader.set_validate_opcodes(true);
     const std::uint8_t header[] = {0, 0, 0, 20, 0};
     CHECK_FALSE(reader.feed(header, sizeof(header)));
     const std::uint8_t complete[] = {0, 0, 0, 0, 0};
-    CHECK(openads::network::decode_frame(complete, sizeof(complete), nullptr)); // shared client decoder retains legacy behavior
+    CHECK_FALSE(openads::network::decode_frame(complete, sizeof(complete), nullptr));
 }
 
 TEST_CASE("FrameReader accepts OpenIndexAck paired enum declaration") {
     FrameReader reader;
-    reader.set_validate_opcodes(true);
     auto bytes = frame_bytes(Opcode::OpenIndexAck, {0, 0});
     auto result = reader.feed(bytes.data(), bytes.size());
     REQUIRE(result);
     REQUIRE(result.value().size() == 1);
     CHECK(result.value().front().opcode == Opcode::OpenIndexAck);
-    const std::uint8_t ack[] = {0,0,0,0,static_cast<std::uint8_t>(Opcode::OpenIndexAck)};
-    FrameReader ack_reader;
-    CHECK(ack_reader.feed(ack, sizeof(ack)));
+    CHECK(openads::network::valid_opcode(static_cast<std::uint8_t>(Opcode::OpenIndexAck)));
 }

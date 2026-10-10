@@ -12,9 +12,6 @@
 #include "doctest.h"
 #include "mgmt/mg_stats.h"
 #include "network/server.h"
-#include "network/transport.h"
-#include "network/client.h"
-#include "network/wire.h"
 #include "openads/ace.h"
 
 #include <atomic>
@@ -251,74 +248,4 @@ TEST_CASE("DropTable after pooled close really removes the file") {
 
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
     srv.stop();
-}
-
-TEST_CASE("Open setup metadata: immutable length is returned without a frame") {
-    ow_wipe(); const auto dir = ow_tmp_dir(); seed_ow_fixture(dir);
-    openads::network::Server srv; REQUIRE(srv.start("127.0.0.1", 0).has_value());
-    char uri[512]{}; std::snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u/%s", static_cast<unsigned>(srv.port()), dir.string().c_str());
-    ADSHANDLE c = 0, t = 0; REQUIRE(AdsConnect60(reinterpret_cast<UNSIGNED8*>(uri), ADS_REMOTE_SERVER, nullptr, nullptr, 0, &c) == 0);
-    UNSIGNED8 name[] = "ow.dbf";
-    REQUIRE(AdsOpenTable(c, name, nullptr, ADS_CDX, ADS_ANSI, ADS_SHARED, ADS_COMPATIBLE_LOCKING, ADS_DEFAULT, &t) == 0);
-    const auto before = op_count(0x6C); UNSIGNED32 len = 0;
-    REQUIRE(AdsGetRecordLength(t, &len) == 0); CHECK(len == 11); CHECK(op_count(0x6C) == before);
-    CHECK(ow_get(t, "NM") == "alpha");
-    REQUIRE(AdsCloseTable(t) == 0); REQUIRE(AdsDisconnect(c) == 0); srv.stop();
-}
-
-TEST_CASE("Open setup metadata: old client receives no index binding section") {
-    ow_wipe(); const auto dir = ow_tmp_dir(); seed_ow_fixture(dir);
-    openads::network::Server srv; REQUIRE(srv.start("127.0.0.1", 0).has_value());
-    auto socket = openads::network::connect_tcp("127.0.0.1", srv.port()); REQUIRE(socket.has_value());
-    auto transport = openads::network::make_plain_transport(socket.value());
-    openads::network::Frame connect; connect.opcode = openads::network::Opcode::Connect;
-    const auto path = dir.string(); connect.payload.push_back(static_cast<std::uint8_t>(path.size())); connect.payload.push_back(static_cast<std::uint8_t>(path.size() >> 8));
-    connect.payload.insert(connect.payload.end(), path.begin(), path.end()); connect.payload.insert(connect.payload.end(), 4, 0);
-    REQUIRE(openads::network::write_frame(*transport, connect).has_value());
-    auto reply = openads::network::read_frame(*transport); REQUIRE(reply.has_value()); REQUIRE(reply.value().opcode == openads::network::Opcode::ConnectAck);
-    openads::network::Frame open; open.opcode = openads::network::Opcode::OpenTable;
-    const std::string name = "ow.dbf"; open.payload.assign(name.begin(), name.end());
-    REQUIRE(openads::network::write_frame(*transport, open).has_value());
-    reply = openads::network::read_frame(*transport); REQUIRE(reply.has_value()); REQUIRE(reply.value().opcode == openads::network::Opcode::OpenTableAck);
-    const auto& bytes = reply.value().payload; REQUIRE(bytes.size() > 6); const auto baglen = bytes[4] + 256u * bytes[5];
-    const auto countpos = 6u + baglen; REQUIRE(bytes.size() > countpos); CHECK(bytes[countpos] == 2); // existing schema + row only
-    transport->close(); srv.stop();
-}
-
-namespace {
-class LegacyOpenTransport : public openads::network::ITransport {
-    std::vector<std::uint8_t> incoming;
-    std::vector<std::uint8_t> outgoing;
-    bool live = true;
-public:
-    openads::util::Result<std::size_t> send(const std::uint8_t* data, std::size_t n) override {
-        incoming.insert(incoming.end(), data, data+n); std::size_t used = 0;
-        auto frame = openads::network::decode_frame(incoming.data(), incoming.size(), &used);
-        if (frame) {
-            openads::network::Frame reply;
-            const auto op = frame.value().opcode;
-            if (op == openads::network::Opcode::Hello) { reply.opcode = openads::network::Opcode::HelloAck; }
-            else if (op == openads::network::Opcode::Connect) { reply.opcode = openads::network::Opcode::ConnectAck; }
-            else if (op == openads::network::Opcode::OpenTable) { reply.opcode = openads::network::Opcode::OpenTableAck; reply.payload = {7,0,0,0}; }
-            else { incoming.clear(); return n; }
-            auto encoded = openads::network::encode_frame(reply); if (encoded) outgoing = encoded.value(); incoming.clear();
-        }
-        return n;
-    }
-    openads::util::Result<std::size_t> recv(std::uint8_t* data, std::size_t n) override {
-        const auto size = std::min(n, outgoing.size()); std::copy(outgoing.begin(), outgoing.begin()+static_cast<std::ptrdiff_t>(size), data);
-        outgoing.erase(outgoing.begin(), outgoing.begin()+static_cast<std::ptrdiff_t>(size)); return size;
-    }
-    void close() noexcept override { live = false; }
-    bool valid() const noexcept override { return live; }
-};
-}
-TEST_CASE("Open setup metadata: old server reply selects legacy fallback") {
-    openads::network::RemoteConnection connection;
-    REQUIRE(connection.connect_with_transport(std::make_unique<LegacyOpenTransport>(), "fixture", "", "").has_value());
-    auto result = connection.open_table("fixture.dbf"); REQUIRE(result.has_value());
-    CHECK(result.value().id == 7); CHECK_FALSE(result.value().has_record_length);
-    CHECK_FALSE(result.value().has_schema); CHECK_FALSE(result.value().has_first_row);
-    CHECK(result.value().production_index_reply.empty());
-    connection.disconnect();
 }

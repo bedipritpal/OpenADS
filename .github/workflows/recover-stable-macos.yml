@@ -1,0 +1,223 @@
+name: Recover exactstable1.09.74 macOS source and universal artifact
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: stable-1.09.74-macos-recovery
+  cancel-in-progress: false
+jobs:
+  source-build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.preset }}${{ matrix.tls && ' / TLS' || '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-14
+          preset: default
+          tls: false
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-tags: true
+        fetch-depth: 0
+        ref: 383dac64933db2e8eba0efaa0f96967f1ae4c99f
+    - uses: actions/download-artifact@v4
+      with:
+        name: reviewed-candidate-patch
+        path: reviewed-patch
+        run-id: 38027722881
+        github-token: ${{ github.token }}
+    - name: Apply exact approved candidate and verify tree
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3 - <<''VERIFY_SHA''
+
+        import hashlib,pathlib
+
+        assert hashlib.sha256(pathlib.Path(''reviewed-patch/candidate-approved.patch'').read_bytes()).hexdigest() == ''c10697ff4b4305128e91c3376955720c975b22629ba126b61470573da27de593''
+
+        VERIFY_SHA
+
+        git apply --index reviewed-patch/candidate-approved.patch
+
+        test "$(git write-tree)" = "c160c4587a29ae8952431231cd81d38ee52e71b6"
+
+        rm -rf reviewed-patch
+
+        '
+    - name: Install Ninja (Linux / macOS)
+      if: runner.os != 'Windows'
+      uses: seanmiddleditch/gha-setup-ninja@v6
+    - name: Configure
+      run: "cmake --preset ${{ matrix.preset }} \\\n      ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }}\n"
+      shell: bash
+    - name: Build
+      run: cmake --build build/${{ matrix.preset }} --config Release --target dbf_cdx_bench openads_unit_tests
+    - name: Test
+      run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure -C Release
+    - name: Bench smoke (CDX multi-tag create)
+      run: "BENCH=\"build/${{ matrix.preset }}/tests/Release/dbf_cdx_bench${{ runner.os == 'Windows' && '.exe' || '' }}\"\nif [ -f \"$BENCH\" ]; then\n\
+        \  \"$BENCH\" 1000 || true\nfi\n"
+      shell: bash
+  package-build:
+    name: ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-14
+          arch: universal
+          preset: default
+          artifact_ext: tar.gz
+          cmake_extra: -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 383dac64933db2e8eba0efaa0f96967f1ae4c99f
+    - uses: actions/download-artifact@v4
+      with:
+        name: reviewed-candidate-patch
+        path: reviewed-patch
+        run-id: 38027722881
+        github-token: ${{ github.token }}
+    - name: Apply exact approved candidate and verify tree
+      shell: bash
+      run: 'set -euo pipefail
+
+        python3 - <<''VERIFY_SHA''
+
+        import hashlib,pathlib
+
+        assert hashlib.sha256(pathlib.Path(''reviewed-patch/candidate-approved.patch'').read_bytes()).hexdigest() == ''c10697ff4b4305128e91c3376955720c975b22629ba126b61470573da27de593''
+
+        VERIFY_SHA
+
+        git apply --index reviewed-patch/candidate-approved.patch
+
+        test "$(git write-tree)" = "c160c4587a29ae8952431231cd81d38ee52e71b6"
+
+        rm -rf reviewed-patch
+
+        '
+    - name: Resolve tag
+      id: tag
+      shell: bash
+      run: 'T="v1.09.74"
+
+        if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+
+        echo "tag=$T" >> "$GITHUB_OUTPUT"
+
+        echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+        '
+    - name: Install Ninja (Linux / macOS)
+      if: runner.os != 'Windows'
+      uses: seanmiddleditch/gha-setup-ninja@v6
+    - name: Cache Harbour SDK (Linux)
+      if: runner.os == 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/harbour-udf
+        key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+    - name: Provision Harbour SDK (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+      run: "set -e\nHB=\"$RUNNER_TEMP/harbour-udf\"\necho \"HB_ROOT=$HB/install\" >> \"$GITHUB_ENV\"\nif [ -f \"$HB/install/include/hbvm.h\" ] && \\\n \
+        \  [ -n \"$(find \"$HB/install\" -name 'libhbvmmt.a' 2>/dev/null | head -1)\" ] && \\\n   [ -n \"$(find \"$HB/install\" -name harbour -type f 2>/dev/null\
+        \ | head -1)\" ]; then\n  echo \"Harbour SDK cached at $HB/install\"\nelse\n  sudo apt-get update\n  sudo apt-get install -y build-essential libncurses-dev\
+        \ libx11-dev\n  rm -rf \"$HB\"\n  mkdir -p \"$HB\"\n  git clone --depth 1 --branch master https://github.com/harbour/core.git \"$HB/src\"\n  git\
+        \ -C \"$HB/src\" fetch --depth 1 origin \"$HARBOUR_REF\"\n  git -C \"$HB/src\" checkout \"$HARBOUR_REF\"\n  cd \"$HB/src\"\n  make -j\"$(nproc)\"\
+        \ install HB_INSTALL_PREFIX=\"$HB/install\" HB_BUILD_3RDEXT=no\nfi\n# Resolve exact SDK paths (no layout guessing in CMake):\n# headers, MT VM archive,\
+        \ compiler binary.\nHB_INC=\"$(dirname \"$(find \"$HB/install\" -name hbvm.h | head -1)\")\"\nHB_LIBDIR=\"$(dirname \"$(find \"$HB/install\" -name\
+        \ 'libhbvmmt.a' | head -1)\")\"\nHB_CC=\"$(find \"$HB/install\" -name harbour -type f -executable | head -1)\"\necho \"Harbour SDK layout:\"\necho\
+        \ \"  include: ${HB_INC:-MISSING}\"\necho \"  libdir:  ${HB_LIBDIR:-MISSING}\"\necho \"  compiler:${HB_CC:-MISSING}\"\nif [ -z \"$HB_INC\" ] ||\
+        \ [ -z \"$HB_LIBDIR\" ] || [ -z \"$HB_CC\" ]; then\n  echo \"::error::Harbour SDK layout unexpected \u2014 full listing:\"\n  find \"$HB/install\"\
+        \ -maxdepth 4 | sort | head -80\n  exit 1\nfi\n{\n  echo \"HARBOUR_INCLUDE_DIR=$HB_INC\"\n  echo \"HARBOUR_LIB_DIR=$HB_LIBDIR\"\n  echo \"HARBOUR_COMPILER=$HB_CC\"\
+        \n} >> \"$GITHUB_ENV\"\n"
+    - name: Configure
+      shell: bash
+      run: "cmake --preset ${{ matrix.preset }} \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON \\\n      -DOPENADS_VERSION_FORCE=\"${{\
+        \ steps.tag.outputs.version }}\" \\\n      ${{ matrix.cmake_extra }} \\\n      ${{ runner.os == 'Linux' && format('-DOPENADS_WITH_HARBOUR_UDF=ON\
+        \ -DHARBOUR_INCLUDE_DIR={0} -DHARBOUR_LIB_DIR={1} -DHARBOUR_COMPILER={2}', env.HARBOUR_INCLUDE_DIR, env.HARBOUR_LIB_DIR, env.HARBOUR_COMPILER) ||\
+        \ '' }}\n"
+    - name: Build
+      run: cmake --build build/${{ matrix.preset }} --config Release
+    - name: Test
+      timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 20 || 30 }}
+      run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure -C Release
+    - name: Set up MinGW for the static ACE library
+      if: always() && runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{ matrix.arch == 'x64' && 'MINGW64' || 'MINGW32' }}
+        release: false
+        update: false
+        install: ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake
+          python' }}
+    - name: Build static ACE library (MinGW)
+      if: always() && runner.os == 'Windows'
+      shell: msys2 {0}
+      run: "cmake -S . -B build/mingw-${{ matrix.arch }} -G \"MinGW Makefiles\" \\\n      -DCMAKE_BUILD_TYPE=Release \\\n      -DOPENADS_BUILD_TESTS=ON\
+        \ \\\n      -DOPENADS_VERSION_FORCE=\"${{ steps.tag.outputs.version }}\" \\\n      -DOPENADS_WITH_HTTP=OFF \\\n      -DOPENADS_WITH_TLS=OFF \\\n\
+        \      -DOPENADS_WARNINGS_AS_ERRORS=OFF\ncmake --build build/mingw-${{ matrix.arch }} \\\n      --target openads_ace_static openads_unit_tests -j\"\
+        $(nproc)\"\nctest --test-dir build/mingw-${{ matrix.arch }} --output-on-failure -C Release\nls -la build/mingw-${{ matrix.arch }}/src/libopenace*.a\n"
+    - name: Regenerate MinGW DLL imports and link health probe
+      if: always() && runner.os == 'Windows'
+      shell: msys2 {0}
+      run: "set -euo pipefail\nBITS=\"${{ matrix.arch == 'x64' && '64' || '32' }}\"\nmkdir -p build/fresh-imports\npython3 tests/mingw_import_parser_test.py\n\
+        python3 tools/scripts/regenerate_mingw_imports.py \\\n  \"build/${{ matrix.preset }}/src/Release/openace${BITS}.dll\" \\\n  \"dist/import-libs/${{\
+        \ matrix.arch }}/mingw/libace${BITS}.a\" \\\n  \"build/fresh-imports/libace${BITS}.a\" \"$BITS\"\n"
+    - name: Stage release files (POSIX)
+      if: always() && runner.os != 'Windows'
+      shell: bash
+      run: "STAGE=\"openads-${{ steps.tag.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'macos' }}-${{ matrix.arch }}\"\nmkdir -p \"$STAGE\"\
+        \nBUILD=\"build/${{ matrix.preset }}\"\n# Engine shared lib is built as libopenace64.{so,dylib}. Ship it,\n# plus a drop-in-named copy libace64.*\
+        \ for apps that load by the\n# canonical ACE name.\nfor f in \"$BUILD\"/src/libopenace64.*; do\n  [ -e \"$f\" ] || continue\n  cp \"$f\" \"$STAGE/\"\
+        \n  cp \"$f\" \"$STAGE/$(basename \"$f\" | sed 's/libopenace64/libace64/')\"\ndone\n# Server + bench CLIs\ncp \"$BUILD\"/tools/serverd/openads_serverd\
+        \ \"$STAGE/\"\ncp \"$BUILD\"/tools/bench/openads_bench   \"$STAGE/\"\ncp LICENSE NOTICE README.md openads.ini.sample \"$STAGE/\"\nmkdir -p \"$STAGE/include/openads\"\
+        \ncp include/openads/ace.h \"$STAGE/include/ace.h\"\ncp include/openads/{ace,error,openads_sql,platform,version}.h \"$STAGE/include/openads/\"\n\
+        mkdir -p \"$STAGE/contrib/oads_hb\"\ncp contrib/oads_hb/{oads_hb.c,oads_stats_display.prg,README.md} \"$STAGE/contrib/oads_hb/\"\ntar czvf \"$STAGE.tar.gz\"\
+        \ \"$STAGE\"\nls -la \"$STAGE.tar.gz\"\necho \"ASSET=$STAGE.tar.gz\" >> \"$GITHUB_ENV\"\n"
+    - name: Stage release files (Windows)
+      if: always() && runner.os == 'Windows'
+      shell: pwsh
+      run: "$stage = \"openads-${{ steps.tag.outputs.version }}-windows-${{ matrix.arch }}\"\nNew-Item -ItemType Directory -Path $stage | Out-Null\n$build\
+        \ = \"build/${{ matrix.preset }}\"\n$bits  = if (\"${{ matrix.arch }}\" -eq \"x64\") { \"64\" } else { \"32\" }\n$builtDll = \"$build/src/Release/openace$bits.dll\"\
+        \n$builtLib = \"$build/src/Release/openace$bits.lib\"\nif (-not (Test-Path $builtDll)) {\n    throw \"Engine DLL missing: $builtDll\"\n}\nif (-not\
+        \ (Test-Path $builtLib)) {\n    throw \"Import library missing: $builtLib\"\n}\n# Ship BOTH names at the archive root:\n#   openace64.dll / openace32.dll\
+        \ \u2014 OpenADS build product (PHP ext,\n#     side-by-side with SAP ACE)\n#   ace64.dll     / ace32.dll     \u2014 drop-in for Harbour rddads\
+        \ / FWH\nCopy-Item $builtDll \"$stage/openace$bits.dll\"\nCopy-Item $builtLib \"$stage/openace$bits.lib\"\nCopy-Item \"$build/src/Release/openace$bits.exp\"\
+        \ \"$stage/\" -ErrorAction SilentlyContinue\nCopy-Item $builtDll \"$stage/ace$bits.dll\"\nCopy-Item $builtLib \"$stage/ace$bits.lib\"\nforeach ($req\
+        \ in @(\n    \"openace$bits.dll\", \"openace$bits.lib\",\n    \"ace$bits.dll\",     \"ace$bits.lib\")) {\n    if (-not (Test-Path \"$stage/$req\"\
+        )) {\n        throw \"Release staging incomplete: missing $req\"\n    }\n}\n# Per-compiler import libraries (MSVC / MinGW-GCC / Borland) for\n#\
+        \ ace<bits>.dll \u2014 prebuilt under dist/import-libs because the CI\n# runners have no Borland toolchain (see dist/import-libs/gen.ps1).\nNew-Item\
+        \ -ItemType Directory \"$stage/lib\" | Out-Null\nCopy-Item -Recurse \"dist/import-libs/${{ matrix.arch }}/*\" \"$stage/lib/\"\n# Replace stale MinGW\
+        \ archives with this DLL's actual exports.\nCopy-Item \"build/fresh-imports/libace$bits.a\" \"$stage/lib/mingw/libace$bits.a\" -Force\n# Static\
+        \ ACE library (MinGW): link into an hbmk2 -comp=mingw[64]\n# app and no ace<bits>.dll is needed at all. Built in the\n# \"Build static ACE library\
+        \ (MinGW)\" step above.\n$staticLib = \"build/mingw-${{ matrix.arch }}/src/libopenace$bits.a\"\nif (-not (Test-Path $staticLib)) {\n    throw \"\
+        Static ACE library missing: $staticLib\"\n}\nCopy-Item $staticLib \"$stage/libopenace$bits.a\"\n# Server + bench CLIs\nCopy-Item \"$build/tools/serverd/Release/openads_serverd.exe\"\
+        \ \"$stage/\"\nCopy-Item \"$build/tools/bench/Release/openads_bench.exe\"     \"$stage/\"\nCopy-Item LICENSE,NOTICE,README.md,openads.ini.sample\
+        \  $stage/\nCopy-Item QUICKSTART.md                              \"$stage/\" -ErrorAction SilentlyContinue\nNew-Item -ItemType Directory \"$stage/include/openads\"\
+        \ -Force | Out-Null\nCopy-Item include/openads/ace.h \"$stage/include/ace.h\"\nCopy-Item include/openads/ace.h,include/openads/error.h,include/openads/openads_sql.h,include/openads/platform.h,include/openads/version.h\
+        \ \"$stage/include/openads/\"\n# Harbour HB_FUNC wrappers for the oads_* VFS API \u2014 compiled\n# into the app, not shipped in the DLL. Arch-independent\
+        \ C\n# source: both Windows zips carry it. (Pritpal Bedi.)\nNew-Item -ItemType Directory \"$stage/contrib/oads_hb\" -Force | Out-Null\nCopy-Item\
+        \ contrib/oads_hb/oads_hb.c,contrib/oads_hb/oads_stats_display.prg,contrib/oads_hb/README.md \"$stage/contrib/oads_hb/\"\nif (\"${{ matrix.arch\
+        \ }}\" -eq \"x86\") {\n    Copy-Item src/openads_ace_x86_stdcall.def      \"$stage/\"\n    # Ship the 32-bit MinGW import library at the archive\
+        \ root too:\n    # 32-bit Harbour (hbmk2 -comp=mingw, rddads) links it directly.\n    # (Reported by Pritpal Bedi.)\n    Copy-Item build/fresh-imports/libace32.a\
+        \ \"$stage/\"\n} else {\n    Copy-Item src/openads_ace.def                   \"$stage/\"\n}\nCompress-Archive -Path \"$stage/*\" -DestinationPath\
+        \ \"$stage.zip\" -Force\nGet-Item \"$stage.zip\"\n\"ASSET=$stage.zip\" | Out-File -FilePath $env:GITHUB_ENV -Append\n"
+    - name: Upload artifact (workflow run)
+      if: always() && env.ASSET != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: openads-${{ runner.os }}-${{ matrix.arch }}
+        path: ${{ env.ASSET }}

@@ -57,7 +57,11 @@ jobs:
           ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/static-smoke-imports.txt
           "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp -Wl,--whole-archive output/libopenace32.a -Wl,--no-whole-archive -static -lws2_32 -lpsapi -o output/whole-archive-smoke.exe
           "$trip-objdump" -p output/whole-archive-smoke.exe > output/whole-archive-imports.txt
-          wine output/static-smoke.exe
+          "$trip-addr2line" -Cfipe output/static-smoke.exe 0x0098b340 > output/wine-x86-fault-address.txt
+          set +e
+          wine output/static-smoke.exe > output/wine-smoke.log 2>&1
+          echo $? > output/wine-smoke-exit.txt
+          set -e
           for unit in ads1 adsfunc adsmgmnt adsx; do
            "$trip-gcc-posix" -c "$RUNNER_TEMP/harbour/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour/include" -I"$RUNNER_TEMP/harbour/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
           done
@@ -71,3 +75,22 @@ jobs:
           path: output/
           if-no-files-found: error
           retention-days: 14
+  windows-validation:
+    needs: build
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x64]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mtfix42-gcc10-static-${{ matrix.arch }}
+          path: static-kit
+      - name: Native Windows static smoke
+        shell: pwsh
+        run: |
+          & ./static-kit/static-smoke.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./static-kit/whole-archive-smoke.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

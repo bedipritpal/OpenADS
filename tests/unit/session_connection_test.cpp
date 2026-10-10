@@ -280,15 +280,17 @@ TEST_CASE("Connection legacy_paths create resolves a foreign-drive path") {
 namespace {
 
 struct ResolveAuditGuard {
+    bool logging_before = openads::util::logging_enabled();
     std::ostringstream console;
     std::ostringstream file;
     ResolveAuditGuard() {
+        openads::util::set_logging_enabled(true);
         openads::util::reset_audit_config();
         openads::util::set_audit_console(&console);
         openads::util::set_audit_file(&file);
         openads::util::set_audit_details_enabled(false);
     }
-    ~ResolveAuditGuard() { openads::util::reset_audit_config(); }
+    ~ResolveAuditGuard() { openads::util::reset_audit_config(); openads::util::set_logging_enabled(logging_before); }
 };
 
 bool has_audit_prefix(const std::string& line, const std::string& conn) {
@@ -327,9 +329,9 @@ TEST_CASE("resolve logs RESOLVED with connection, entry, seq, timestamp") {
 
         const std::string& out = g.console.str();
         CHECK(out.find("RESOLVED=\"") != std::string::npos);
-        CHECK(out.find(norm_resolved) != std::string::npos);
+        CHECK(out.find(norm_resolved) == std::string::npos);
         CHECK(out.find("JAILED") != std::string::npos);
-        CHECK(out.find("ASKED=\"data.dbf\"") != std::string::npos);
+        CHECK(out.find("ASKED=\"TBL_") != std::string::npos);
         CHECK(out.find("VIA=LOCAL") != std::string::npos);
         CHECK(has_audit_prefix(out, c.connection_serial()));
         CHECK(g.file.str() == out);
@@ -358,7 +360,7 @@ TEST_CASE("resolve detail lines share the entry serial and stay off the file") {
         CHECK(g.console.str().find("RESOLVED=") != std::string::npos);
         CHECK(g.file.str().find("effective=") == std::string::npos);
         CHECK(g.file.str().find("RESOLVED=") != std::string::npos);
-        CHECK(g.file.str().find("ASKED=\"data.dbf\"") != std::string::npos);
+        CHECK(g.file.str().find("ASKED=\"TBL_") != std::string::npos);
 
         // Same connection + entry serial on every line of this resolve.
         const std::string prefix6 = c.connection_serial() + " 00000001 ";

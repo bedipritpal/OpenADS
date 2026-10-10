@@ -142,6 +142,16 @@ bool parse_ini(const std::string& text, IniConfig& out, std::string& error) {
             }
             out.has_allow_anonymous = true;
             out.allow_anonymous = v == "1" || v == "true" || v == "yes" || v == "on";
+        } else if (key == "diagnostics") {
+            std::string v = val;
+            for (char& c : v) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+            if (v != "1" && v != "true" && v != "yes" && v != "on" &&
+                v != "0" && v != "false" && v != "no" && v != "off") {
+                error = "line " + std::to_string(lineno) + ": diagnostics must be a boolean";
+                return false;
+            }
+            out.has_diagnostics = true;
+            out.diagnostics = v == "1" || v == "true" || v == "yes" || v == "on";
         } else if (key == "port") {
             unsigned long n = 0;
             if (!parse_uint(val, 65535, n)) {

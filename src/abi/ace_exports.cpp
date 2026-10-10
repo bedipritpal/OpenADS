@@ -1515,6 +1515,7 @@ bool remote_table_has_index(const openads::network::RemoteTable* rt) {
 // Diagnostic WAN trace. Off unless wire_trace=1; no file opens or timestamps
 // on the disabled request path. Payload and seek keys are never logged.
 static bool cli_trace_on() {
+    if (!openads::util::logging_enabled()) return false;
     static const bool on = openads::util::client_setting_truthy(
         "OPENADS_WIRE_TRACE", "wire_trace");
     return on;
@@ -1531,6 +1532,10 @@ static const std::string& cli_trace_path() {
 
 struct CliTraceState {
     std::mutex mu;
+    std::uint64_t epoch = 0;
+    // Numbering is trace-epoch/connection scoped, never a hash of schema.
+    std::map<std::pair<const void*, std::string>, std::string> masked_names;
+    std::map<const void*, std::uint32_t> next_mask;
     std::map<std::pair<const void*, std::uint32_t>, std::string> tables;
     std::map<std::pair<const void*, std::uint32_t>, std::string> indexes;
 };
@@ -1538,20 +1543,60 @@ static CliTraceState& cli_trace_state() {
     static CliTraceState trace;
     return trace;
 }
+static void cli_trace_reset_epoch_locked(CliTraceState& trace) {
+    const auto epoch = openads::util::diagnostic_epoch();
+    if (trace.epoch != epoch) {
+        trace.masked_names.clear();
+        trace.next_mask.clear();
+        trace.tables.clear();
+        trace.indexes.clear();
+        trace.epoch = epoch;
+    }
+}
+
+static std::string cli_trace_mask(const void* conn, const std::string& name) {
+    if (name.empty()) return "-";
+    if (!cli_trace_on()) return "<masked>";
+    auto& trace = cli_trace_state();
+    std::lock_guard<std::mutex> lock(trace.mu);
+    cli_trace_reset_epoch_locked(trace);
+    std::string normalized(name);
+    for (auto& ch : normalized) {
+        if (ch == '\\') ch = '/';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    const auto key = std::make_pair(conn, normalized);
+    const auto found = trace.masked_names.find(key);
+    if (found != trace.masked_names.end()) return found->second;
+    if (trace.masked_names.size() >= 16384) return "TBL_OVERFLOW";
+    char label[32];
+    std::snprintf(label, sizeof(label), "TBL_%04u", ++trace.next_mask[conn]);
+    return trace.masked_names.emplace(key, label).first->second;
+}
+static std::string cli_trace_table_label(const openads::network::RemoteTable* rt) {
+    if (!rt) return "-";
+    return rt->alias.empty() ? cli_trace_mask(rt->conn, rt->name) : rt->alias;
+}
 
 // Called after a successful open; table ID belongs to its connection,
 // not globally. Do not hold this mutex while performing any wire request.
 static void cli_trace_table_open(const openads::network::RemoteTable* rt) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return;
     if (!cli_trace_on() || !rt || !rt->conn) return;
+    const auto label = cli_trace_table_label(rt);
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
-    trace.tables[{rt->conn, rt->id}] =
-        rt->alias.empty() ? rt->name : rt->alias;
+    cli_trace_reset_epoch_locked(trace);
+    if (trace.tables.size() < 16384) trace.tables[{rt->conn, rt->id}] = label;
 }
 static void cli_trace_table_close(const openads::network::RemoteTable* rt) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return;
     if (!cli_trace_on() || !rt || !rt->conn) return;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
+    cli_trace_reset_epoch_locked(trace);
     trace.tables.erase({rt->conn, rt->id});
     for (const auto& entry : rt->index_by_tag)
         trace.indexes.erase({rt->conn, entry.second});
@@ -1579,9 +1624,11 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 
 static void cli_trace_line(long long ms, const char* who, const char* op,
                            const char* detail) {
-    if (!cli_trace_on()) return;
+    openads::util::DiagnosticGuard guard;
+    if (!guard || !cli_trace_on()) return;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
+    cli_trace_reset_epoch_locked(trace);
     FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
     if (!hf) return;
     cli_trace_write_locked(hf, ms, who, op, detail);
@@ -1607,8 +1654,7 @@ static void cli_trace(const char* op, const char* fmt, ...) {
 static void cli_trace_tbl(const openads::network::RemoteTable* rt,
                           const char* op, const char* fmt, ...) {
     if (!cli_trace_on()) return;
-    const std::string who = rt == nullptr ? "-" :
-        (!rt->alias.empty() ? rt->alias : rt->name);
+    const std::string who = cli_trace_table_label(rt);
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -1744,8 +1790,11 @@ static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
                                  std::uint32_t tid, std::size_t req_bytes,
                                  std::uint8_t rep_op, std::size_t rep_bytes,
                                  long long us) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard || !cli_trace_on()) return;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
+    cli_trace_reset_epoch_locked(trace);
     std::string table = "-";
     const bool index_op = op == 0x90 || op == 0x92 || op == 0x8A ||
                           op == 0x8C || op == 0x8E || op == 0x5C;
@@ -7211,6 +7260,8 @@ static void arc2_stamp(FILE* f) {
     fprintf(f, "%02d:%02d:%02d ", tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
 }
 static void arc2_trace(const char* name) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return;
     if (!arc2_on()) return;
     const char* path =
 #if defined(_MSC_VER)
@@ -7225,6 +7276,8 @@ static void arc2_trace(const char* name) {
     }
 }
 static void arc2_log(const char* fmt, ...) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return;
     if (!arc2_on()) return;
     const char* path =
 #if defined(_MSC_VER)
@@ -7246,9 +7299,7 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
                         UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {
     arc2_trace("AdsConnect60");
-    if (cli_trace_on()) {
-        openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
-    }
+    openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
                                           "phConnect is null");
     auto path = openads::abi::to_internal(pucServer, 0);
@@ -8346,7 +8397,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     arc2_trace("AdsOpenTable");
     arc2_trace("AdsOpenTable");
     arc2_log("OPEN name=[%s] conn=%llu type=%u mode=%u",
-             pucName ? (const char*)pucName : "(null)",
+             pucName ? openads::util::diagnostic_label(reinterpret_cast<const char*>(pucName)).c_str() : "(null)",
              (unsigned long long)hConnect, (unsigned)usTableType,
              (unsigned)usMode);
     if (phTable == nullptr) return fail(openads::AE_INTERNAL_ERROR,
@@ -8433,7 +8484,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
             if (adopted) {
                 std::snprintf(pbuf, sizeof(pbuf), "park hit id=%u %.200s",
                               static_cast<unsigned>(adopted->id),
-                              name.c_str());
+                              cli_trace_mask(rc, name).c_str());
             } else {
                 const std::string pk = remote_pool_key(name, alias, usMode);
                 bool other_lane = false;
@@ -8454,7 +8505,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                               static_cast<unsigned>(
                                   reinterpret_cast<std::uintptr_t>(rc) &
                                   0xFFFFu),
-                              name.c_str());
+                              cli_trace_mask(rc, name).c_str());
             }
             cli_trace_line(cli_trace_ms(), alias.c_str(), "AdsOpenTable",
                            pbuf);
@@ -10951,7 +11002,7 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE hConn, UNSIGNED8* pucName,
         // open table or index has the same stem: existence is not ownership.
         auto r = ctx.remote->file_exists(name);
         if (!r) return fail(r.error());
-        cli_trace("FileExists", "probe %s -> %s (wire)", name.c_str(),
+        cli_trace("FileExists", "probe %s -> %s (wire)", cli_trace_mask(nullptr, name).c_str(),
                   r.value() ? "yes" : "no");
         *pbExists = r.value() ? 1 : 0;
         return ok();
@@ -15863,7 +15914,7 @@ void heal_stale_bag_on_open(Table* t,
         bool stale = v->empty();
         if (!stale) continue;
         arc2_log("IDXHEAL stale tag '%s' on %s (recs=%u) -> reindex",
-                 v->name().c_str(), t->path().c_str(),
+                 "<index-masked>", openads::util::diagnostic_label(t->path()).c_str(),
                  (unsigned)t->record_count());
         (void)t->reindex();
         return;
@@ -15924,7 +15975,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 }
                 rt->parked_nav_which = 0;
                 cli_trace_tbl(rt, "AdsOpenIndex", "unpark hit %.32s",
-                              rt->parked_bag_stem.c_str());
+                              cli_trace_mask(rt->conn, rt->parked_bag_stem).c_str());
                 auto& s = state();
                 std::lock_guard<std::recursive_mutex> lk(s.mu);
                 const std::uint16_t cap =
@@ -15946,7 +15997,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 return r;
             }
             cli_trace_tbl(rt, "AdsOpenIndex", "unpark miss %.32s",
-                          path.c_str());
+                          cli_trace_mask(rt->conn, path).c_str());
         }
         // Zero-RTT dedup (RDD-only apps, no app change possible): the
         // production bag is already bound on this handle by the OpenTable
@@ -16024,9 +16075,11 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             ++count;
             remote_indexes.emplace(gh, std::move(ri));
             if (cli_trace_on()) {
+                const auto label = cli_trace_table_label(rt);
                 auto& trace = cli_trace_state();
                 std::lock_guard<std::mutex> trace_lk(trace.mu);
-                trace.indexes[{rt->conn, ent.id}] = rt->alias.empty() ? rt->name : rt->alias;
+                cli_trace_reset_epoch_locked(trace);
+                if (trace.indexes.size() < 16384) trace.indexes[{rt->conn, ent.id}] = label;
             }
             // Dedup by tag: production-CDX auto-open and a later explicit
             // AdsOpenIndex on the same bag must not register the order
@@ -16568,6 +16621,8 @@ UNSIGNED32 ENTRYPOINT AdsCloseAllIndexes(ADSHANDLE hTable) {
 // One-off client ABI discriminator for Vouch INDEX ON. Off unless explicitly
 // enabled. Keep this independent of wire_trace: a rejected call never hits wire.
 static void create_index_diag(const char* fmt, ...) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return;
     const char* path = std::getenv("OPENADS_CREATE_INDEX_DIAG_FILE");
     if (!path || !*path) return;
     static std::mutex mu;
@@ -16583,7 +16638,7 @@ static void create_index_diag(const char* fmt, ...) {
 }
 
 static const char* create_index_arg(const UNSIGNED8* p) {
-    return p ? reinterpret_cast<const char*>(p) : "<NULL>";
+    return p ? "<present-masked>" : "<NULL>";
 }
 
 UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
@@ -16786,7 +16841,7 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
             ? openads::abi::to_internal(pucKeyFilter, 0) : std::string();
         create_index_diag("61 WIRE 0x94 h=%llu table_id=%u path=%.160s tag=%.160s",
             static_cast<unsigned long long>(hTable), static_cast<unsigned>(rt->id),
-            path.c_str(), tag.c_str());
+            "<masked>", "<masked>");
         auto r = rt->conn->create_index(rt->id, path, tag, expr,
                                          cond, kf,
                                          ulOptions, usPageSize);
@@ -23398,7 +23453,7 @@ UNSIGNED32 emit_name(UNSIGNED8* pucBuf, UNSIGNED16* pusLen,
     }
     *pusLen = static_cast<UNSIGNED16>(name.size());
     arc2_log("EMIT name=[%s] len=%u cap=%u",
-             name.c_str(), (unsigned)name.size(), (unsigned)cap);
+             openads::util::diagnostic_label(name).c_str(), (unsigned)name.size(), (unsigned)cap);
     return openads::AE_SUCCESS;
 }
 
@@ -23428,8 +23483,8 @@ UNSIGNED32 ENTRYPOINT AdsFindFirstTable(ADSHANDLE   hConnect,
         (mask.size() > 2 && mask[1] == ':') ||
         mask.rfind("\\\\", 0) == 0) {
         if (auto sep = mask.find_last_of("/\\"); sep != std::string::npos) {
-            arc2_log("FIND mask [%s] -> [%s]", mask.c_str(),
-                     mask.substr(sep + 1).c_str());
+            arc2_log("FIND mask [%s] -> [%s]", openads::util::diagnostic_label(mask).c_str(),
+                     openads::util::diagnostic_label(mask.substr(sep + 1)).c_str());
             mask = mask.substr(sep + 1);
         }
     }
@@ -28069,8 +28124,9 @@ struct TriggerBridge final : openads::script::SqlBridge {
     exec(const std::string& sql) override {
         static const bool trig_trace =
             openads::util::client_setting_truthy("OPENADS_TRACE", "trace");
-        if (trig_trace)
-            std::fprintf(stderr, "[trig-exec] SQL text hidden\n");
+        { openads::util::DiagnosticGuard guard;
+          if (guard && trig_trace)
+            std::fprintf(stderr, "[trig-exec] SQL text hidden\n"); }
         // 1. INSERT INTO __error Ã¢â‚¬Â¦ VALUES (code, 'msg') -- the classic ADS
         //    way for a trigger to fail the DML. Surface it as an error.
         {
@@ -29651,11 +29707,12 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     static const bool into_trace =
                         openads::util::client_setting_truthy(
                             "OPENADS_TRACE", "trace");
-                    if (into_trace)
+                    openads::util::DiagnosticGuard guard;
+                    if (guard && into_trace)
                         std::fprintf(stderr,
                             "[into] tmp=%s all_images=%d new=%p old=%p "
                             "(SQL text hidden)\n",
-                            tmp_name.c_str(), all_images ? 1 : 0,
+                            openads::util::diagnostic_label(tmp_name).c_str(), all_images ? 1 : 0,
                             (const void*)imgs.new_f,
                             (const void*)imgs.old_f);
                 }
@@ -39579,8 +39636,9 @@ UNSIGNED32 ENTRYPOINT AdsSetDefaultConnection(ADSHANDLE hConn) {
 // channel (OPENADS_LOG_FILE / console RESOLVED lines) and the arc
 // bring-up traces (ace_calls.log). Paths, aliases and record counts in
 // those lines are developer diagnostics â€” an app going to production
-// calls OAdsSetLogging(0) once at startup so end-user machines stay
-// silent. 0 = silent, anything else = re-enable (the default).
+// defaults to OFF; the application alone can enable it. End-user machines stay
+// silent. 0 = silent, anything else = permit individual diagnostics.
+// Default: OFF. Environment/INI never enable the master.
 // Process-local: affects this client DLL instance (and the engine when
 // running in local-server mode, since it shares the process).
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn) {
@@ -39891,11 +39949,11 @@ UNSIGNED32 ENTRYPOINT AdsShowDeleted(UNSIGNED16 us) {
 }
 UNSIGNED32 ENTRYPOINT AdsShowError(UNSIGNED8* pucErrText) {
     arc2_trace("AdsShowError");
-    // ADS pops up a message box on a GUI host; OpenADS is headless, so the
-    // closest faithful behaviour is to write the caller's text to stderr.
-    if (pucErrText != nullptr && pucErrText[0] != '\0')
-        std::fprintf(stderr, "%s\n",
-                     reinterpret_cast<const char*>(pucErrText));
+    // Caller text can contain raw schema. The headless diagnostic presentation
+    // uses a fixed marker; API error retrieval remains unchanged.
+    openads::util::DiagnosticGuard guard;
+    if (guard && pucErrText != nullptr && pucErrText[0] != '\0')
+        std::fputs("AdsShowError: <detail-masked>\n", stderr);
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 ENTRYPOINT AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {

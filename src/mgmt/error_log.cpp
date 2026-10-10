@@ -1,3 +1,4 @@
+#include "util/log.h"
 #include "mgmt/error_log.h"
 #include "mgmt/mg_stats.h"
 
@@ -362,6 +363,7 @@ std::uint32_t ErrorLog::max_kbytes() {
 }
 
 std::string ErrorLog::resolve_dir_locked() {
+    if (!openads::util::logging_enabled()) return {};
     if (!resolved_dir_.empty()) return resolved_dir_;
 
     std::vector<fs::path> candidates;
@@ -401,11 +403,15 @@ std::string ErrorLog::resolve_dir_locked() {
 }
 
 std::string ErrorLog::directory() {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return {};
     std::lock_guard<std::mutex> lk(mu_);
     return resolve_dir_locked();
 }
 
 std::string ErrorLog::file_path() {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return {};
     std::lock_guard<std::mutex> lk(mu_);
     std::string d = resolve_dir_locked();
     if (d.empty()) return {};
@@ -413,6 +419,8 @@ std::string ErrorLog::file_path() {
 }
 
 std::string ErrorLog::text_path() {
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return {};
     std::lock_guard<std::mutex> lk(mu_);
     std::string d = resolve_dir_locked();
     if (d.empty()) return {};
@@ -431,7 +439,8 @@ void ErrorLog::log_ex(std::int32_t code, const std::string& source,
                       std::int32_t src_line, const std::string& detail,
                       std::uint64_t session, const std::string& client,
                       const std::string& op, const std::string& table) {
-    if (g_in_log) return;
+    openads::util::DiagnosticGuard guard;
+    if (!guard || g_in_log) return;
     g_in_log = true;
     if (code != 0) {
         process_mg_stats().logged_errors.fetch_add(
@@ -474,7 +483,7 @@ void ErrorLog::log_ex(std::int32_t code, const std::string& source,
         append_text_locked(fs::path(d),
             text_line(dt, code, source, src_line, current_pid(),
                       current_tid8(), eff_session, eff_session_client,
-                      drv_op, drv_table, detail),
+                      drv_op, openads::util::diagnostic_label(drv_table, std::to_string(eff_session)), "<detail-masked>"),
             max_kb_);
     }
 
@@ -484,7 +493,7 @@ void ErrorLog::log_ex(std::int32_t code, const std::string& source,
     fill_field(rec.data(), 2, std::to_string(code));
     fill_field(rec.data(), 3, source);
     fill_field(rec.data(), 4, std::to_string(src_line));
-    fill_field(rec.data(), 5, detail);
+    fill_field(rec.data(), 5, "<detail-masked>");
 
     // Read just the header to learn the current record count. The common
     // case appends in place; a full read + rewrite happens only when the
@@ -578,6 +587,8 @@ void ErrorLog::log_ex(std::int32_t code, const std::string& source,
 
 std::vector<ErrorLogEntry> ErrorLog::read_last(std::size_t n) {
     std::vector<ErrorLogEntry> out;
+    openads::util::DiagnosticGuard guard;
+    if (!guard) return out;
     std::lock_guard<std::mutex> lk(mu_);
     std::string d = resolve_dir_locked();
     if (d.empty()) return out;

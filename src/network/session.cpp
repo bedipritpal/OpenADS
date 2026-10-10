@@ -1,3 +1,5 @@
+#include "util/log.h"
+#include <cstdarg>
 #include "network/session.h"
 #include "engine/pbkdf2.h"
 #include "engine/data_dict.h"
@@ -66,7 +68,16 @@ static bool wire_trace_on() {
     static const bool on = std::getenv("OPENADS_WIRE_TRACE") != nullptr;
     return on;
 }
-#define WTRACE(...) do { if (wire_trace_on()) std::fprintf(stderr, __VA_ARGS__); } while (0)
+static void wire_trace_write(const char* fmt, ...) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard || !wire_trace_on()) return;
+    va_list args;
+    va_start(args, fmt);
+    std::vfprintf(stderr, fmt, args);
+    va_end(args);
+}
+// Evaluate database/context arguments before acquiring the writer lock.
+#define WTRACE(...) do { if (wire_trace_on()) wire_trace_write(__VA_ARGS__); } while (0)
 
 namespace {
 
@@ -769,8 +780,8 @@ ADSHANDLE Session::ensure_abi_handle(std::uint32_t id) {
     }
     ADSHANDLE h = 0;
     WTRACE("[wire] ensure_abi_handle id=%u open_name='%s' mode=%u eng_path='%s' eng_recs=%u\n",
-           id, open_name.c_str(), (unsigned)us_mode,
-           tbl->path().c_str(), (unsigned)tbl->record_count());
+           id, openads::util::diagnostic_label(open_name).c_str(), (unsigned)us_mode,
+           openads::util::diagnostic_label(tbl->path()).c_str(), (unsigned)tbl->record_count());
     auto& oi_st = openads::mgmt::process_mg_stats();
     auto oi_us = [](auto a, auto b) {
         return static_cast<std::uint64_t>(
@@ -1526,7 +1537,7 @@ UNSIGNED32 Session::install_table_order(std::uint32_t tid,
             if (AdsGetIndexHandle(ht, tb.data(), &h_fresh) == 0 &&
                 h_fresh != 0 && h_fresh != iit->second) {
                 WTRACE("[wire] SetOrder iid=%u stale handle, healed via tag '%s'\n",
-                       iid, tag.c_str());
+                       iid, "<index-masked>");
                 rrc = AdsSetIndexOrderByHandle(ht, h_fresh);
                 if (rrc == 0) iit->second = h_fresh;
             }
@@ -2228,9 +2239,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!th) {
                 openads::abi::create_diag::log("server-open-fail", th.error().code,
                                               "table-open", th.error().sub_code);
-                std::fprintf(stderr, "[srv] OpenTable FAILED rel='%s' code=%d msg='%s'\n",
-                             rel.c_str(), th.error().code,
-                             th.error().message.c_str());
+                { openads::util::DiagnosticGuard guard; if (guard) std::fprintf(stderr, "[srv] OpenTable FAILED rel='%s' code=%d msg='%s'\n",
+                             openads::util::diagnostic_label(rel).c_str(), th.error().code,
+                             "<detail-masked>"); }
                 reply = err("OpenTable: open failed",
                             static_cast<UNSIGNED32>(th.error().code));
                 break;
@@ -3313,7 +3324,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                                        f.opcode == Opcode::LockRecord ? "LockRecord" : "UnlockRecord",
                                        id, (unsigned)rn, (unsigned)rrc,
                                        lk.user.c_str(), (unsigned)lk.conn_no,
-                                       lk.table.c_str());
+                                       openads::util::diagnostic_label(lk.table).c_str());
                             }
                         }
                         WTRACE("[wire] %s id=%u recno=%u FAILED rrc=%u (no registered holder)\n",
@@ -3327,7 +3338,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                        id, (unsigned)rn,
                        session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       tbl_open_paths_.count(id) ? openads::util::diagnostic_label(tbl_open_paths_[id]).c_str() : "?");
             } else if (f.opcode == Opcode::LockRecord) {
                 // Fail FAST on contention — a single attempt. Retrying
                 // here blocked the session thread for the whole lock
@@ -3346,7 +3357,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                        id, (unsigned)rn,
                        session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       tbl_open_paths_.count(id) ? openads::util::diagnostic_label(tbl_open_paths_[id]).c_str() : "?");
             } else {
                 auto r = tbl->unlock_record(rn);
                 if (!r) { reply = err("UnlockRecord: failed",
@@ -3355,7 +3366,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                        id, (unsigned)rn,
                        session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       tbl_open_paths_.count(id) ? openads::util::diagnostic_label(tbl_open_paths_[id]).c_str() : "?");
             }
             if (f.opcode == Opcode::LockRecord) explicit_record_locks_.insert(lock_key);
             else explicit_record_locks_.erase(lock_key);

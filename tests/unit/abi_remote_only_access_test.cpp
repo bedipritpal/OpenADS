@@ -38,7 +38,16 @@ struct EnvGuard {
 
 } // namespace
 
+namespace {
+struct DiagnosticTestOptIn {
+    bool before = openads::util::logging_enabled();
+    DiagnosticTestOptIn() { openads::util::set_logging_enabled(true); }
+    ~DiagnosticTestOptIn() { openads::util::set_logging_enabled(before); }
+};
+}
+
 TEST_CASE("OPENADS_REMOTE_ONLY_ACCESS blocks local open/create, allows remote-mode flow") {
+    DiagnosticTestOptIn diagnostics;
     const auto dir = fs::temp_directory_path() / "openads_remote_only_access";
     std::error_code ec;
     fs::remove_all(dir, ec);

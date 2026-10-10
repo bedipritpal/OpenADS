@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <map>
 #include <ostream>
 #include <string>
 #include <unordered_set>
@@ -50,6 +51,7 @@ std::atomic<std::uint32_t> g_next_seq{1};
 std::atomic<bool> g_seeded{false};
 std::uint32_t g_conn_seed = 0;
 std::unordered_set<std::string> g_remote_asked;
+std::uint64_t g_remote_asked_epoch = 0;
 
 std::string norm_audit_path(std::string_view p) {
     std::string s{p};
@@ -108,7 +110,8 @@ void write_file_line(const std::string& line) {
 } // namespace
 
 void Log::write(LogLevel level, std::string_view message) noexcept {
-    if (sink_ == nullptr) return;
+    DiagnosticGuard guard;
+    if (!guard || sink_ == nullptr) return;
     if (static_cast<int>(level) < static_cast<int>(threshold_)) return;
     (*sink_) << level_name(level) << ' ' << message << '\n';
 }
@@ -208,11 +211,42 @@ void set_audit_details_enabled(bool on) {
 }
 
 namespace {
-std::atomic<bool> g_logging_on{true};
+std::atomic<bool> g_logging_on{false};
+std::recursive_mutex g_diagnostic_mu;
+std::atomic<std::uint64_t> g_diagnostic_epoch{0};
 } // namespace
 
-void set_logging_enabled(bool on) { g_logging_on.store(on); }
+DiagnosticGuard::DiagnosticGuard()
+    : lock_(g_diagnostic_mu), enabled_(g_logging_on.load()) {}
+void set_logging_enabled(bool on) {
+    std::lock_guard<std::recursive_mutex> lock(g_diagnostic_mu);
+    if (g_logging_on.exchange(on) != on) ++g_diagnostic_epoch;
+}
 bool logging_enabled() { return g_logging_on.load(); }
+std::uint64_t diagnostic_epoch() { return g_diagnostic_epoch.load(); }
+
+std::string diagnostic_label(std::string_view value, std::string_view scope) {
+    if (value.empty()) return "-";
+    if (!logging_enabled()) return "<masked>";
+    // Serialize only label allocation, never a database/network operation.
+    static std::mutex mu;
+    static std::uint64_t epoch = 0;
+    static unsigned long long serial = 0;
+    static std::map<std::pair<std::string, std::string>, std::string> names;
+    std::lock_guard<std::mutex> lock(mu);
+    const auto now = diagnostic_epoch();
+    if (epoch != now) { names.clear(); serial = 0; epoch = now; }
+    std::string normalized(value);
+    for (auto& ch : normalized) {
+        if (ch == '\\') ch = '/';
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    auto key = std::make_pair(std::string(scope), normalized);
+    auto it = names.find(key);
+    if (it != names.end()) return it->second;
+    if (names.size() >= 16384) return "TBL_OVERFLOW";
+    return names.emplace(std::move(key), "TBL_" + std::to_string(++serial)).first->second;
+}
 
 void reset_audit_config() {
     g_console = nullptr;
@@ -230,7 +264,8 @@ void write_audit(AuditKind       kind,
                  std::string_view message,
                  std::string_view timestamp,
                  std::string_view alias) {
-    if (!logging_enabled()) return;
+    DiagnosticGuard guard;
+    if (!guard) return;
     if (kind == AuditKind::Detail && !audit_details_enabled()) return;
     if (seq == 0) seq = next_audit_seq();
     std::string line =
@@ -249,15 +284,23 @@ void write_audit(AuditKind       kind,
 
 void write_remote_open_audit(std::string_view asked_name,
                             std::string_view alias) {
+    DiagnosticGuard guard;
+    if (!guard) return;
     static std::string id = make_connection_serial();
     static std::atomic<std::uint32_t> n{1};
     std::string key = norm_audit_path(asked_name);
     {
         std::lock_guard<std::mutex> lk(g_audit_mu);
-        if (!g_remote_asked.insert(std::move(key)).second) return;
+        const auto epoch = diagnostic_epoch();
+        if (g_remote_asked_epoch != epoch) {
+            g_remote_asked.clear();
+            g_remote_asked_epoch = epoch;
+        }
+        if (g_remote_asked.size() < 16384 &&
+            !g_remote_asked.insert(std::move(key)).second) return;
     }
     std::string msg = "RESOLVED=\"(remote)\" ASKED=\"";
-    msg.append(asked_name.data(), asked_name.size());
+    msg += diagnostic_label(asked_name, id);
     msg += "\" VIA=REMOTE";
     write_audit(AuditKind::Resolved, id, n.fetch_add(1),
                 next_audit_seq(), msg, {}, alias);
@@ -269,7 +312,7 @@ void write_local_access_audit(std::string_view op, std::string_view path) {
     std::string msg = "LOCALACCESS=\"";
     msg.append(op.data(), op.size());
     msg += "\" ASKED=\"";
-    msg.append(path.data(), path.size());
+    msg += diagnostic_label(path, id);
     msg += "\" VIA=LOCAL MODE=LOG";
     write_audit(AuditKind::Resolved, id, n.fetch_add(1),
                 next_audit_seq(), msg);
@@ -279,7 +322,7 @@ void write_connected_audit(std::string_view data_dir, bool remote) {
     static std::string id = make_connection_serial();
     static std::atomic<std::uint32_t> n{1};
     std::string msg = "CONNECTED=\"";
-    msg.append(data_dir.data(), data_dir.size());
+    msg += diagnostic_label(data_dir, id);
     msg += remote ? "\" VIA=REMOTE" : "\" VIA=LOCAL";
     write_audit(AuditKind::Connected, id, n.fetch_add(1),
                 next_audit_seq(), msg);
@@ -291,6 +334,15 @@ void write_connected_audit(std::string_view data_dir, bool remote) {
 // master switch without including util/log.h.
 extern "C" int  oads_logging_enabled(void) {
     return openads::util::logging_enabled() ? 1 : 0;
+}
+extern "C" int oads_diagnostic_begin(void) {
+    openads::util::g_diagnostic_mu.lock();
+    if (openads::util::logging_enabled()) return 1;
+    openads::util::g_diagnostic_mu.unlock();
+    return 0;
+}
+extern "C" void oads_diagnostic_end(void) {
+    openads::util::g_diagnostic_mu.unlock();
 }
 extern "C" void oads_set_logging(int on) {
     openads::util::set_logging_enabled(on != 0);

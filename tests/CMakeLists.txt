@@ -579,3 +579,18 @@ target_link_libraries(remote_test PRIVATE openads_ace)
 add_executable(oads_imac_test bench/oads_imac_test.cpp)
 target_include_directories(oads_imac_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(oads_imac_test PRIVATE openads_ace)
+
+# Test the deliverable archive itself. Linking openads_core here would hide
+# missing members/dependencies in the merged static distribution.
+if(WIN32 AND MINGW AND TARGET openads_ace_static)
+    add_executable(openads_static_archive_smoke smoke/mingw_static_ace.cpp)
+    target_include_directories(openads_static_archive_smoke PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_dependencies(openads_static_archive_smoke openads_ace_static)
+    target_link_libraries(openads_static_archive_smoke PRIVATE
+        "$<TARGET_FILE:openads_ace_static>" ws2_32 psapi)
+    add_test(NAME static_archive_link_run COMMAND openads_static_archive_smoke)
+endif()
+
+# Fresh process: these existing settings are intentionally cached on first use.
+add_test(NAME master_diagnostics_integration
+    COMMAND openads_unit_tests "--test-case=master diagnostics file gating*" --no-skip=true)

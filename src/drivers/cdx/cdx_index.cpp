@@ -1,3 +1,4 @@
+#include "util/log.h"
 #include "drivers/cdx/cdx_index.h"
 
 #include "engine/oem_collation.h"
@@ -746,8 +747,8 @@ util::Result<void> CdxIndex::ensure_write_lock_() {
         auto& slot = g_cdx_write_locks[path_];
         if (!slot) slot = std::make_shared<CdxWriteLockEntry>();
         e = slot;
-        if (auto* f = open_lock_diag_()) {
-            std::fprintf(f, "ensure_write_lock ENTER path=%s users=%zu has_os=%d fd=%p\n", path_.c_str(), e->users, (int)(bool)e->os_lock, file_.native_handle());
+        if (openads::util::DiagnosticGuard guard; guard) if (auto* f = open_lock_diag_()) {
+            std::fprintf(f, "ensure_write_lock ENTER path=%s users=%zu has_os=%d fd=%p\n", openads::util::diagnostic_label(path_).c_str(), e->users, (int)(bool)e->os_lock, file_.native_handle());
             std::fclose(f);
         }
     }
@@ -773,9 +774,9 @@ util::Result<void> CdxIndex::ensure_write_lock_() {
                 auto l = acquire_cdx_os_lock_(file_,
                                               platform::LockKind::Exclusive);
                 if (!l) {
-                    if (auto* f = open_lock_diag_()) {
+                    if (openads::util::DiagnosticGuard guard; guard) if (auto* f = open_lock_diag_()) {
                         std::fprintf(f, "acquire_cdx_os_lock FAIL path=%s fd=%p code=%d sub=%d msg=%s\n",
-                            path_.c_str(), file_.native_handle(), l.error().code, l.error().sub_code, l.error().message.c_str());
+                            openads::util::diagnostic_label(path_).c_str(), file_.native_handle(), l.error().code, l.error().sub_code, "<detail-masked>");
                         std::fclose(f);
                     }
                     return l.error();
@@ -849,8 +850,8 @@ CdxIndex::open_named(const std::string& path,
                      const std::string& tag_name) {
     mode_  = mode;
     path_  = canonicalize_path(path);
-    if (auto* f = open_lock_diag_()) {
-        std::fprintf(f, "open_named orig=%s canon=%s fd_will_open\n", path.c_str(), path_.c_str());
+    if (openads::util::DiagnosticGuard guard; guard) if (auto* f = open_lock_diag_()) {
+        std::fprintf(f, "open_named orig=%s canon=%s fd_will_open\n", openads::util::diagnostic_label(path).c_str(), openads::util::diagnostic_label(path_).c_str());
         std::fclose(f);
     }
     auto fres = platform::File::open(path, map_mode(mode));

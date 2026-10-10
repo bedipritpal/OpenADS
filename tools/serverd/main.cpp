@@ -1,3 +1,4 @@
+#include "util/log.h"
 // openads_serverd — standalone TCP server CLI / Windows service.
 //
 // Wraps openads::network::Server in a long-lived process. Parses
@@ -70,6 +71,7 @@ void usage(const char* argv0) {
         "  --port       TCP wire port (default 6262, 0 = ephemeral)\n"
         "  --backlog    listen() backlog (default: env OPENADS_SERVER_BACKLOG,\n"
         "               else 256; ini: backlog)\n"
+        "  --diagnostics 0|1  Core diagnostic output (default 0; operator opt-in)\n"
         "  --established_session_idle_seconds N  DBF idle cutoff (seconds; default 0=never)\n"
         "  --max_sessions N  cap on concurrent client sessions\n"
         "               (default: env OPENADS_SERVER_MAX_SESSIONS, else 500;\n"
@@ -128,6 +130,7 @@ void usage(const char* argv0) {
 // Args parsed from argv. Defaults match the original CLI.
 struct Args {
     std::string   host        = "127.0.0.1";
+    bool          diagnostics = false;
     bool          allow_anonymous = false;
     std::string tls_cert_file;
     std::string tls_key_file;
@@ -180,6 +183,14 @@ bool parse_args(int argc, char** argv, Args& out) {
         // here we just consume its value so it is not flagged as unknown.
         if (a == "--config" && i + 1 < argc) { ++i; continue; }
         if      (flag_eq(a, "host")      && i + 1 < argc) out.host    = argv[++i];
+        else if (flag_eq(a, "diagnostics") && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value != "0" && value != "1") {
+                std::fprintf(stderr, "--diagnostics must be 0 or 1\n");
+                return false;
+            }
+            out.diagnostics = value == "1";
+        }
         else if (flag_eq(a, "port")      && i + 1 < argc) out.port    = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         else if (flag_eq(a, "backlog")   && i + 1 < argc) out.backlog = std::atoi(argv[++i]);
         else if (flag_eq(a, "established_session_idle_seconds") && i + 1 < argc) {
@@ -279,6 +290,7 @@ bool parse_args(int argc, char** argv, Args& out) {
 // file actually set are touched, so this sits cleanly between the built-in
 // defaults (Args ctor) and the command line: defaults < config file < CLI.
 void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
+    if (cfg.has_diagnostics) out.diagnostics = cfg.diagnostics;
     if (cfg.has_host)      out.host      = cfg.host;
     if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
     if (cfg.has_port)      out.port      = cfg.port;
@@ -402,6 +414,9 @@ static void probe_ace_dlls(bool console) {
 // Run the actual server. Returns when g_running flips to false
 // (signal handler on POSIX / SCM stop control on Windows).
 int run_server(const Args& args, bool console) {
+    // Only the operator-owned daemon configuration opts in. A remote client's
+    // OAdsSetLogging call never changes this process's diagnostic state.
+    openads::util::set_logging_enabled(args.diagnostics);
     if (args.tls_cert_file.empty() != args.tls_key_file.empty()) {
         std::fprintf(stderr, "Both --tls_cert and --tls_key are required.\n");
         return 1;

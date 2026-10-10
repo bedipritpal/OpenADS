@@ -2,6 +2,21 @@
 // AdsSetDecimals), AdsRefreshAOF re-evaluation, and handle validation on
 // the cache/diagnostic hooks that used to be blind no-ops.
 #include "doctest.h"
+#include "util/log.h"
+#include <cstdio>
+#if defined(_WIN32)
+#include <io.h>
+#define diag_dup _dup
+#define diag_dup2 _dup2
+#define diag_close _close
+#define diag_fileno _fileno
+#else
+#include <unistd.h>
+#define diag_dup dup
+#define diag_dup2 dup2
+#define diag_close close
+#define diag_fileno fileno
+#endif
 #include "openads/ace.h"
 #include "openads/error.h"
 
@@ -67,6 +82,39 @@ TEST_CASE("AdsShowError accepts null, empty, and non-empty messages") {
     CHECK(AdsShowError(empty) == openads::AE_SUCCESS);
     UNSIGNED8 msg[] = "openads test diagnostic";
     CHECK(AdsShowError(msg) == openads::AE_SUCCESS);
+}
+
+TEST_CASE("AdsShowError masks caller text while ON and is silent while OFF") {
+    const bool before = openads::util::logging_enabled();
+    std::FILE* capture = std::tmpfile();
+    REQUIRE(capture != nullptr);
+    const int saved = diag_dup(diag_fileno(stderr));
+    if (saved < 0) { std::fclose(capture); FAIL("cannot duplicate stderr"); return; }
+    std::fflush(stderr);
+    if (diag_dup2(diag_fileno(capture), diag_fileno(stderr)) < 0) {
+        diag_close(saved); std::fclose(capture); FAIL("cannot capture stderr"); return;
+    }
+    UNSIGNED8 text[] = "PRIVATE_REAL_TABLE.DBF inside arbitrary error text";
+    openads::util::set_logging_enabled(false);
+    const auto off_rc = AdsShowError(text);
+    std::fflush(stderr);
+    const auto off_bytes = std::ftell(capture);
+    openads::util::set_logging_enabled(true);
+    const auto on_rc = AdsShowError(text);
+    std::fflush(stderr);
+    diag_dup2(saved, diag_fileno(stderr)); diag_close(saved);
+    openads::util::set_logging_enabled(before);
+    std::rewind(capture);
+    char bytes[512]{};
+    const auto n = std::fread(bytes, 1, sizeof(bytes), capture);
+    std::fclose(capture);
+    const std::string result(bytes, n);
+    CHECK(off_rc == openads::AE_SUCCESS);
+    CHECK(on_rc == openads::AE_SUCCESS);
+    CHECK(off_bytes == 0);
+    CHECK(result.find("<detail-masked>") != std::string::npos);
+    CHECK(result.find("PRIVATE_REAL_TABLE") == std::string::npos);
+    CHECK(result.find("arbitrary error text") == std::string::npos);
 }
 
 TEST_CASE("AdsRefreshAOF re-evaluates the stored filter over current data") {

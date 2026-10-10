@@ -1,3 +1,4 @@
+#include "util/log.h"
 #include "session/connection.h"
 #include "engine/pbkdf2.h"
 
@@ -178,17 +179,17 @@ util::Result<Connection> Connection::open(const std::string& data_dir) {
         // in *subdirectories* remain fully usable; only transactions are
         // unavailable (begin_transaction fails cleanly with a clear
         // error instead of the whole Connect being refused).
-        std::fprintf(stderr,
+        { openads::util::DiagnosticGuard guard; if (guard) std::fprintf(stderr,
             "[openads] tx journal not writable in '%s' — transactions "
-            "disabled for this connection\n", actual_dir.c_str());
+            "disabled for this connection\n", util::diagnostic_label(actual_dir).c_str()); }
     }
     if (journal_ok) {
         fs::path map_path = fs::path(actual_dir) / "openads.lsnmap";
         if (auto mr = c.lsn_map_.open(map_path.string()); !mr) {
-            std::fprintf(stderr,
+            { openads::util::DiagnosticGuard guard; if (guard) std::fprintf(stderr,
                 "[openads] tx recovery map not writable in '%s' — orphan "
                 "recovery skipped for this connection\n",
-                actual_dir.c_str());
+                util::diagnostic_label(actual_dir).c_str()); }
         } else if (auto rr = c.recover_orphan_tx_(); !rr) {
             return rr.error();
         }
@@ -209,7 +210,7 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
     if (dd_.has_value()) effective = dd_->resolve(relative_path);
     if (conn_serial_.empty()) conn_serial_ = util::make_connection_serial();
     const std::string ts = util::format_log_timestamp();
-    const std::string log_alias = fs::path(relative_path).stem().string();
+    const std::string log_alias = util::diagnostic_label(relative_path, conn_serial_);
     std::vector<std::string> pending_details;
     auto log_resolved = [&](const std::string& path, const char* tag) {
         // One RESOLVED line per physical file per connection. AdsOpenTable,
@@ -234,11 +235,11 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
         std::string norm_path = path;
         for (char& ch : norm_path) { if (ch == '\\') ch = '/'; }
         std::string msg = "RESOLVED=\"";
-        msg += norm_path;
+        msg += util::diagnostic_label(norm_path, conn_serial_);
         msg += "\" ";
         msg += tag;
         msg += " ASKED=\"";
-        msg += relative_path;
+        msg += util::diagnostic_label(relative_path, conn_serial_);
         msg += remote_server_ ? "\" VIA=REMOTE" : "\" VIA=LOCAL";
         util::write_audit(util::AuditKind::Resolved, conn_serial_, entry, seq,
                            msg, ts, log_alias);
@@ -255,8 +256,8 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
         std::string norm_p = p;
         for (char& ch : norm_p) { if (ch == '\\') ch = '/'; }
         util::write_audit(util::AuditKind::Resolved, conn_serial_, entry, seq,
-                          "REFUSED=\"" + norm_p +
-                              "\" ESCAPE ASKED=\"" + relative_path + "\"",
+                          "REFUSED=\"" + util::diagnostic_label(norm_p, conn_serial_) +
+                              "\" ESCAPE ASKED=\"" + util::diagnostic_label(relative_path, conn_serial_) + "\"",
                           ts, log_alias);
         return std::string();
     };

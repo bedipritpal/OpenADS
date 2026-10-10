@@ -1,3 +1,4 @@
+#include "util/log.h"
 #include "doctest.h"
 #include "mgmt/error_log.h"
 #include "openads/ace.h"
@@ -16,8 +17,10 @@ namespace {
 // Point the singleton at a fresh directory for one test, restoring the
 // suite-wide default (OPENADS_ERROR_LOG_PATH, set in doctest_main) after.
 struct LogDirGuard {
+    bool logging_before = openads::util::logging_enabled();
     fs::path dir;
     explicit LogDirGuard(const char* name) {
+        openads::util::set_logging_enabled(true);
         std::error_code ec;
         dir = fs::temp_directory_path() / name;
         fs::remove_all(dir, ec);
@@ -25,6 +28,7 @@ struct LogDirGuard {
         ErrorLog::instance().set_max_kbytes(1000);
     }
     ~LogDirGuard() {
+        openads::util::set_logging_enabled(logging_before);
         ErrorLog::instance().set_directory("");
         ErrorLog::instance().set_max_kbytes(1000);
     }
@@ -44,7 +48,7 @@ TEST_CASE("error log: entries round-trip through ads_err.dbf") {
     CHECK(last2[0].code == 5035);
     CHECK(last2[0].source == "NET");
     CHECK(last2[0].src_line == 42);
-    CHECK(last2[0].detail == "lock denied");
+    CHECK(last2[0].detail == "<detail-masked>");
     CHECK(last2[1].code == 0);
     CHECK(last2[1].source == "SERVER");
     // DateTime is "YYYY-MM-DD HH:MM:SS".
@@ -126,7 +130,8 @@ TEST_CASE("error log: ads_err.log is fixed-width with 3-space separators") {
     // Extra developer context made it into the row.
     CHECK(lines[1].find("10.0.0.5:51234") != std::string::npos);
     CHECK(lines[1].find("OpenIndex") != std::string::npos);
-    CHECK(lines[1].find("lmjshd10.cdx") != std::string::npos);
+    CHECK(lines[1].find("lmjshd10.cdx") == std::string::npos);
+    CHECK(lines[1].find("<detail-masked>") != std::string::npos);
     // Second entry logged via plain log(): columns still aligned.
     CHECK(lines[2].substr(19, 3) == "   ");
     CHECK(lines[2].substr(22, 6) == "  7200");
@@ -172,4 +177,20 @@ TEST_CASE("error log: SQL literals and error diagnostics are not retained") {
     const std::string text(std::istreambuf_iterator<char>(input), {});
     CHECK(text.find("very-private-password-9387") == std::string::npos);
     CHECK(text.find("secret_marker") == std::string::npos);
+}
+
+TEST_CASE("error log master OFF does not create directory or records") {
+    LogDirGuard g("openads_errlog_master_off");
+    openads::util::set_logging_enabled(false);
+    ErrorLog::instance().log_ex(5000, "NET", 1, "private_table.dbf", 1, "client", "OpenTable", "private_table.dbf");
+    CHECK_FALSE(fs::exists(g.dir));
+    CHECK(ErrorLog::instance().file_path().empty());
+    CHECK(ErrorLog::instance().read_last(10).empty());
+    openads::util::set_logging_enabled(true);
+    ErrorLog::instance().log_ex(5000, "NET", 1, "private_table.dbf", 1, "client", "OpenTable", "private_table.dbf");
+    REQUIRE(fs::exists(g.dir / "ads_err.log"));
+    std::ifstream file(g.dir / "ads_err.log");
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    CHECK(content.find("private_table") == std::string::npos);
+    CHECK(content.find("5000") != std::string::npos);
 }

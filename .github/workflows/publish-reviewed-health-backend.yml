@@ -1,0 +1,896 @@
+name: Publish reviewed health-backend port (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-reviewed-health-backend
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'bedipritpal/OpenADS'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify upstream and reviewed tree before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=793251aa5e57a4efa79caba261e2f852e2243c77
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          test -z "$(git ls-remote origin refs/heads/port/health-backend-upstream)"
+          git fetch https://github.com/FiveTechSoft/OpenADS.git "$base"
+          git checkout -b port/health-backend-upstream "$base"
+          cat > "$RUNNER_TEMP/port.patch" <<'OPENADS_REVIEWED_PORT_PATCH'
+          diff --git a/docs/health-backend.md b/docs/health-backend.md
+          new file mode 100644
+          index 00000000..65e70396
+          --- /dev/null
+          +++ b/docs/health-backend.md
+          @@ -0,0 +1,66 @@
+          +# Aggregate health backend
+          +
+          +`OAdsGetServerStats(hMgmt, json, len)` is an additive OpenADS C extension.
+          +Use an `AdsMgConnect` management handle, not a data connection handle.
+          +No existing ADS management structure or serialized snapshot format changes.
+          +
+          +`*len` is the supplied capacity in bytes, including the NUL terminator. On a
+          +successful query it becomes the required size including NUL. A NULL or short
+          +buffer returns `AE_INSUFFICIENT_BUFFER` and writes no partial JSON. Allocate
+          +headroom or retry when the next sample has grown. An invalid handle returns
+          +`AE_INVALID_CONNECTION_HANDLE`; a NULL length pointer is an error.
+          +
+          +Local management handles sample the calling process (`scope: local_process`).
+          +Remote handles sample the server (`scope: server`) through the additive
+          +`MgRequestKind::HealthJson` read request. `AdsMgConnect` accepts host:port and
+          +`tcp://host:port`; management uses plain TCP, not TLS. Existing management
+          +credentials are sent on each management connection. Do not treat a TLS-enabled
+          +data server build as encrypted management transport.
+          +
+          +The existing management handshake and credential policy remain in force.
+          +Configured credentials are checked. Without configured credentials, the
+          +existing loopback-only read-only management session may read health; it still
+          +cannot run management mutators. No handshake means no health read. An older
+          +server that rejects the new request returns `AE_FUNCTION_NOT_AVAILABLE`.
+          +Transport failures return `AE_NO_CONNECTION`; later handshake refusal returns
+          +`AE_ACCESS_DENIED`. The client bounds replies to 65,535 bytes and checks an
+          +object envelope, not full JSON syntax validation.
+          +
+          +## Schema 1
+          +
+          +The JSON contains aggregates, never usernames, client addresses, SQL text,
+          +credentials, or table/index path strings. Distinct path counts use exact
+          +stored strings, not canonical filesystem identity.
+          +
+          +- `users`, `connections`, `workareas`, `table_handles`, `index_bindings`,
+          +  `locks`: `current`, `max_used`, and `rejected` (unknown, null).
+          +- `worker_threads`: current existing server thread telemetry; peak and rejects
+          +  are unknown, null. This is not a claim of process-wide OS thread counting.
+          +- `distinct_table_paths`, `distinct_index_paths`, `uptime_seconds`,
+          +  `operations`, `logged_errors`, `rss_bytes`, `server_port`.
+          +- `max_sessions` and `max_sessions_source`: resolved server admission cap and
+          +  its source (default, environment, INI, command line, or API override).
+          +  Explicit server zero means unlimited. Both fields are null for a local
+          +  process sample. The default remains 500.
+          +- `packets_in`, `packets_out`, `bytes_in`, `bytes_out`, `disconnects`,
+          +  `partial_connects`: existing process telemetry, with wide integer output.
+          +- `os_fd_count` and `os_fd_soft_limit`: Linux process measurements when
+          +  available; null on other platforms or when unavailable/unlimited.
+          +- `parked_handles`: null. Parking is client-only state.
+          +- `semantics`: descriptions carried in every sample.
+          +
+          +Workareas mean server-open table handles, including handles parked at the
+          +client. They are not Harbour `Select()` areas and not OS file descriptors.
+          +Workarea/table-handle maxima retain open events, including opens that close
+          +before a dashboard sample. Other maxima keep the existing telemetry semantics.
+          +Maxima are process-global; samples from multiple embedded Server instances
+          +share them. Resource counts retain existing 32-bit widths; byte counters and
+          +other wide counters do not truncate to 32 bits. A snapshot is a best-effort
+          +concurrent sample; the management query session itself may appear in counts.
+          +
+          +## Scope
+          +
+          +This backend introduces no Harbour wrapper, portal/dashboard consumer,
+          +listener, web endpoint, lock algorithm, count-cache policy, or daemon safeguard
+          +exemption. The C extension is exported through the existing shared-library
+          +export paths, including the Windows x86 stdcall wrapper.
+          diff --git a/include/openads/ace.h b/include/openads/ace.h
+          index 1581782e..96c750a5 100644
+          --- a/include/openads/ace.h
+          +++ b/include/openads/ace.h
+          @@ -1565,6 +1565,11 @@ UNSIGNED32 ENTRYPOINT AdsGetDefaultConnection(ADSHANDLE* phConn);
+           // OpenADS extension: process-wide logging kill-switch (audit + arc
+           // traces). 0 = silent (production), non-zero = enabled (default).
+           UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn);
+          +// Aggregate health JSON from an AdsMgConnect handle (NOT a data connection).
+          +// *pulLen is buffer capacity incl. NUL; out is required size incl. NUL.
+          +// NULL/short buffer: AE_INSUFFICIENT_BUFFER, no partial JSON written.
+          +UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE hMgmt, UNSIGNED8* pucJson,
+          +                                        UNSIGNED32* pulLen);
+           UNSIGNED32 ENTRYPOINT AdsSetEpoch          (UNSIGNED16 usEpoch);
+           UNSIGNED32 ENTRYPOINT AdsSetExact          (UNSIGNED16 bExact);
+           UNSIGNED32 ENTRYPOINT AdsSetExact22        (ADSHANDLE hObj,
+          diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+          index f3a1c404..015a557c 100644
+          --- a/src/CMakeLists.txt
+          +++ b/src/CMakeLists.txt
+          @@ -86,6 +86,7 @@ add_library(openads_core STATIC
+               network/remote_index_nav.cpp
+               network/mutex_manager.cpp
+               mgmt/mg_collector.cpp
+          +    mgmt/mg_health.cpp
+               mgmt/error_log.cpp
+               network/mg_wire.cpp
+               sql_backend/uri.cpp
+          diff --git a/src/abi/ace_exports.cpp b/src/abi/ace_exports.cpp
+          index ec095d9f..78b9a4fc 100644
+          --- a/src/abi/ace_exports.cpp
+          +++ b/src/abi/ace_exports.cpp
+          @@ -62,6 +62,7 @@ thread_local std::string correlation;
+           #include "mgmt/error_log.h"
+           #include "mgmt/mg_collector.h"
+           #include "mgmt/mg_stats.h"
+          +#include "mgmt/mg_health.h"
+           #include "session/connection.h"
+           #include "session/handle_registry.h"
+           #include "util/log.h"
+          @@ -40173,6 +40174,10 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
+               if (be.mg_user.size() > 256 || be.mg_password.size() > 4096) return openads::AE_LOGIN_FAILED;
+               std::string srv = pucServer
+                   ? reinterpret_cast<const char*>(pucServer) : "";
+          +    // Management accepts the ordinary TCP endpoint spelling as well as
+          +    // host:port. Do not strip tls://: this backend does not negotiate TLS.
+          +    if (srv.rfind("tcp://", 0) == 0 || srv.rfind("TCP://", 0) == 0)
+          +        srv.erase(0, 6);
+               // Strip leading / trailing UNC slashes ("\\\\host\\").
+               while (!srv.empty() && (srv.front() == '\\' || srv.front() == '/'))
+                   srv.erase(srv.begin());
+          @@ -40230,6 +40235,54 @@ UNSIGNED32 ENTRYPOINT AdsMgConnect(UNSIGNED8* pucServer, UNSIGNED8* pucUser,
+               return openads::AE_SUCCESS;
+           }
+           
+          +UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE hMgmt, UNSIGNED8* json, UNSIGNED32* len) {
+          +    if (!len) return openads::AE_INTERNAL_ERROR;
+          +    MgBackend be;
+          +    {
+          +        std::lock_guard<std::mutex> lock(g_mg_mu);
+          +        const auto it = g_mg_handles.find(hMgmt);
+          +        if (it == g_mg_handles.end()) return openads::AE_INVALID_CONNECTION_HANDLE;
+          +        be = it->second; // concurrent disconnect cannot invalidate this copy
+          +    }
+          +    std::string text;
+          +    if (!be.remote) {
+          +        std::lock_guard<std::recursive_mutex> lock(state().mu);
+          +        text = openads::mgmt::health_json(collect_local_abi_snapshot(), OPENADS_VERSION_STR);
+          +    } else {
+          +        openads::network::network_init();
+          +        auto connected = openads::network::connect_tcp(be.host, be.port);
+          +        if (!connected) return openads::AE_NO_CONNECTION;
+          +        auto socket = connected.value();
+          +        if (!authenticate_mg_socket(socket, be)) {
+          +            openads::network::sock_close(socket);
+          +            return openads::AE_ACCESS_DENIED;
+          +        }
+          +        openads::network::Frame req;
+          +        req.opcode = openads::network::Opcode::MgRequest;
+          +        const auto body = openads::network::encode_mg_request(
+          +            openads::network::MgRequestKind::HealthJson, 0);
+          +        req.payload.assign(body.begin(), body.end());
+          +        if (!openads::network::write_frame(socket, req)) {
+          +            openads::network::sock_close(socket); return openads::AE_NO_CONNECTION;
+          +        }
+          +        auto reply = openads::network::read_frame(socket);
+          +        openads::network::sock_close(socket);
+          +        if (!reply) return openads::AE_NO_CONNECTION;
+          +        if (reply.value().opcode != openads::network::Opcode::MgReplyAck)
+          +            return openads::AE_FUNCTION_NOT_AVAILABLE;
+          +        text.assign(reply.value().payload.begin(), reply.value().payload.end());
+          +        // Bound the reply and require a JSON object envelope. This is not a full JSON parser.
+          +        if (text.empty() || text.size() > 65535 || text.front() != '{' || text.back() != '}')
+          +            return openads::AE_INTERNAL_ERROR;
+          +    }
+          +    const UNSIGNED32 needed = static_cast<UNSIGNED32>(text.size() + 1);
+          +    const UNSIGNED32 capacity = *len;
+          +    *len = needed;
+          +    if (!json || capacity < needed) return openads::AE_INSUFFICIENT_BUFFER;
+          +    std::memcpy(json, text.c_str(), needed);
+          +    return openads::AE_SUCCESS;
+          +}
+          +
+           UNSIGNED32 ENTRYPOINT AdsMgDisconnect(ADSHANDLE hMgmt) {
+               arc2_trace("AdsMgDisconnect");
+               std::lock_guard<std::mutex> g(g_mg_mu);
+          diff --git a/src/abi/ace_stdcall_x86.c b/src/abi/ace_stdcall_x86.c
+          index 7150ca88..776dedae 100644
+          --- a/src/abi/ace_stdcall_x86.c
+          +++ b/src/abi/ace_stdcall_x86.c
+          @@ -6060,3 +6060,13 @@ __declspec(dllexport) UNSIGNED32 __stdcall OAdsSetLogging(UNSIGNED16 a0) {
+               arc_log_rc("OAdsSetLogging", rc, 1, (uintptr_t)a0);
+               return rc;
+           }
+          +
+          +/* Additive health export; x86 Harbour imports the stdcall spelling. */
+          +#define OAdsGetServerStats oadsimpl_OAdsGetServerStats
+          +extern UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE, UNSIGNED8*, UNSIGNED32*);
+          +#undef OAdsGetServerStats
+          +#pragma comment(linker, "/alternatename:_oadsimpl_OAdsGetServerStats=_OAdsGetServerStats")
+          +#pragma comment(linker, "/export:OAdsGetServerStats=_OAdsGetServerStats")
+          +__declspec(dllexport) UNSIGNED32 __stdcall OAdsGetServerStats(ADSHANDLE a0, UNSIGNED8* a1, UNSIGNED32* a2) {
+          +    return oadsimpl_OAdsGetServerStats(a0, a1, a2);
+          +}
+          diff --git a/src/mgmt/mg_health.cpp b/src/mgmt/mg_health.cpp
+          new file mode 100644
+          index 00000000..dc5f68e6
+          --- /dev/null
+          +++ b/src/mgmt/mg_health.cpp
+          @@ -0,0 +1,68 @@
+          +#include "mgmt/mg_health.h"
+          +#include "platform/proc.h"
+          +#include <algorithm>
+          +#include <set>
+          +#include <sstream>
+          +#include <locale>
+          +
+          +namespace openads::mgmt {
+          +namespace {
+          +std::string quote(const std::string& text) {
+          +    std::string out = "\"";
+          +    const char* hex = "0123456789abcdef";
+          +    for (char raw : text) {
+          +        const auto c = static_cast<unsigned char>(raw);
+          +        if (c == '"' || c == '\\') { out += '\\'; out += static_cast<char>(c); }
+          +        else if (c < 32) { out += "\\u00"; out += hex[c >> 4]; out += hex[c & 15]; }
+          +        else out += static_cast<char>(c);
+          +    }
+          +    return out + "\"";
+          +}
+          +}
+          +std::string health_json(const MgSnapshot& s, const std::string& version) {
+          +    std::ostringstream out;
+          +    out.imbue(std::locale::classic());
+          +    out << "{\"schema_version\":1,\"version\":" << quote(version)
+          +        << ",\"scope\":" << quote(s.server_type == 1 ? "server" : "local_process");
+          +    auto number = [&](const char* key, std::uint64_t n) { out << ",\"" << key << "\":" << n; };
+          +    auto usage = [&](const char* key, std::uint32_t now, std::uint32_t peak) {
+          +        out << ",\"" << key << "\":{\"current\":" << now
+          +            << ",\"max_used\":" << std::max(now, peak) << ",\"rejected\":null}";
+          +    };
+          +    usage("users", s.users, s.max_users);
+          +    usage("connections", s.connections, s.max_connections);
+          +    usage("workareas", s.workareas, s.max_workareas);
+          +    usage("table_handles", s.tables, s.max_tables);
+          +    usage("index_bindings", s.indexes, s.max_indexes);
+          +    usage("locks", s.locks, s.max_locks);
+          +    out << ",\"worker_threads\":{\"current\":" << s.worker_threads
+          +        << ",\"max_used\":null,\"rejected\":null}";
+          +    std::set<std::string> tables, indexes;
+          +    for (const auto& t : s.table_list) tables.insert(t.name);
+          +    for (const auto& i : s.index_list) indexes.insert(i.name);
+          +    number("distinct_table_paths", tables.size());
+          +    number("distinct_index_paths", indexes.size());
+          +    number("uptime_seconds", s.uptime_seconds);
+          +    number("operations", s.operations);
+          +    number("logged_errors", s.logged_errors);
+          +    number("rss_bytes", s.rss_bytes);
+          +    number("server_port", s.server_port);
+          +    out << ",\"max_sessions\":" << (s.max_sessions_source.empty() ? "null" : std::to_string(s.max_sessions))
+          +        << ",\"max_sessions_source\":" << (s.max_sessions_source.empty() ? "null" : quote(s.max_sessions_source));
+          +    number("packets_in", s.packets_in); number("packets_out", s.packets_out);
+          +    number("bytes_in", s.bytes_in); number("bytes_out", s.bytes_out);
+          +    number("disconnects", s.disconnects); number("partial_connects", s.partial_connects);
+          +    const auto count = platform::process_fd_count(), limit = platform::process_fd_limit();
+          +    out << ",\"os_fd_count\":" << (count ? std::to_string(*count) : "null")
+          +        << ",\"os_fd_soft_limit\":" << (limit ? std::to_string(*limit) : "null")
+          +        << ",\"parked_handles\":null"
+          +        << ",\"semantics\":{\"workareas\":\"server-open table handles, includes client-parked handles; not Harbour Select() areas\","
+          +        << "\"users\":\"management user entries, not distinct people or application instances\","
+          +        << "\"distinct_paths\":\"exact path strings, not canonical filesystem identities\","
+          +        << "\"max_used\":\"workarea/table-handle maxima retain open events; other maxima keep existing telemetry semantics\","
+          +        << "\"parked_handles\":\"client-only state, unavailable at server\","
+          +        << "\"rejected\":\"not measured\","
+          +        << "\"snapshot\":\"best-effort concurrent sample; management query session may be included\"}}";
+          +    return out.str();
+          +}
+          +}
+          diff --git a/src/mgmt/mg_health.h b/src/mgmt/mg_health.h
+          new file mode 100644
+          index 00000000..cd69d83d
+          --- /dev/null
+          +++ b/src/mgmt/mg_health.h
+          @@ -0,0 +1,7 @@
+          +#pragma once
+          +#include "mgmt/mg_snapshot.h"
+          +#include <string>
+          +namespace openads::mgmt {
+          +// Aggregate-only JSON. No user names, paths, SQL text or credentials.
+          +std::string health_json(const MgSnapshot& snap, const std::string& version);
+          +}
+          diff --git a/src/mgmt/mg_snapshot.h b/src/mgmt/mg_snapshot.h
+          index 376531cb..513261d6 100644
+          --- a/src/mgmt/mg_snapshot.h
+          +++ b/src/mgmt/mg_snapshot.h
+          @@ -93,6 +93,8 @@ struct MgSnapshot {
+               std::uint16_t server_type     = 0;   // 0 = unknown/local
+               std::uint64_t rss_bytes       = 0;   // RSS of the reporting process
+               std::uint16_t server_port     = 0;   // listener port (0 = local)
+          +    std::uint32_t max_sessions = 0; // health-only, resolved daemon admission cap
+          +    std::string max_sessions_source; // empty when no daemon limit is known
+           
+               // Cumulative / historical telemetry — captured from the reporting
+               // process's MgStats so it travels the wire with the live counts
+          diff --git a/src/network/mg_wire.h b/src/network/mg_wire.h
+          index 20103849..49eff1d2 100644
+          --- a/src/network/mg_wire.h
+          +++ b/src/network/mg_wire.h
+          @@ -15,6 +15,7 @@ enum class MgRequestKind : std::uint8_t {
+               KillUser       = 0x02,  // arg: u16 conn_no
+               ResetCommStats = 0x03,
+               DumpTables     = 0x04,
+          +    HealthJson     = 0x05,  // additive aggregate-only health reply
+           };
+           
+           // Request payload: [u8 kind][optional args].
+          diff --git a/src/network/server.cpp b/src/network/server.cpp
+          index 3df7513f..301dd665 100644
+          --- a/src/network/server.cpp
+          +++ b/src/network/server.cpp
+          @@ -274,6 +274,8 @@ mgmt::MgSnapshot Server::build_mg_snapshot() const {
+               snap.connections = static_cast<std::uint32_t>(sessions.size());
+               snap.server_type = 1;   // 1 = remote server
+               snap.server_port = port_;
+          +    snap.max_sessions = max_sessions_;
+          +    snap.max_sessions_source = max_sessions_source_;
+               snap.rss_bytes   = openads::platform::process_rss_bytes();
+           
+               {
+          @@ -362,7 +364,11 @@ std::uint64_t Server::register_session(const SessionInfo& info) {
+               auto id = next_session_id_.fetch_add(1);
+               SessionInfo si = info;
+               si.id = id;
+          +    open_workareas_ += si.open_tables;
+               sessions_info_.emplace(id, std::move(si));
+          +    auto& stats = openads::mgmt::process_mg_stats();
+          +    openads::mgmt::MgStats::bump_max(stats.max_workareas, open_workareas_);
+          +    openads::mgmt::MgStats::bump_max(stats.max_tables, open_workareas_);
+               // M9.25 — raise the connection high-water mark under info_mu_.
+               openads::mgmt::MgStats::bump_max(
+                   openads::mgmt::process_mg_stats().max_connections,
+          @@ -372,7 +378,11 @@ std::uint64_t Server::register_session(const SessionInfo& info) {
+           
+           void Server::unregister_session(std::uint64_t id) {
+               std::lock_guard<std::mutex> lk(info_mu_);
+          -    sessions_info_.erase(id);
+          +    auto it = sessions_info_.find(id);
+          +    if (it != sessions_info_.end()) {
+          +        open_workareas_ -= it->second.open_tables;
+          +        sessions_info_.erase(it);
+          +    }
+               // M9.25 — count one disconnect per terminated session. This runs
+               // exactly once per session via session_loop's SessionGuard dtor.
+               openads::mgmt::process_mg_stats()
+          @@ -434,6 +444,7 @@ void Server::add_session_table(std::uint64_t id, std::int32_t delta,
+               auto it = sessions_info_.find(id);
+               if (it == sessions_info_.end()) return;
+               auto& n = it->second.open_tables;
+          +    const auto before = n;
+               if (delta < 0) {
+                   std::uint32_t d = static_cast<std::uint32_t>(-delta);
+                   n = (n > d) ? n - d : 0;
+          @@ -448,6 +459,12 @@ void Server::add_session_table(std::uint64_t id, std::int32_t delta,
+                       it->second.open_table_names.push_back(table_name);
+                   }
+               }
+          +    // Event-driven retained maximum, not a dashboard sampling maximum.
+          +    // Count logical session opens, including parked handles, not OS FDs.
+          +    open_workareas_ = open_workareas_ - before + n;
+          +    auto& stats = openads::mgmt::process_mg_stats();
+          +    openads::mgmt::MgStats::bump_max(stats.max_workareas, open_workareas_);
+          +    openads::mgmt::MgStats::bump_max(stats.max_tables, open_workareas_);
+           }
+           
+           bool Server::try_register_open(std::uint64_t id,
+          @@ -549,9 +566,10 @@ util::Result<void> Server::start(const std::string& host,
+               // Resolve enterprise limits once at start. A test/embedder override wins;
+               // otherwise take the env-loaded EnterpriseConfig (OPENADS_SERVER_*).
+               const auto& ecfg = openads::sql_backend::enterprise_config();
+          -    max_sessions_ = (max_sessions_override_ != 0)
+          +    max_sessions_ = has_max_sessions_override_
+                                   ? max_sessions_override_
+                                   : ecfg.server_max_sessions;
+          +    if (!has_max_sessions_override_) max_sessions_source_ = ecfg.server_max_sessions_source;
+               ListenerOptions opts;
+               opts.host = host;
+               opts.port = port;
+          diff --git a/src/network/server.h b/src/network/server.h
+          index f4019b21..f5c85213 100644
+          --- a/src/network/server.h
+          +++ b/src/network/server.h
+          @@ -152,7 +152,11 @@ public:
+               // the env-loaded EnterpriseConfig value; call before start(). Production
+               // reads OPENADS_SERVER_MAX_SESSIONS / openads.ini max_sessions; this
+               // exists mainly for tests.
+          -    void set_max_sessions(std::uint32_t n) { max_sessions_override_ = n; }
+          +    void set_max_sessions(std::uint32_t n, const std::string& source = "API override") {
+          +        max_sessions_override_ = n;
+          +        has_max_sessions_override_ = true;
+          +        max_sessions_source_ = source;
+          +    }
+               // listen() backlog override for the primary + extra listeners (0 = keep
+               // the env default, OPENADS_SERVER_BACKLOG / 256). Production config comes
+               // from --backlog / openads.ini backlog.
+          @@ -266,6 +270,8 @@ private:
+               // tests inject a small cap without touching the env-loaded singleton.
+               std::uint32_t                                  max_sessions_ = 0;
+               std::uint32_t                                  max_sessions_override_ = 0;
+          +    bool has_max_sessions_override_ = false;
+          +    std::string max_sessions_source_;
+               std::atomic<std::uint32_t>                     rejected_sessions_{0};
+               int                                            backlog_override_ = 0;
+           
+          @@ -298,6 +304,7 @@ private:
+               // sessions_snapshot().
+               mutable std::mutex                          info_mu_;
+               std::unordered_map<std::uint64_t, SessionInfo> sessions_info_;
+          +    std::uint32_t open_workareas_ = 0; // aggregate, protected by info_mu_
+               std::atomic<std::uint64_t>                  next_session_id_{1};
+           
+           public:
+          diff --git a/src/network/session.cpp b/src/network/session.cpp
+          index ade93452..e81904d6 100644
+          --- a/src/network/session.cpp
+          +++ b/src/network/session.cpp
+          @@ -15,6 +15,7 @@
+           #include "mgmt/error_log.h"
+           #include "mgmt/mg_collector.h"
+           #include "mgmt/mg_stats.h"
+          +#include "mgmt/mg_health.h"
+           #include "network/mg_wire.h"
+           #include "network/mutex_manager.h"
+           #include "platform/proc.h"
+          @@ -5625,7 +5626,8 @@ DispatchResult Session::dispatch(const Frame& f) {
+                           reply = err("bad mg request");
+                           break;
+                       }
+          -            if (req.value().kind != MgRequestKind::Snapshot && !mg_admin_) {
+          +            if (req.value().kind != MgRequestKind::Snapshot &&
+          +                req.value().kind != MgRequestKind::HealthJson && !mg_admin_) {
+                           reply = err("Management administrator required", openads::AE_ACCESS_DENIED); break;
+                       }
+                       switch (req.value().kind) {
+          @@ -5636,6 +5638,13 @@ DispatchResult Session::dispatch(const Frame& f) {
+                               reply.payload.assign(snap.begin(), snap.end());
+                               break;
+                           }
+          +                case MgRequestKind::HealthJson: {
+          +                    reply.opcode = Opcode::MgReplyAck;
+          +                    const auto json = openads::mgmt::health_json(
+          +                        srv_->build_mg_snapshot(), OPENADS_VERSION_STR);
+          +                    reply.payload.assign(json.begin(), json.end());
+          +                    break;
+          +                }
+                           case MgRequestKind::KillUser: {
+                               // arg is the 1-based connection number; map it
+                               // to the matching session id and kill it.
+          diff --git a/src/openads_ace.def b/src/openads_ace.def
+          index e7d56fae..e3a7d6c8 100644
+          --- a/src/openads_ace.def
+          +++ b/src/openads_ace.def
+          @@ -321,6 +321,7 @@ EXPORTS
+               AdsSetDecimals
+               AdsSetDefault
+               AdsSetDefaultConnection
+          +    OAdsGetServerStats
+               OAdsSetLogging
+               AdsSetEpoch
+               AdsSetExact
+          diff --git a/src/platform/proc.cpp b/src/platform/proc.cpp
+          index fa8ac30d..553a6c89 100644
+          --- a/src/platform/proc.cpp
+          +++ b/src/platform/proc.cpp
+          @@ -10,6 +10,12 @@
+           #  include <unistd.h>
+           #endif
+           
+          +#if defined(__linux__)
+          +#  include <dirent.h>
+          +#  include <sys/resource.h>
+          +#  include <cerrno>
+          +#endif
+          +
+           namespace openads::platform {
+           
+           std::uint64_t process_rss_bytes() {
+          @@ -39,4 +45,32 @@ std::uint64_t process_rss_bytes() {
+           #endif
+           }
+           
+          +std::optional<std::uint64_t> process_fd_count() {
+          +#if defined(__linux__)
+          +    DIR* dir = opendir("/proc/self/fd");
+          +    if (!dir) return std::nullopt;
+          +    std::uint64_t count = 0;
+          +    errno = 0;
+          +    while (const auto* ent = readdir(dir))
+          +        if (ent->d_name[0] != '.') ++count;
+          +    const bool failed = errno != 0;
+          +    closedir(dir);
+          +    if (failed) return std::nullopt;
+          +    // Exclude the descriptor this query opened to enumerate /proc/self/fd.
+          +    return count > 0 ? count - 1 : 0;
+          +#else
+          +    return std::nullopt;
+          +#endif
+          +}
+          +std::optional<std::uint64_t> process_fd_limit() {
+          +#if defined(__linux__)
+          +    struct rlimit lim{};
+          +    if (getrlimit(RLIMIT_NOFILE, &lim) != 0 || lim.rlim_cur == RLIM_INFINITY)
+          +        return std::nullopt;
+          +    return static_cast<std::uint64_t>(lim.rlim_cur);
+          +#else
+          +    return std::nullopt;
+          +#endif
+          +}
+          +
+           }  // namespace openads::platform
+          diff --git a/src/platform/proc.h b/src/platform/proc.h
+          index 990fb16a..e4702936 100644
+          --- a/src/platform/proc.h
+          +++ b/src/platform/proc.h
+          @@ -1,11 +1,15 @@
+           #pragma once
+           
+           #include <cstdint>
+          +#include <optional>
+           
+           namespace openads::platform {
+           
+           // Current resident set size (physical memory) of this process, in
+           // bytes. Returns 0 if it cannot be determined.
+           std::uint64_t process_rss_bytes();
+          +// Linux process descriptor count and soft RLIMIT_NOFILE; unavailable elsewhere.
+          +std::optional<std::uint64_t> process_fd_count();
+          +std::optional<std::uint64_t> process_fd_limit();
+           
+           }  // namespace openads::platform
+          diff --git a/src/sql_backend/enterprise_config.cpp b/src/sql_backend/enterprise_config.cpp
+          index 94901a32..3f803a02 100644
+          --- a/src/sql_backend/enterprise_config.cpp
+          +++ b/src/sql_backend/enterprise_config.cpp
+          @@ -60,6 +60,15 @@ EnterpriseConfig load_from_env() {
+               c.sqlite_wal_mode = env_bool("OPENADS_SQLITE_WAL", true);
+           
+               c.server_max_sessions   = env_u32("OPENADS_SERVER_MAX_SESSIONS", 500);
+          +    const char* raw_sessions = std::getenv("OPENADS_SERVER_MAX_SESSIONS");
+          +    if (raw_sessions && *raw_sessions) {
+          +        errno = 0;
+          +        char* end = nullptr;
+          +        const long long parsed = std::strtoll(raw_sessions, &end, 10);
+          +        if (end != raw_sessions && *end == '\0' && errno != ERANGE &&
+          +            parsed >= 0 && parsed <= static_cast<long long>(UINT32_MAX))
+          +            c.server_max_sessions_source = "environment:OPENADS_SERVER_MAX_SESSIONS";
+          +    }
+               c.server_listen_backlog = env_u32("OPENADS_SERVER_BACKLOG", 256);
+           
+               c.server_pool_enabled = env_bool("OPENADS_SERVER_POOL", false);
+          diff --git a/src/sql_backend/enterprise_config.h b/src/sql_backend/enterprise_config.h
+          index 98d99d25..bb306a07 100644
+          --- a/src/sql_backend/enterprise_config.h
+          +++ b/src/sql_backend/enterprise_config.h
+          @@ -1,6 +1,7 @@
+           #pragma once
+           
+           #include <cstdint>
+          +#include <string>
+           
+           namespace openads::sql_backend {
+           
+          @@ -37,6 +38,7 @@ struct EnterpriseConfig {
+               bool          sqlite_wal_mode                 = true;
+           
+               std::uint32_t server_max_sessions   = 500;
+          +    std::string server_max_sessions_source = "default";
+               std::uint32_t server_listen_backlog = 256;
+           
+               // Enterprise step 3 — wire-server connection pool (sharded reactor).
+          diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+          index 083bc4fa..512fa916 100644
+          --- a/tests/CMakeLists.txt
+          +++ b/tests/CMakeLists.txt
+          @@ -196,6 +196,7 @@ add_executable(openads_unit_tests
+               unit/index_expr_utf8_test.cpp
+               unit/abi_misc_impls_test.cpp
+               unit/abi_mgmt_test.cpp
+          +    unit/abi_health_test.cpp
+               unit/abi_mgmt_locks_indexes_test.cpp
+               unit/error_log_test.cpp
+               unit/backup_test.cpp
+          diff --git a/tests/unit/abi_health_test.cpp b/tests/unit/abi_health_test.cpp
+          new file mode 100644
+          index 00000000..2ab168a8
+          --- /dev/null
+          +++ b/tests/unit/abi_health_test.cpp
+          @@ -0,0 +1,222 @@
+          +#include "doctest.h"
+          +#include "mgmt/mg_health.h"
+          +#include "network/server.h"
+          +#include "network/mg_wire.h"
+          +#include "network/socket.h"
+          +#include "openads/ace.h"
+          +#include <string>
+          +#include <vector>
+          +#include <thread>
+          +#include <cstdlib>
+          +
+          +TEST_CASE("health JSON is aggregate-only with wide counters and honest unknowns") {
+          +    openads::mgmt::MgSnapshot snap;
+          +    snap.server_type = 1;
+          +    snap.workareas = snap.tables = 3;
+          +    snap.max_workareas = 8;
+          +    snap.bytes_in = 4294967296ULL;
+          +    snap.table_list = {{"/private/a.dbf", "private-user", 1},
+          +                       {"/private/a.dbf", "private-user", 1},
+          +                       {"/private/b.dbf", "private-user", 1}};
+          +    auto json = openads::mgmt::health_json(snap, "version\"\n");
+          +    CHECK(json.find("\"version\":\"version\\\"\\u000a\"") != std::string::npos);
+          +    CHECK(json.find("\"workareas\":{\"current\":3,\"max_used\":8") != std::string::npos);
+          +    CHECK(json.find("\"distinct_table_paths\":2") != std::string::npos);
+          +    CHECK(json.find("\"bytes_in\":4294967296") != std::string::npos);
+          +    CHECK(json.find("\"parked_handles\":null") != std::string::npos);
+          +    CHECK(json.find("\"rejected\":null") != std::string::npos);
+          +    CHECK(json.find("/private") == std::string::npos);
+          +    CHECK(json.find("private-user") == std::string::npos);
+          +}
+          +
+          +TEST_CASE("health C ABI validates management handles and never truncates JSON") {
+          +    UNSIGNED8 local[] = "local";
+          +    ADSHANDLE handle = 0;
+          +    REQUIRE(AdsMgConnect(local, nullptr, nullptr, &handle) == 0);
+          +    UNSIGNED32 len = 0;
+          +    CHECK(OAdsGetServerStats(0, nullptr, &len) != 0);
+          +    CHECK(OAdsGetServerStats(handle, nullptr, nullptr) != 0);
+          +    REQUIRE(OAdsGetServerStats(handle, nullptr, &len) == AE_INSUFFICIENT_BUFFER);
+          +    REQUIRE(len > 10);
+          +    char small[] = "XXXX";
+          +    UNSIGNED32 capacity = sizeof(small);
+          +    CHECK(OAdsGetServerStats(handle, reinterpret_cast<UNSIGNED8*>(small), &capacity) == AE_INSUFFICIENT_BUFFER);
+          +    CHECK(std::string(small) == "XXXX");
+          +    std::vector<UNSIGNED8> buffer(8192);
+          +    len = static_cast<UNSIGNED32>(buffer.size());
+          +    REQUIRE(OAdsGetServerStats(handle, buffer.data(), &len) == 0);
+          +    CHECK(buffer[len - 1] == 0);
+          +    CHECK(std::string(reinterpret_cast<char*>(buffer.data())).find("\"scope\":\"local_process\"") != std::string::npos);
+          +    REQUIRE(AdsMgDisconnect(handle) == 0);
+          +    CHECK(OAdsGetServerStats(handle, buffer.data(), &len) != 0);
+          +}
+          +
+          +TEST_CASE("health remote query uses management authentication and server-side measurement") {
+          +    openads::network::Server server;
+          +    server.set_max_sessions(123, "openads.ini:max_sessions");
+          +    server.add_credential("admin", "test-only-password");
+          +    REQUIRE(server.start("127.0.0.1", 0));
+          +    openads::network::Server::SessionInfo info;
+          +    info.user = "unexposed-user";
+          +    info.open_tables = 3;
+          +    info.open_table_names = {"/private/a.dbf", "/private/a.dbf", "/private/b.dbf"};
+          +    const auto id = server.register_session(info);
+          +    std::string endpoint = "127.0.0.1:" + std::to_string(server.port());
+          +    SUBCASE("plain management endpoint") {}
+          +    SUBCASE("tcp scheme and trailing slash") { endpoint = "tcp://" + endpoint + "/"; }
+          +    SUBCASE("uppercase TCP scheme and trailing slash") { endpoint = "TCP://" + endpoint + "/"; }
+          +    UNSIGNED8 user[] = "admin", password[] = "test-only-password";
+          +    ADSHANDLE handle = 0;
+          +    REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), user, password, &handle) == 0);
+          +    UNSIGNED8 buffer[8192];
+          +    UNSIGNED32 len = sizeof(buffer);
+          +    REQUIRE(OAdsGetServerStats(handle, buffer, &len) == 0);
+          +    std::string json(reinterpret_cast<char*>(buffer));
+          +    CHECK(json.find("\"scope\":\"server\"") != std::string::npos);
+          +    CHECK(json.find("\"workareas\":{\"current\":3") != std::string::npos);
+          +    CHECK(json.find("\"distinct_table_paths\":2") != std::string::npos);
+          +    CHECK(json.find("\"server_port\":" + std::to_string(server.port())) != std::string::npos);
+          +    CHECK(json.find("\"max_sessions\":123") != std::string::npos);
+          +    CHECK(json.find("\"max_sessions_source\":\"openads.ini:max_sessions\"") != std::string::npos);
+          +    CHECK(json.find("unexposed-user") == std::string::npos);
+          +    CHECK(json.find("/private") == std::string::npos);
+          +    CHECK(json.find("test-only-password") == std::string::npos);
+          +    CHECK(AdsMgDisconnect(handle) == 0);
+          +    UNSIGNED8 wrong_password[] = "wrong";
+          +    CHECK(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), user, wrong_password, &handle) != 0);
+          +    // The additive read is allowed for the EXISTING credential-free loopback
+          +    // management session, but never for a socket without MgConnect.
+          +    server.stop();
+          +    openads::network::Server loopback;
+          +    REQUIRE(loopback.start("127.0.0.1", 0));
+          +    endpoint = "127.0.0.1:" + std::to_string(loopback.port());
+          +    REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), nullptr, nullptr, &handle) == 0);
+          +    len = sizeof(buffer);
+          +    CHECK(OAdsGetServerStats(handle, buffer, &len) == 0);
+          +    CHECK(AdsMgResetCommStats(handle) != 0);
+          +    CHECK(AdsMgDisconnect(handle) == 0);
+          +    auto connected = openads::network::connect_tcp("127.0.0.1", loopback.port());
+          +    REQUIRE(connected);
+          +    auto socket = connected.value();
+          +    openads::network::Frame frame;
+          +    frame.opcode = openads::network::Opcode::MgRequest;
+          +    const auto body = openads::network::encode_mg_request(openads::network::MgRequestKind::HealthJson, 0);
+          +    frame.payload.assign(body.begin(), body.end());
+          +    REQUIRE(openads::network::write_frame(socket, frame));
+          +    auto reply = openads::network::read_frame(socket);
+          +    REQUIRE(reply);
+          +    CHECK(reply.value().opcode != openads::network::Opcode::MgReplyAck);
+          +    openads::network::sock_close(socket);
+          +    (void)id;
+          +    loopback.stop();
+          +}
+          +
+          +TEST_CASE("health workarea peak retains transient opens without a snapshot") {
+          +    openads::network::Server server;
+          +    openads::network::Server::SessionInfo a;
+          +    a.open_tables = 2;
+          +    const auto first = server.register_session(a);
+          +    const auto second = server.register_session({});
+          +    server.add_session_table(second, 1000, "same.dbf");
+          +    // Close before the first sample, as in a short storm.
+          +    server.add_session_table(second, -1000, "same.dbf");
+          +    auto snapshot = server.build_mg_snapshot();
+          +    CHECK(snapshot.workareas == 2);
+          +    CHECK(snapshot.max_workareas >= 1002);
+          +    CHECK(snapshot.max_tables >= 1002);
+          +    const auto peak = snapshot.max_workareas;
+          +    server.add_session_table(first, -100, "same.dbf"); // clamped close
+          +    server.unregister_session(second);
+          +    server.unregister_session(first);
+          +    server.unregister_session(first); // duplicate cleanup cannot underflow
+          +    snapshot = server.build_mg_snapshot();
+          +    CHECK(snapshot.workareas == 0);
+          +    CHECK(snapshot.max_workareas == peak);
+          +    const auto third = server.register_session({});
+          +    server.add_session_table(third, 3, "same.dbf");
+          +    snapshot = server.build_mg_snapshot();
+          +    CHECK(snapshot.workareas == 3);
+          +    CHECK(snapshot.max_workareas == peak);
+          +    server.unregister_session(third);
+          +}
+          +
+          +TEST_CASE("health explicit zero session cap remains unlimited") {
+          +    openads::network::Server server;
+          +    server.set_max_sessions(0, "command line:--max_sessions");
+          +    REQUIRE(server.start("127.0.0.1", 0));
+          +    auto snapshot = server.build_mg_snapshot();
+          +    CHECK(snapshot.max_sessions == 0);
+          +    CHECK(snapshot.max_sessions_source == "command line:--max_sessions");
+          +    auto json = openads::mgmt::health_json(snapshot, "test");
+          +    CHECK(json.find("\"max_sessions\":0") != std::string::npos);
+          +    server.stop();
+          +    openads::mgmt::MgSnapshot local;
+          +    json = openads::mgmt::health_json(local, "test");
+          +    CHECK(json.find("\"max_sessions\":null") != std::string::npos);
+          +}
+          +
+          +TEST_CASE("health older and malformed server replies fail without writing caller buffer") {
+          +    using namespace openads::network;
+          +    REQUIRE(network_init());
+          +    auto listening = listen_tcp({"127.0.0.1", 0, 4});
+          +    REQUIRE(listening);
+          +    auto listener = listening.value();
+          +    auto port = socket_local_port(listener);
+          +    REQUIRE(port);
+          +    Frame response;
+          +    response.opcode = Opcode::Error;
+          +    SUBCASE("older server rejects additive request") {}
+          +    SUBCASE("empty JSON reply") { response.opcode = Opcode::MgReplyAck; }
+          +    SUBCASE("non JSON reply") {
+          +        response.opcode = Opcode::MgReplyAck;
+          +        response.payload = {'b', 'a', 'd'};
+          +    }
+          +    SUBCASE("oversized JSON reply") {
+          +        response.opcode = Opcode::MgReplyAck;
+          +        response.payload.assign(65536, ' ');
+          +        response.payload.front() = '{'; response.payload.back() = '}';
+          +    }
+          +    std::thread fake([&] {
+          +        for (int attempt = 0; attempt < 2; ++attempt) {
+          +            auto accepted = accept_one(listener);
+          +            if (!accepted) return;
+          +            auto socket = accepted.value();
+          +            auto handshake = read_frame(socket);
+          +            if (!handshake) { sock_close(socket); return; }
+          +            Frame ack; ack.opcode = Opcode::MgConnectAck;
+          +            if (!write_frame(socket, ack)) { sock_close(socket); return; }
+          +            if (attempt == 1) {
+          +                auto request = read_frame(socket);
+          +                if (request) (void)write_frame(socket, response);
+          +            }
+          +            sock_close(socket);
+          +        }
+          +    });
+          +    std::string endpoint = "127.0.0.1:" + std::to_string(port.value());
+          +    ADSHANDLE handle = 0;
+          +    const auto connected = AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), nullptr, nullptr, &handle);
+          +    char buffer[] = "XXXX";
+          +    UNSIGNED32 size = sizeof(buffer);
+          +    const auto result = connected == 0
+          +        ? OAdsGetServerStats(handle, reinterpret_cast<UNSIGNED8*>(buffer), &size) : connected;
+          +    fake.join(); sock_close(listener);
+          +    REQUIRE(connected == 0);
+          +    CHECK(result == (response.opcode == Opcode::Error ? AE_FUNCTION_NOT_AVAILABLE : AE_INTERNAL_ERROR));
+          +    CHECK(std::string(buffer) == "XXXX");
+          +    CHECK(size == sizeof(buffer));
+          +    CHECK(AdsMgDisconnect(handle) == 0);
+          +}
+          +
+          +TEST_CASE("health default session cap and environment source match admission config") {
+          +    openads::network::Server server;
+          +    REQUIRE(server.start("127.0.0.1", 0));
+          +    const char* raw = std::getenv("OPENADS_SERVER_MAX_SESSIONS");
+          +    std::uint32_t cap = 500;
+          +    std::string source = "default";
+          +    if (raw && std::string(raw) == "0") { cap = 0; source = "environment:OPENADS_SERVER_MAX_SESSIONS"; }
+          +    if (raw && std::string(raw) == "11") { cap = 11; source = "environment:OPENADS_SERVER_MAX_SESSIONS"; }
+          +    const auto snapshot = server.build_mg_snapshot();
+          +    CHECK(snapshot.max_sessions == cap);
+          +    CHECK(snapshot.max_sessions_source == source);
+          +    server.stop();
+          +}
+          diff --git a/tools/serverd/main.cpp b/tools/serverd/main.cpp
+          index bde6f6ef..79436dda 100644
+          --- a/tools/serverd/main.cpp
+          +++ b/tools/serverd/main.cpp
+          @@ -138,6 +138,8 @@ struct Args {
+               // --max-sessions / max_sessions= ini key overrides it.
+               std::uint32_t max_sessions = 0;
+               std::uint32_t established_session_idle_seconds = 0;
+          +    bool has_max_sessions = false;
+          +    std::string max_sessions_source;
+               std::uint16_t http_port   = 0;
+               std::string   data_dir    = ".";
+               bool          enable_file_func = false;
+          @@ -194,8 +196,11 @@ bool parse_args(int argc, char** argv, Args& out) {
+                       }
+                       out.established_session_idle_seconds = static_cast<std::uint32_t>(seconds);
+                   }
+          -        else if (flag_eq(a, "max_sessions") && i + 1 < argc)
+          +        else if (flag_eq(a, "max_sessions") && i + 1 < argc) {
+                       out.max_sessions = static_cast<std::uint32_t>(std::atoi(argv[++i]));
+          +            out.has_max_sessions = true;
+          +            out.max_sessions_source = "command line:--max_sessions";
+          +        }
+                   else if (flag_eq(a, "http_port") && i + 1 < argc) out.http_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
+                   else if (flag_eq(a, "data")      && i + 1 < argc) out.data_dir = argv[++i];
+                   else if (flag_eq(a, "tls_cert") && i + 1 < argc) out.tls_cert_file = argv[++i];
+          @@ -280,7 +285,11 @@ void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
+               if (cfg.has_backlog)   out.backlog   = cfg.backlog;
+               if (cfg.has_established_session_idle_seconds)
+                   out.established_session_idle_seconds = cfg.established_session_idle_seconds;
+          -    if (cfg.has_max_sessions) out.max_sessions = cfg.max_sessions;
+          +    if (cfg.has_max_sessions) {
+          +        out.max_sessions = cfg.max_sessions;
+          +        out.has_max_sessions = true;
+          +        out.max_sessions_source = "openads.ini:max_sessions";
+          +    }
+               if (cfg.has_http_port) out.http_port = cfg.http_port;
+               if (cfg.has_data)      out.data_dir  = cfg.data_dir;
+               if (cfg.has_enable_file_func) out.enable_file_func = cfg.enable_file_func;
+          @@ -524,7 +533,7 @@ int run_server(const Args& args, bool console) {
+               srv.set_backlog(args.backlog);
+               // Session cap: an explicit --max-sessions / ini key wins (0 = unlimited);
+               // otherwise the env default (OPENADS_SERVER_MAX_SESSIONS, 500) applies.
+          -    srv.set_max_sessions(args.max_sessions);
+          +    if (args.has_max_sessions) srv.set_max_sessions(args.max_sessions, args.max_sessions_source);
+               for (const auto& u : args.auth_users)
+                   srv.add_credential(u.first, u.second);
+           
+          OPENADS_REVIEWED_PORT_PATCH
+          echo "0cde71b3ce7e7fbb7c5dba4f78b56b67d39791185488308f5b3414e2caa98472  $RUNNER_TEMP/port.patch" | sha256sum --check --strict
+          git apply --check "$RUNNER_TEMP/port.patch"
+          git apply "$RUNNER_TEMP/port.patch"
+          git add docs/health-backend.md include/openads/ace.h src tests tools/serverd/main.cpp
+          test "$(git write-tree)" = "1cce5c02da179afc0be2f92347e1edc16d973275"
+          git config user.name 'Pritpal Bedi'
+          git config user.email 'bedipritpal@users.noreply.github.com'
+          git commit -m 'Aggregate health backend and server stats C API'
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          git push origin HEAD:refs/heads/port/health-backend-upstream

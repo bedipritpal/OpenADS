@@ -1,0 +1,252 @@
+name: Publish reviewed ordered-position port (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-reviewed-ordered-position
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'bedipritpal/OpenADS'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify upstream, apply reviewed patch, verify tree, publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=fc46dcf897a92f7ce62c385540692fb82c0122ab
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          test -z "$(git ls-remote origin refs/heads/port/ordered-position-counts-upstream)"
+          git fetch https://github.com/FiveTechSoft/OpenADS.git "$base"
+          git checkout -b port/ordered-position-counts-upstream "$base"
+          cat > "$RUNNER_TEMP/port.patch" <<'OPENADS_REVIEWED_PORT_PATCH'
+          diff --git a/docs/ordered-position-counts.md b/docs/ordered-position-counts.md
+          new file mode 100644
+          index 00000000..7e2c6514
+          --- /dev/null
+          +++ b/docs/ordered-position-counts.md
+          @@ -0,0 +1,22 @@
+          +# Remote ordered-position count traffic
+          +
+          +Remote AdsGetRelKeyPos now asks for a physical record count only in natural
+          +order. With an active index, it uses the existing scoped key count and skips
+          +the physical value that it would otherwise discard.
+          +
+          +The nested remote position jump uses the same rule. AdsSetRelKeyPos keeps its
+          +existing physical-count target calculation and passes that snapshot to the
+          +natural-order jump instead of asking the helper to ensure it again. Under the
+          +current cached-count policy, that second ensure normally already costs no RPC.
+          +This port does not promise an additional wire reduction for that setter today.
+          +An ordered jump still uses the scoped key count to clamp its target.
+          +
+          +Pending buffered writes are still flushed before a jump. Index activation,
+          +scope handling, count/key caches, natural-order movement and error checks keep
+          +their existing behavior. No protocol, Harbour RDD core, record-lock contract,
+          +count freshness policy or OPENADS_FRESH_COUNTS option is changed.
+          +
+          +Tests explicitly clear only the physical-count cache to measure the discarded
+          +RPC. They check table and index handles, a narrower numeric scope, preserved
+          +setter targets and natural-order get/set behavior. Clearing this cache in the
+          +test is not a production freshness option.
+          diff --git a/src/abi/ace_exports.cpp b/src/abi/ace_exports.cpp
+          index d7c36efa..8d2b5306 100644
+          --- a/src/abi/ace_exports.cpp
+          +++ b/src/abi/ace_exports.cpp
+          @@ -2242,7 +2242,8 @@ UNSIGNED32 remote_query_key_num(openads::network::RemoteTable* rt,
+           
+           UNSIGNED32 remote_goto_key_num(openads::network::RemoteTable* rt,
+                                           openads::network::RemoteIndex* ri,
+          -                                std::uint32_t keyno) {
+          +                                std::uint32_t keyno,
+          +                                const std::uint32_t* physical_snapshot = nullptr) {
+               if (rt == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
+               // Scrollbar jump moves the cursor: buffered sets belong to the row
+               // under the old position. Land them first (no-op when clean).
+          @@ -2252,13 +2253,17 @@ UNSIGNED32 remote_goto_key_num(openads::network::RemoteTable* rt,
+                   auto act = openads::network::remote_activate_index(ri);
+                   if (!act) return fail(act.error());
+               }
+          -    remote_ensure_rec_count(rt);
+          +    // mtfix34: ordered position uses scoped key count, not physical count.
+          +    // Do not ask for a physical value that the branch below discards.
+          +    if (!remote_table_has_index(rt) && physical_snapshot == nullptr)
+          +        remote_ensure_rec_count(rt);
+               // Clamp to the scoped key count when an order is active -- a KeyGoto
+               // past the scope end must land on the last scoped key, not on a
+               // physical record outside the scope.
+               const std::uint32_t kmax = remote_table_has_index(rt)
+                   ? remote_ensure_key_count(rt)
+          -        : (rt->rec_count_cached ? rt->cached_rec_count : 0u);
+          +        : (physical_snapshot != nullptr ? *physical_snapshot
+          +             : (rt->rec_count_cached ? rt->cached_rec_count : 0u));
+               cli_trace("goto_key_num", "want=%u kmax=%u", keyno, kmax);
+               if (kmax > 0 && keyno > kmax) {
+                   keyno = kmax;
+          @@ -2297,7 +2302,9 @@ UNSIGNED32 remote_query_rel_key_pos(openads::network::RemoteTable* rt,
+                   auto act = openads::network::remote_activate_index(ri);
+                   if (!act) return fail(act.error());
+               }
+          -    remote_ensure_rec_count(rt);
+          +    // mtfix34: ordered position uses scoped key count, not physical count.
+          +    // Do not ask for a physical value that the branch below discards.
+          +    if (!remote_table_has_index(rt)) remote_ensure_rec_count(rt);
+               // Relative position is within the active order's key walk, so the
+               // denominator is the scoped key count when an order is active --
+               // not the physical record count.
+          @@ -39642,7 +39649,7 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
+                   std::uint32_t target = static_cast<std::uint32_t>(
+                       pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
+                   if (target > rc) target = rc;
+          -        return remote_goto_key_num(rt, ri, target);
+          +        return remote_goto_key_num(rt, ri, target, &rc);
+               }
+               if (auto* rt = get_remote_table(h)) {
+                   remote_ensure_rec_count(rt);
+          @@ -39655,13 +39662,13 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
+                       std::uint32_t target = static_cast<std::uint32_t>(
+                           pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
+                       if (target > rc) target = rc;
+          -            return remote_goto_key_num(rt, nullptr, target);
+          +            return remote_goto_key_num(rt, nullptr, target, &rc);
+                   }
+                   std::uint32_t rn = static_cast<std::uint32_t>(
+                       pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
+                   if (rn < 1u) rn = 1u;
+                   if (rn > rc) rn = rc;
+          -        return remote_goto_key_num(rt, nullptr, rn);
+          +        return remote_goto_key_num(rt, nullptr, rn, &rc);
+               }
+               Table* t = get_table(h);
+               if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
+          diff --git a/tests/unit/network_nav_batch_test.cpp b/tests/unit/network_nav_batch_test.cpp
+          index 5b6a9e69..21e92917 100644
+          --- a/tests/unit/network_nav_batch_test.cpp
+          +++ b/tests/unit/network_nav_batch_test.cpp
+          @@ -15,6 +15,8 @@
+           // id, or the ack-confirmed server binding for table-handle nav).
+           
+           #include "doctest.h"
+          +#include "abi/runtime.h"
+          +#include "network/client.h"
+           #include "mgmt/mg_stats.h"
+           #include "network/server.h"
+           #include "openads/ace.h"
+          @@ -807,3 +809,100 @@ TEST_CASE("Phantom RecNo derives from flags plus cached count") {
+               REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);
+               s.stop();
+           }
+          +
+          +namespace {
+          +// Test-only cache invalidation isolates count traffic without adding a client
+          +// freshness policy or changing production invalidation paths.
+          +void nb_uncache_physical(ADSHANDLE table) {
+          +    auto* rt = openads::abi::detail::state().registry.lookup<
+          +        openads::network::RemoteTable>(table,
+          +        openads::session::HandleKind::RemoteTable);
+          +    REQUIRE(rt != nullptr);
+          +    rt->rec_count_cached = false;
+          +    rt->count_bound_ok = false;
+          +}
+          +}
+          +
+          +TEST_CASE("Position count: ordered reads skip unused physical count") {
+          +    nb_wipe();
+          +    const auto dir = nb_tmp_dir();
+          +    nb_seed_ord(dir);
+          +    openads::network::Server server;
+          +    REQUIRE(server.start("127.0.0.1", 0).has_value());
+          +    const auto connection = nb_connect_remote(dir, server.port());
+          +    const auto table = nb_open(connection, "ord.dbf");
+          +    UNSIGNED8 tag[] = "BYID";
+          +    ADSHANDLE index = 0;
+          +    REQUIRE(AdsGetIndexHandle(table, tag, &index) == AE_SUCCESS);
+          +    REQUIRE(AdsSetIndexOrderByHandle(table, index) == AE_SUCCESS);
+          +    REQUIRE(AdsGotoBottom(table) == AE_SUCCESS);
+          +    double position = 0;
+          +    nb_uncache_physical(table);
+          +    auto before = nb_op(kOpGetRecordCount);
+          +    REQUIRE(AdsGetRelKeyPos(table, &position) == AE_SUCCESS);
+          +    CHECK(position == doctest::Approx(1.0));
+          +    CHECK(nb_op(kOpGetRecordCount) == before);
+          +    nb_uncache_physical(table);
+          +    REQUIRE(AdsGetRelKeyPos(index, &position) == AE_SUCCESS);
+          +    CHECK(position == doctest::Approx(1.0));
+          +    CHECK(nb_op(kOpGetRecordCount) == before);
+          +    // Preserve existing setter math: one physical snapshot supplies the
+          +    // target, while nested ordered navigation uses its scoped key count.
+          +    before = nb_op(kOpGetRecordCount);
+          +    nb_uncache_physical(table);
+          +    REQUIRE(AdsSetRelKeyPos(table, 0.5) == AE_SUCCESS);
+          +    CHECK(nb_recno(table) == 3);
+          +    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+          +    nb_uncache_physical(table);
+          +    REQUIRE(AdsSetRelKeyPos(index, 0.5) == AE_SUCCESS);
+          +    CHECK(nb_recno(table) == 3);
+          +    CHECK(nb_op(kOpGetRecordCount) == before + 2);
+          +    // A scoped order has fewer keys than physical records. The getter must
+          +    // use the scoped denominator; setter targets must still clamp to it.
+          +    double low = 10.0, high = 20.0;
+          +    REQUIRE(AdsSetScope(index, ADS_TOP, reinterpret_cast<UNSIGNED8*>(&low),
+          +                        sizeof(low), ADS_DOUBLEKEY) == AE_SUCCESS);
+          +    REQUIRE(AdsSetScope(index, ADS_BOTTOM, reinterpret_cast<UNSIGNED8*>(&high),
+          +                        sizeof(high), ADS_DOUBLEKEY) == AE_SUCCESS);
+          +    REQUIRE(AdsGotoBottom(index) == AE_SUCCESS);
+          +    CHECK(nb_recno(table) == 3);
+          +    nb_uncache_physical(table);
+          +    before = nb_op(kOpGetRecordCount);
+          +    REQUIRE(AdsGetRelKeyPos(index, &position) == AE_SUCCESS);
+          +    CHECK(position == doctest::Approx(1.0));
+          +    CHECK(nb_op(kOpGetRecordCount) == before);
+          +    before = nb_op(kOpGetRecordCount);
+          +    nb_uncache_physical(table);
+          +    REQUIRE(AdsSetRelKeyPos(index, 1.0) == AE_SUCCESS);
+          +    CHECK(nb_recno(table) == 3);
+          +    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+          +    REQUIRE(AdsClearScope(index, ADS_TOP) == AE_SUCCESS);
+          +    REQUIRE(AdsClearScope(index, ADS_BOTTOM) == AE_SUCCESS);
+          +    REQUIRE(AdsCloseTable(table) == AE_SUCCESS);
+          +    REQUIRE(AdsDisconnect(connection) == AE_SUCCESS);
+          +    server.stop();
+          +}
+          +
+          +TEST_CASE("Position count: natural order uses one physical snapshot per uncached operation") {
+          +    nb_wipe();
+          +    const auto dir = nb_tmp_dir();
+          +    nb_seed(dir, "natural.dbf", 3);
+          +    openads::network::Server server;
+          +    REQUIRE(server.start("127.0.0.1", 0).has_value());
+          +    const auto connection = nb_connect_remote(dir, server.port());
+          +    const auto table = nb_open(connection, "natural.dbf");
+          +    REQUIRE(AdsGotoBottom(table) == AE_SUCCESS);
+          +    nb_uncache_physical(table);
+          +    auto before = nb_op(kOpGetRecordCount);
+          +    double position = 0;
+          +    REQUIRE(AdsGetRelKeyPos(table, &position) == AE_SUCCESS);
+          +    CHECK(position == doctest::Approx(1.0));
+          +    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+          +    nb_uncache_physical(table);
+          +    REQUIRE(AdsSetRelKeyPos(table, 0.5) == AE_SUCCESS);
+          +    CHECK(nb_recno(table) == 2);
+          +    CHECK(nb_op(kOpGetRecordCount) == before + 2);
+          +    REQUIRE(AdsCloseTable(table) == AE_SUCCESS);
+          +    REQUIRE(AdsDisconnect(connection) == AE_SUCCESS);
+          +    server.stop();
+          +}
+          OPENADS_REVIEWED_PORT_PATCH
+          test "$(sha256sum "$RUNNER_TEMP/port.patch" | cut -d' ' -f1)" = "6770336b1c2324637e0bd880e46d22475f9d9756a9baefcbc4ddddefbc674160"
+          git apply --check "$RUNNER_TEMP/port.patch"
+          git apply --index "$RUNNER_TEMP/port.patch"
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
+          test -z "$(git diff --cached --name-only -- .github/)"
+          test "$(git write-tree)" = "ebaddbd220a48466645d8e189d67891cf141e02e"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Remote ordered positions: skip unused physical-count requests'
+          test "$(git rev-list --count "$base"..HEAD)" -eq 1
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          git push origin HEAD:refs/heads/port/ordered-position-counts-upstream
+          rm "$RUNNER_TEMP/port.patch"

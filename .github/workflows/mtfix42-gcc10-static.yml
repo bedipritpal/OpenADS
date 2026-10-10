@@ -36,7 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake make gcc-mingw-w64-$([ "$arch" = x86 ] && echo i686 || echo x86-64)-posix g++-mingw-w64-$([ "$arch" = x86 ] && echo i686 || echo x86-64)-posix wine64 wine32
           "$trip-g++-posix" --version
-          "$trip-g++-posix" -dumpfullversion | grep '^10\.'
+          "$trip-g++-posix" -dumpfullversion | grep '^10'
           mkdir -p output
           cat > toolchain.cmake <<TC
           set(CMAKE_SYSTEM_NAME Windows)
@@ -47,7 +47,7 @@ jobs:
           TC
           cmake -S . -B build-gcc10 -DCMAKE_TOOLCHAIN_FILE="$PWD/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
           cmake --build build-gcc10 --target openads_ace_static openads_static_archive_smoke -j2
-          archive=$(find build-gcc10 -name libopenace32.a | head -1)
+          archive=$(find build-gcc10 -name "libopenace$bits.a" | head -1)
           test -n "$archive"
           cp "$archive" output/libopenace32.a
           "$trip-nm" -u output/libopenace32.a > output/undefined-symbols.txt
@@ -55,6 +55,8 @@ jobs:
           "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp output/libopenace32.a -static -lws2_32 -lpsapi -o output/static-smoke.exe
           "$trip-objdump" -p output/static-smoke.exe > output/static-smoke-imports.txt
           ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/static-smoke-imports.txt
+          "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp -Wl,--whole-archive output/libopenace32.a -Wl,--no-whole-archive -static -lws2_32 -lpsapi -o output/whole-archive-smoke.exe
+          "$trip-objdump" -p output/whole-archive-smoke.exe > output/whole-archive-imports.txt
           wine output/static-smoke.exe
           for unit in ads1 adsfunc adsmgmnt adsx; do
            "$trip-gcc-posix" -c "$RUNNER_TEMP/harbour/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour/include" -I"$RUNNER_TEMP/harbour/contrib/rddads" -Iinclude/openads -o "output/$unit.o"

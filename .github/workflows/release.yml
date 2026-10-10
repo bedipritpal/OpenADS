@@ -64,17 +64,6 @@ jobs:
         with:
           ref: ${{ inputs.source_ref || inputs.tag || github.ref }}
 
-      - name: Set local test-build version tag
-        if: ${{ inputs.source_ref != '' }}
-        env:
-          TEST_TAG: ${{ inputs.tag }}
-        shell: bash
-        run: |
-          if ! [[ "$TEST_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-mtfix[0-9]+$ ]]; then
-            echo "::error::source_ref is only for mtfix test builds"; exit 1
-          fi
-          git tag "$TEST_TAG" HEAD
-
       - name: Resolve tag
         id: tag
         shell: bash
@@ -148,6 +137,7 @@ jobs:
           cmake --preset ${{ matrix.preset }} \
                 -DOPENADS_WITH_TLS=ON \
                 -DOPENADS_WITH_HTTP=ON \
+                -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" \
                 ${{ matrix.cmake_extra }} \
                 ${{ runner.os == 'Linux' && format('-DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR={0} -DHARBOUR_LIB_DIR={1} -DHARBOUR_COMPILER={2}', env.HARBOUR_INCLUDE_DIR, env.HARBOUR_LIB_DIR, env.HARBOUR_COMPILER) || '' }}
 
@@ -165,7 +155,7 @@ jobs:
       # embeds the whole ACE client+engine in the .exe — no ace32.dll /
       # ace64.dll to deploy. Built with MSYS2's matching MinGW toolchain
       # (the MSVC legs above can't produce a GNU archive). Lean config:
-      # no HTTP console, no TLS, no tests. (Requested by Pritpal Bedi.)
+      # no HTTP console or TLS; this sub-build runs its own tests.
       - name: Set up MinGW for the static ACE library
         if: always() && runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -190,12 +180,14 @@ jobs:
         run: |
           cmake -S . -B build/mingw-${{ matrix.arch }} -G "MinGW Makefiles" \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DOPENADS_BUILD_TESTS=OFF \
+                -DOPENADS_BUILD_TESTS=ON \
+                -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" \
                 -DOPENADS_WITH_HTTP=OFF \
                 -DOPENADS_WITH_TLS=OFF \
                 -DOPENADS_WARNINGS_AS_ERRORS=OFF
           cmake --build build/mingw-${{ matrix.arch }} \
-                --target openads_ace_static -j"$(nproc)"
+                --target openads_ace_static openads_unit_tests -j"$(nproc)"
+          ctest --test-dir build/mingw-${{ matrix.arch }} --output-on-failure -C Release
           ls -la build/mingw-${{ matrix.arch }}/src/libopenace*.a
 
       - name: Regenerate MinGW DLL imports and link health probe
@@ -205,6 +197,7 @@ jobs:
           set -euo pipefail
           BITS="${{ matrix.arch == 'x64' && '64' || '32' }}"
           mkdir -p build/fresh-imports
+          python3 tests/mingw_import_parser_test.py
           python3 tools/scripts/regenerate_mingw_imports.py \
             "build/${{ matrix.preset }}/src/Release/openace${BITS}.dll" \
             "dist/import-libs/${{ matrix.arch }}/mingw/libace${BITS}.a" \
@@ -325,9 +318,9 @@ jobs:
 
   # glibc 2.31 compatibility build for older Linux servers (Ubuntu 20.04):
   # the ubuntu-24.04 leg's binaries require GLIBC_2.38+, so the same tree
-  # is built inside an ubuntu:20.04 container. Asset is additive: publish
-  # flattens it into the release but does not require the leg to be green.
-  # (Requested by Pritpal Bedi for his LAN test server.)
+  # is built inside an ubuntu:20.04 container. Its asset and successful
+  # job conclusion are required before creating a draft release.
+  # Required for the older-Linux package in this candidate.
   build-glibc231:
     if: ${{ !inputs.repack_only && (github.event_name == 'workflow_dispatch' || !contains(github.ref, '-mtfix')) }}
     name: ubuntu 20.04 container / x64 (glibc 2.31)
@@ -513,13 +506,15 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, build-glibc231]
     # A cancelled/failed best-effort leg (macOS) must not skip publish;
     # only a genuine workflow-run cancellation should.
     if: ${{ always() && !inputs.repack_only && needs.build.result != 'skipped' && (github.event_name == 'workflow_dispatch' || !contains(github.ref, '-mtfix')) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
@@ -622,7 +617,8 @@ jobs:
             "openads-${V}-windows-x64.zip" \
             "openads-${V}-windows-x86.zip" \
             "openads-${V}-linux-x64.tar.gz" \
-            "openads-${V}-macos-universal.tar.gz"; do
+            "openads-${V}-macos-universal.tar.gz" \
+            "openads-${V}-linux-glibc231.tar.gz"; do
             if [ ! -f "out/${asset}" ]; then
               echo "::error::Missing required release asset: ${asset}"
               missing=1
@@ -637,7 +633,8 @@ jobs:
             "windows-2022 / x64" \
             "windows-2022 / x86" \
             "ubuntu-24.04 / x64" \
-            "macos-14 / universal"; do
+            "macos-14 / universal" \
+            "ubuntu 20.04 container / x64 (glibc 2.31)"; do
             concl=$(gh api "$JOBS_URL" --jq \
               ".jobs[] | select(.name == \"$leg\") | .conclusion")
             if [ "$concl" != "success" ]; then
@@ -689,8 +686,8 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           target_commitish: ${{ inputs.source_ref || github.sha }}
-          # Test builds stay private until packages and notes are verified.
-          draft: ${{ contains(steps.tag.outputs.tag, '-mtfix') }}
+          # All candidates stay draft until exact-content review and application clearance.
+          draft: true
           prerelease: ${{ contains(steps.tag.outputs.tag, '-mtfix') }}
           make_latest: ${{ contains(steps.tag.outputs.tag, '-mtfix') && 'false' || 'legacy' }}
           body_path: ${{ steps.notes.outputs.path }}

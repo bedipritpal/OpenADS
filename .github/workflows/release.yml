@@ -172,7 +172,7 @@ jobs:
           release: false
           update: false
           install: >-
-            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake python' }}
+            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake python' }} git make
 
       - name: Build static ACE library (MinGW)
         if: always() && runner.os == 'Windows'
@@ -186,9 +186,17 @@ jobs:
                 -DOPENADS_WITH_TLS=OFF \
                 -DOPENADS_WARNINGS_AS_ERRORS=OFF
           cmake --build build/mingw-${{ matrix.arch }} \
-                --target openads_ace_static openads_unit_tests -j"$(nproc)"
+                --target openads_ace_static openads_unit_tests openads_static_archive_smoke -j"$(nproc)"
           ctest --test-dir build/mingw-${{ matrix.arch }} --output-on-failure -C Release
           ls -la build/mingw-${{ matrix.arch }}/src/libopenace*.a
+
+      - name: Harbour merged static archive link and run
+        if: always() && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          bash tools/scripts/test_harbour_static_mingw.sh \
+            "build/mingw-${{ matrix.arch }}/src/libopenace${{ matrix.arch == 'x64' && '64' || '32' }}.a" \
+            "${{ matrix.arch == 'x64' && '64' || '32' }}"
 
       - name: Regenerate MinGW DLL imports and link health probe
         if: always() && runner.os == 'Windows'
@@ -283,6 +291,9 @@ jobs:
               throw "Static ACE library missing: $staticLib"
           }
           Copy-Item $staticLib "$stage/libopenace$bits.a"
+          Copy-Item docs/master-diagnostics.md,docs/mingw-static-ace.md "$stage/"
+          New-Item -ItemType Directory "$stage/static-smoke" -Force | Out-Null
+          Copy-Item tests/smoke/mingw_static_ace.cpp,tests/smoke/harbour_static_ace.prg,tools/scripts/test_harbour_static_mingw.sh "$stage/static-smoke/"
           # Server + bench CLIs
           Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
           Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"

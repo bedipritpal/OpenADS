@@ -1,0 +1,1185 @@
+name: Publish reviewed data-jail port (temporary)
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: publish-reviewed-data-jail
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'bedipritpal/OpenADS'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify upstream and reviewed tree before publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          base=b06fa2e4c30dc6c9ae1737c2775f99c055645388
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          test -z "$(git ls-remote origin refs/heads/port/data-jail-upstream)"
+          git fetch https://github.com/FiveTechSoft/OpenADS.git "$base"
+          git checkout -b port/data-jail-upstream "$base"
+          cat > "$RUNNER_TEMP/port.patch" <<'OPENADS_REVIEWED_PORT_PATCH'
+          diff --git a/src/abi/ace_exports.cpp b/src/abi/ace_exports.cpp
+          index 0877f31e..ec095d9f 100644
+          --- a/src/abi/ace_exports.cpp
+          +++ b/src/abi/ace_exports.cpp
+          @@ -6718,13 +6718,27 @@ UNSIGNED32 materialise_temp_adt_open(Connection* c,
+               fs::path stem = adt;
+               stem.replace_extension();
+               {
+          -        std::fstream f(adt, std::ios::in | std::ios::out | std::ios::binary);
+          -        if (!f) return fail(openads::AE_INTERNAL_ERROR,
+          +        const bool jailed = openads::platform::File::data_jail_active();
+          +        openads::platform::File safe_file;
+          +        std::fstream f;
+          +        if (jailed) {
+          +            auto opened = openads::platform::File::open(adt.string(), openads::platform::OpenMode::ReadWrite);
+          +            if (!opened) return fail(opened.error());
+          +            safe_file = std::move(opened).value();
+          +        } else {
+          +            f.open(adt, std::ios::in | std::ios::out | std::ios::binary);
+          +        }
+          +        if (!jailed && !f) return fail(openads::AE_INTERNAL_ERROR,
+                                       "temp materialise: reopen of created ADT failed");
+                   auto rd32 = [&](std::streamoff off) -> std::uint32_t {
+                       std::uint8_t b[4] = {0, 0, 0, 0};
+          -            f.seekg(off);
+          -            f.read(reinterpret_cast<char*>(b), 4);
+          +            if (jailed) {
+          +                auto rd = safe_file.read_at(static_cast<std::uint64_t>(off), b, 4);
+          +                if (!rd || rd.value() != 4) return 0;
+          +            } else {
+          +                f.seekg(off);
+          +                f.read(reinterpret_cast<char*>(b), 4);
+          +            }
+                       return static_cast<std::uint32_t>(b[0]) |
+                              (static_cast<std::uint32_t>(b[1]) << 8) |
+                              (static_cast<std::uint32_t>(b[2]) << 16) |
+          @@ -6786,18 +6800,30 @@ UNSIGNED32 materialise_temp_adt_open(Connection* c,
+                       }
+                       obuf.insert(obuf.end(), rec.begin(), rec.end());
+                   }
+          -        f.seekp(static_cast<std::streamoff>(hdr_len));
+          -        f.write(reinterpret_cast<const char*>(obuf.data()),
+          -                static_cast<std::streamsize>(obuf.size()));
+          +        if (jailed) {
+          +            auto wr = safe_file.write_at(hdr_len, obuf.data(), obuf.size());
+          +            if (!wr) return fail(wr.error());
+          +            if (wr.value() != obuf.size()) return fail(openads::AE_INTERNAL_ERROR, "temp materialise: short write");
+          +        } else {
+          +            f.seekp(static_cast<std::streamoff>(hdr_len));
+          +            f.write(reinterpret_cast<const char*>(obuf.data()),
+          +                    static_cast<std::streamsize>(obuf.size()));
+          +        }
+                   // Patch the record count (header bytes 24-27, LE u32).
+                   std::uint8_t cnt[4] = {
+                       static_cast<std::uint8_t>( nrows        & 0xFFu),
+                       static_cast<std::uint8_t>((nrows >>  8) & 0xFFu),
+                       static_cast<std::uint8_t>((nrows >> 16) & 0xFFu),
+                       static_cast<std::uint8_t>((nrows >> 24) & 0xFFu)};
+          -        f.seekp(24);
+          -        f.write(reinterpret_cast<const char*>(cnt), 4);
+          -        if (!f) return fail(openads::AE_INTERNAL_ERROR,
+          +        if (jailed) {
+          +            auto wr = safe_file.write_at(24, cnt, 4);
+          +            if (!wr) return fail(wr.error());
+          +            if (wr.value() != 4) return fail(openads::AE_INTERNAL_ERROR, "temp materialise: short header write");
+          +        } else {
+          +            f.seekp(24);
+          +            f.write(reinterpret_cast<const char*>(cnt), 4);
+          +        }
+          +        if (!jailed && !f) return fail(openads::AE_INTERNAL_ERROR,
+                                       "temp materialise: short write");
+               }
+           
+          @@ -10635,6 +10661,13 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
+                   }
+                   file_bytes.push_back(0x1A);
+           
+          +        if (openads::platform::File::data_jail_active()) {
+          +            auto jail_file = openads::platform::File::open(tmp.string(), openads::platform::OpenMode::CreateExclusive);
+          +            if (!jail_file) return fail(jail_file.error());
+          +            auto written = jail_file.value().write_at(0, file_bytes.data(), file_bytes.size());
+          +            if (!written) return fail(written.error());
+          +            if (written.value() != file_bytes.size()) return fail(openads::AE_INTERNAL_ERROR, "AdsRestructureTable: short write");
+          +        } else {
+                   std::ofstream out(tmp, std::ios::binary);
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsRestructureTable: tmp open failed");
+          @@ -10642,6 +10675,7 @@ UNSIGNED32 ENTRYPOINT AdsRestructureTable(ADSHANDLE   hConnect,
+                             static_cast<std::streamsize>(file_bytes.size()));
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsRestructureTable: tmp write failed");
+          +        }
+               }   // engine handle on `full` closes here
+           
+               {
+          @@ -21902,9 +21936,16 @@ UNSIGNED32 ENTRYPOINT AdsCopyTable(ADSHANDLE   hHandle,
+           
+               {
+                   std::error_code ec;
+          -        fs::remove(dst, ec);
+          +        if (!openads::platform::File::data_jail_active()) fs::remove(dst, ec);
+               }
+               {
+          +        if (openads::platform::File::data_jail_active()) {
+          +            auto opened = openads::platform::File::open(dst.string(), openads::platform::OpenMode::CreateExclusive);
+          +            if (!opened) return fail(opened.error());
+          +            auto written = opened.value().write_at(0, file.data(), file.size());
+          +            if (!written) return fail(written.error());
+          +            if (written.value() != file.size()) return fail(openads::AE_INTERNAL_ERROR, "AdsCopyTable: short write");
+          +        } else {
+                   std::ofstream out(dst, std::ios::binary);
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsCopyTable: open for write failed");
+          @@ -21912,6 +21953,7 @@ UNSIGNED32 ENTRYPOINT AdsCopyTable(ADSHANDLE   hHandle,
+                             static_cast<std::streamsize>(file.size()));
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsCopyTable: write failed");
+          +        }
+               }
+               return ok();
+           }
+          @@ -41118,6 +41160,13 @@ UNSIGNED32 ENTRYPOINT AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
+           
+               fs::path tmp_path = fs::path(owning->data_dir()) / tmp_name;
+               {
+          +        if (openads::platform::File::data_jail_active()) {
+          +            auto opened = openads::platform::File::open(tmp_path.string(), openads::platform::OpenMode::CreateExclusive);
+          +            if (!opened) return fail(opened.error());
+          +            auto written = opened.value().write_at(0, file.data(), file.size());
+          +            if (!written) return fail(written.error());
+          +            if (written.value() != file.size()) return fail(openads::AE_INTERNAL_ERROR, "AdsCloneTable: short write");
+          +        } else {
+                   std::ofstream out(tmp_path, std::ios::binary);
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsCloneTable: write failed");
+          @@ -41125,6 +41174,7 @@ UNSIGNED32 ENTRYPOINT AdsCloneTable(ADSHANDLE hTable, ADSHANDLE* phClone) {
+                             static_cast<std::streamsize>(file.size()));
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsCloneTable: write error");
+          +        }
+               }
+           
+               // Open the clone through the owning connection.
+          @@ -41197,9 +41247,16 @@ UNSIGNED32 ENTRYPOINT AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile
+           
+               {
+                   std::error_code ec;
+          -        fs::remove(dst, ec);
+          +        if (!openads::platform::File::data_jail_active()) fs::remove(dst, ec);
+               }
+               {
+          +        if (openads::platform::File::data_jail_active()) {
+          +            auto opened = openads::platform::File::open(dst.string(), openads::platform::OpenMode::CreateExclusive);
+          +            if (!opened) return fail(opened.error());
+          +            auto written = opened.value().write_at(0, file.data(), file.size());
+          +            if (!written) return fail(written.error());
+          +            if (written.value() != file.size()) return fail(openads::AE_INTERNAL_ERROR, "AdsCopyTableStructure: short write");
+          +        } else {
+                   std::ofstream out(dst, std::ios::binary);
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsCopyTableStructure: open failed");
+          @@ -41207,6 +41264,7 @@ UNSIGNED32 ENTRYPOINT AdsCopyTableStructure(ADSHANDLE hTable, UNSIGNED8* pucFile
+                             static_cast<std::streamsize>(file.size()));
+                   if (!out) return fail(openads::AE_INTERNAL_ERROR,
+                                         "AdsCopyTableStructure: write failed");
+          +        }
+               }
+               return ok();
+           }
+          diff --git a/src/platform/file.h b/src/platform/file.h
+          index 6ef0c77b..4b89d0f1 100644
+          --- a/src/platform/file.h
+          +++ b/src/platform/file.h
+          @@ -5,6 +5,7 @@
+           #include <cstddef>
+           #include <cstdint>
+           #include <string>
+          +#include <vector>
+           
+           namespace openads::platform {
+           
+          @@ -33,6 +34,22 @@ public:
+           
+               static util::Result<File> open(const std::string& path, OpenMode mode);
+           
+          +    // --- server data jail (ADSCDX) ------------------------------------
+          +    // Only openads_serverd activates this policy. The DLL/local path
+          +    // remains the legacy plain open while no jail is installed.
+          +    // POSIX: root descriptors plus O_NOFOLLOW on every component;
+          +    // parent steps use a verified descriptor stack, never openat("..").
+          +    // Windows: directory handles opened with OPEN_REPARSE_POINT and
+          +    // without share-delete pin the verified path; leaf handles are
+          +    // no-follow and verified before truncation. Roots must exist.
+          +    // Symlinks/reparse points below configured roots are refused.
+          +    static util::Result<void> set_data_jail(std::vector<std::string> roots);
+          +    // Remove the jail (tests). Later opens revert to the legacy plain
+          +    // path.
+          +    static void clear_data_jail() noexcept;
+          +    // True while a jail is installed.
+          +    static bool data_jail_active() noexcept;
+          +
+               util::Result<std::size_t> read_at (std::uint64_t offset,
+                                                  void* buf, std::size_t n);
+               util::Result<std::size_t> write_at(std::uint64_t offset,
+          diff --git a/src/platform/file_posix.cpp b/src/platform/file_posix.cpp
+          index 48fa5e40..ede80902 100644
+          --- a/src/platform/file_posix.cpp
+          +++ b/src/platform/file_posix.cpp
+          @@ -5,8 +5,12 @@
+           
+           #include <cerrno>
+           #include <cstdint>
+          +#include <cstdlib>
+           #include <cstring>
+          +#include <filesystem>
+           #include <fcntl.h>
+          +#include <mutex>
+          +#include <vector>
+           #include <sys/file.h>
+           #include <sys/stat.h>
+           #include <sys/types.h>
+          @@ -41,6 +45,140 @@ void* native_from_fd(int fd) {
+               return reinterpret_cast<void*>(static_cast<intptr_t>(fd) + 1);
+           }
+           
+          +struct JailRoot {
+          +    std::string canon;  // realpath() of the configured root
+          +    int         fd = -1;
+          +};
+          +
+          +std::mutex            g_jail_mu;
+          +std::vector<JailRoot> g_jail_roots;
+          +
+          +struct JailSnapshot {
+          +    std::vector<JailRoot> roots;
+          +    JailSnapshot() = default;
+          +    JailSnapshot(JailSnapshot&& other) noexcept : roots(std::move(other.roots)) {
+          +        other.roots.clear();
+          +    }
+          +    JailSnapshot(const JailSnapshot&) = delete;
+          +    JailSnapshot& operator=(const JailSnapshot&) = delete;
+          +    ~JailSnapshot() {
+          +        for (auto& r : roots) {
+          +            if (r.fd >= 0) ::close(r.fd);
+          +        }
+          +    }
+          +};
+          +
+          +JailSnapshot jail_snapshot() {
+          +    JailSnapshot s;
+          +    std::lock_guard<std::mutex> lk(g_jail_mu);
+          +    s.roots.reserve(g_jail_roots.size());
+          +    for (const auto& r : g_jail_roots) {
+          +        int d = ::fcntl(r.fd, F_DUPFD_CLOEXEC, 0);
+          +        if (d >= 0) s.roots.push_back(JailRoot{r.canon, d});
+          +    }
+          +    return s;
+          +}
+          +
+          +util::Result<int> open_jailed(const std::string& path, int flags) {
+          +    namespace fs = std::filesystem;
+          +    JailSnapshot snap = jail_snapshot();
+          +
+          +    std::error_code ec;
+          +    const fs::path in(path);
+          +    const fs::path abs = in.is_absolute() ? in : fs::absolute(in, ec);
+          +    if (ec) return os_error("open(jail)");
+          +    const std::string norm = abs.string();
+          +
+          +    const JailRoot* match = nullptr;
+          +    std::string rel;
+          +    std::size_t prefix_length = 0;
+          +    for (const auto& r : snap.roots) {
+          +        const auto& prefix = r.canon;
+          +        if (prefix == "/") {
+          +            if (!match) { match = &r; rel = norm; }
+          +        } else if (norm.size() > prefix.size() &&
+          +                   norm.compare(0, prefix.size(), prefix) == 0 &&
+          +                   norm[prefix.size()] == '/' && prefix.size() > prefix_length) {
+          +            match = &r; rel = norm.substr(prefix.size() + 1);
+          +            prefix_length = prefix.size();
+          +        }
+          +    }
+          +    if (match == nullptr) {
+          +        errno = EACCES;
+          +        return os_error("open(jail: outside data roots)");
+          +    }
+          +
+          +    int dirfd = ::openat(match->fd, ".",
+          +                         O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+          +    if (dirfd < 0) return os_error("open(jail: root)");
+          +
+          +    std::vector<std::string> comps;
+          +    std::size_t pos = 0;
+          +    while (pos <= rel.size()) {
+          +        const std::size_t slash = rel.find('/', pos);
+          +        std::string c = rel.substr(
+          +            pos, slash == std::string::npos ? std::string::npos
+          +                                            : slash - pos);
+          +        if (!c.empty() && c != ".") comps.push_back(std::move(c));
+          +        if (slash == std::string::npos) break;
+          +        pos = slash + 1;
+          +    }
+          +
+          +    // Pop verified parent handles, never openat("..").
+          +    struct ParentHandles {
+          +        std::vector<int> fds;
+          +        ~ParentHandles() { for (int fd : fds) ::close(fd); }
+          +    } parents;
+          +    std::size_t depth = 0;
+          +    for (std::size_t i = 0; i < comps.size(); ++i) {
+          +        if (comps[i] == "..") {
+          +            if (depth == 0) {
+          +                ::close(dirfd);
+          +                errno = EACCES;
+          +                return os_error("open(jail: '..' escape refused)");
+          +            }
+          +            --depth;
+          +            ::close(dirfd);
+          +            dirfd = parents.fds.back();
+          +            parents.fds.pop_back();
+          +            continue;
+          +        } else {
+          +            ++depth;
+          +        }
+          +        const bool last = (i + 1 == comps.size());
+          +        if (!last) {
+          +            const int next =
+          +                ::openat(dirfd, comps[i].c_str(),
+          +                         O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+          +            if (next < 0) {
+          +                auto e = os_error(errno == ELOOP
+          +                                      ? "open(jail: symlink refused)"
+          +                                      : "open(jail: dir)");
+          +                ::close(dirfd);
+          +                return e;
+          +            }
+          +            parents.fds.push_back(dirfd);
+          +            dirfd = next;
+          +            continue;
+          +        }
+          +        const int fd = ::openat(dirfd, comps[i].c_str(),
+          +                                flags | O_NOFOLLOW | O_CLOEXEC, 0644);
+          +        if (fd < 0) {
+          +            auto e = os_error(errno == ELOOP
+          +                                  ? "open(jail: symlink refused)"
+          +                                  : "open");
+          +            ::close(dirfd);
+          +            return e;
+          +        }
+          +        ::close(dirfd);
+          +        return fd;
+          +    }
+          +
+          +    ::close(dirfd);
+          +    errno = ENOENT;
+          +    return os_error("open(jail)");
+          +}
+          +
+           #ifdef __APPLE__
+           // macOS: flock() and fcntl() byte locks share one lock list, and a held
+           // flock (even on the very same fd) makes every fcntl byte lock on the
+          @@ -112,8 +250,15 @@ util::Result<File> File::open(const std::string& path, OpenMode mode) {
+                       flags = O_RDWR | O_CREAT;
+                       break;
+               }
+          -    int fd = ::open(path.c_str(), flags, 0644);
+          -    if (fd < 0) return os_error("open");
+          +    int fd = -1;
+          +    if (data_jail_active()) {
+          +        auto j = open_jailed(path, flags);
+          +        if (!j) return j.error();
+          +        fd = j.value();
+          +    } else {
+          +        fd = ::open(path.c_str(), flags, 0644);
+          +        if (fd < 0) return os_error("open");
+          +    }
+               if (mode == OpenMode::CreateExclusive) {
+                   // Advisory exclusive lock for the whole open lifetime (released
+                   // on close). POSIX has no share modes; cooperating OpenADS
+          @@ -190,6 +335,71 @@ void File::release_lock_shared() {
+               share_guard(fd, F_UNLCK);
+           }
+           
+          +util::Result<void> File::set_data_jail(std::vector<std::string> roots) {
+          +    std::vector<JailRoot> anchored;
+          +    for (const auto& r : roots) {
+          +        if (r.empty()) continue;
+          +        char* c = ::realpath(r.c_str(), nullptr);
+          +        if (c == nullptr) {
+          +            util::Error e;
+          +            e.code     = 5000;
+          +            e.sub_code = errno;
+          +            e.message  = "set_data_jail: cannot resolve root '" + r +
+          +                         "': " + std::strerror(errno);
+          +            for (auto& a : anchored) ::close(a.fd);
+          +            return e;
+          +        }
+          +        std::string canon(c);
+          +        ::free(c);
+          +        while (canon.size() > 1 && canon.back() == '/') canon.pop_back();
+          +        int fd = ::open("/", O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+          +        std::error_code ec;
+          +        const auto root_path = std::filesystem::absolute(r, ec);
+          +        if (ec) { if (fd >= 0) ::close(fd); fd = -1; errno = EINVAL; }
+          +        for (const auto& part : root_path.relative_path()) {
+          +            if (fd < 0) break;
+          +            if (part == "..") { ::close(fd); fd = -1; errno = EACCES; break; }
+          +            const int next = ::openat(fd, part.c_str(),
+          +                O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+          +            const int saved = errno;
+          +            ::close(fd); fd = next; errno = saved;
+          +        }
+          +        if (fd < 0) {
+          +            util::Error e;
+          +            e.code     = 5000;
+          +            e.sub_code = errno;
+          +            e.message  = "set_data_jail: cannot anchor root '" + r +
+          +                         "': " + std::strerror(errno);
+          +            for (auto& a : anchored) ::close(a.fd);
+          +            return e;
+          +        }
+          +        anchored.push_back(JailRoot{std::move(canon), fd});
+          +    }
+          +    std::vector<JailRoot> old;
+          +    {
+          +        std::lock_guard<std::mutex> lk(g_jail_mu);
+          +        old = std::move(g_jail_roots);
+          +        g_jail_roots = std::move(anchored);
+          +    }
+          +    for (auto& o : old) ::close(o.fd);
+          +    return {};
+          +}
+          +
+          +void File::clear_data_jail() noexcept {
+          +    std::vector<JailRoot> old;
+          +    {
+          +        std::lock_guard<std::mutex> lk(g_jail_mu);
+          +        old = std::move(g_jail_roots);
+          +        g_jail_roots.clear();
+          +    }
+          +    for (auto& o : old) ::close(o.fd);
+          +}
+          +
+          +bool File::data_jail_active() noexcept {
+          +    std::lock_guard<std::mutex> lk(g_jail_mu);
+          +    return !g_jail_roots.empty();
+          +}
+          +
+           } // namespace openads::platform
+           
+           #endif // !_WIN32
+          diff --git a/src/platform/file_win32.cpp b/src/platform/file_win32.cpp
+          index aca8e376..ae5f9c1f 100644
+          --- a/src/platform/file_win32.cpp
+          +++ b/src/platform/file_win32.cpp
+          @@ -3,8 +3,17 @@
+           #include "platform/file.h"
+           
+           #define WIN32_LEAN_AND_MEAN
+          +#ifndef NOMINMAX
+          +#define NOMINMAX
+          +#endif
+           #include <windows.h>
+           
+          +#include <cwctype>
+          +#include <filesystem>
+          +#include <memory>
+          +#include <mutex>
+          +#include <vector>
+          +
+           namespace openads::platform {
+           
+           namespace {
+          @@ -29,6 +38,124 @@ util::Error os_error(const char* op) {
+               return e;
+           }
+           
+          +
+          +struct LockedDirectories {
+          +    std::vector<HANDLE> handles;
+          +    ~LockedDirectories() { for (HANDLE h : handles) ::CloseHandle(h); }
+          +};
+          +struct JailRootW {
+          +    std::wstring canon;
+          +    std::wstring lower;
+          +    std::shared_ptr<LockedDirectories> anchor;
+          +};
+          +std::mutex g_jail_mu;
+          +std::vector<JailRootW> g_jail_roots;
+          +
+          +std::wstring to_wide(const std::string& in) {
+          +    if (in.empty()) return {};
+          +    const int n = ::MultiByteToWideChar(CP_ACP, 0, in.c_str(), -1, nullptr, 0);
+          +    if (n <= 1) return {};
+          +    std::wstring w(static_cast<std::size_t>(n), L'\0');
+          +    ::MultiByteToWideChar(CP_ACP, 0, in.c_str(), -1, w.data(), n);
+          +    w.resize(static_cast<std::size_t>(n) - 1);
+          +    return w;
+          +}
+          +
+          +std::wstring jail_lower(std::wstring w) {
+          +    for (auto& ch : w) {
+          +        if (ch == L'/') ch = L'\\';
+          +        ch = static_cast<wchar_t>(::towlower(ch));
+          +    }
+          +    return w;
+          +}
+          +
+          +util::Error jail_refused(const char* what) {
+          +    ::SetLastError(ERROR_ACCESS_DENIED);
+          +    return os_error(what);
+          +}
+          +
+          +util::Result<void> lock_directory(const std::wstring& path,
+          +                                  LockedDirectories& locked) {
+          +    HANDLE h = ::CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+          +        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+          +        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+          +    if (h == INVALID_HANDLE_VALUE) return os_error("open(jail: directory)");
+          +    BY_HANDLE_FILE_INFORMATION info{};
+          +    if (!::GetFileInformationByHandle(h, &info) ||
+          +        !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+          +        (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+          +        ::CloseHandle(h);
+          +        return jail_refused("open(jail: directory/reparse refused)");
+          +    }
+          +    locked.handles.push_back(h);
+          +    return {};
+          +}
+          +
+          +util::Result<HANDLE> open_jailed(const std::string& path, DWORD access,
+          +                              DWORD share, DWORD disp) {
+          +    namespace fs = std::filesystem;
+          +    std::vector<JailRootW> roots;
+          +    { std::lock_guard<std::mutex> lk(g_jail_mu); roots = g_jail_roots; }
+          +    std::error_code ec;
+          +    fs::path input(to_wide(path));
+          +    fs::path full = input.is_absolute() ? input : fs::absolute(input, ec);
+          +    if (ec || full.empty()) return jail_refused("open(jail: invalid path)");
+          +    const std::wstring spelled = full.wstring();
+          +    const std::wstring lower = jail_lower(spelled);
+          +    const JailRootW* match = nullptr;
+          +    for (const auto& root : roots) {
+          +        if (lower.size() > root.lower.size() &&
+          +            lower.compare(0, root.lower.size(), root.lower) == 0 &&
+          +            lower[root.lower.size()] == L'\\' &&
+          +            (!match || root.lower.size() > match->lower.size())) match = &root;
+          +    }
+          +    if (!match) return jail_refused("open(jail: outside data roots)");
+          +    fs::path rel(spelled.substr(match->canon.size() + 1));
+          +    std::vector<fs::path> comps;
+          +    for (const auto& part : rel) if (!part.empty() && part != L".") comps.push_back(part);
+          +    if (comps.empty()) return jail_refused("open(jail: no file)");
+          +    LockedDirectories locked;
+          +    fs::path current(match->canon + L"\\");
+          +    std::vector<fs::path> parents;
+          +    for (std::size_t i = 0; i + 1 < comps.size(); ++i) {
+          +        if (comps[i] == L"..") {
+          +            if (parents.empty()) return jail_refused("open(jail: '..' escape refused)");
+          +            current = parents.back(); parents.pop_back();
+          +        } else {
+          +            const std::wstring part = comps[i].wstring();
+          +            if (part.find(L':') != std::wstring::npos || part.back() == L'.' || part.back() == L' ')
+          +                return jail_refused("open(jail: invalid directory name)");
+          +            fs::path next = current / comps[i];
+          +            auto r = lock_directory(next.wstring(), locked);
+          +            if (!r) return r.error();
+          +            parents.push_back(current); current = next;
+          +        }
+          +    }
+          +    const fs::path leaf = comps.back();
+          +    const std::wstring name = leaf.wstring();
+          +    if (leaf == L".." || name.find(L':') != std::wstring::npos ||
+          +        name.empty() || name.back() == L'.' || name.back() == L' ')
+          +        return jail_refused("open(jail: invalid leaf)");
+          +    const bool truncating = disp == CREATE_ALWAYS;
+          +    HANDLE h = ::CreateFileW((current / leaf).c_str(), access, share, nullptr,
+          +        truncating ? OPEN_ALWAYS : disp,
+          +        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+          +    if (h == INVALID_HANDLE_VALUE) return os_error("CreateFileW(jail)");
+          +    BY_HANDLE_FILE_INFORMATION info{};
+          +    if (!::GetFileInformationByHandle(h, &info) ||
+          +        (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
+          +        ::CloseHandle(h);
+          +        return jail_refused("open(jail: reparse/file refused)");
+          +    }
+          +    if (truncating) {
+          +        LARGE_INTEGER zero{};
+          +        if (!::SetFilePointerEx(h, zero, nullptr, FILE_BEGIN) || !::SetEndOfFile(h)) {
+          +            auto e = os_error("open(jail: truncate)"); ::CloseHandle(h); return e;
+          +        }
+          +    }
+          +    return h;
+          +}
+          +
+           } // namespace
+           
+           File::File(File&& other) noexcept : native_(other.native_) {
+          @@ -78,6 +205,11 @@ util::Result<File> File::open(const std::string& path, OpenMode mode) {
+                       disp   = CREATE_ALWAYS;
+                       break;
+               }
+          +    if (data_jail_active()) {
+          +        auto opened = open_jailed(path, access, share, disp);
+          +        if (!opened) return opened.error();
+          +        return File{opened.value()};
+          +    }
+               HANDLE h = ::CreateFileA(path.c_str(), access, share, nullptr, disp,
+                                        FILE_ATTRIBUTE_NORMAL, nullptr);
+               if (h == INVALID_HANDLE_VALUE) return os_error("CreateFileA");
+          @@ -147,6 +279,66 @@ void File::release_lock_shared() {
+               // No-op on Win32: try_lock_shared is also a no-op.
+           }
+           
+          +util::Result<void> File::set_data_jail(std::vector<std::string> roots) {
+          +    std::vector<JailRootW> anchored;
+          +    for (const auto& r : roots) {
+          +        if (r.empty()) continue;
+          +        const std::wstring w = to_wide(r);
+          +        for (const auto& part : std::filesystem::path(w)) {
+          +            if (part == L"..") return jail_refused("set_data_jail: parent root refused");
+          +        }
+          +        std::wstring full;
+          +        {
+          +            const DWORD need =
+          +                ::GetFullPathNameW(w.c_str(), 0, nullptr, nullptr);
+          +            if (need == 0) {
+          +                util::Error e = os_error("set_data_jail(GetFullPathName)");
+          +                e.message += ": '" + r + "'";
+          +                return e;
+          +            }
+          +            full.resize(need);
+          +            const DWORD got =
+          +                ::GetFullPathNameW(w.c_str(), need, full.data(), nullptr);
+          +            if (got == 0 || got >= need) return os_error("set_data_jail(GetFullPathName)");
+          +            full.resize(got);
+          +        }
+          +        namespace fs = std::filesystem;
+          +        const fs::path root_path(full);
+          +        auto anchor = std::make_shared<LockedDirectories>();
+          +        fs::path component = root_path.root_path();
+          +        auto first = lock_directory(component.wstring(), *anchor);
+          +        if (!first) return first.error();
+          +        for (const auto& part : root_path.relative_path()) {
+          +            if (part == L".") continue;
+          +            if (part == L"..") return jail_refused("set_data_jail: parent root refused");
+          +            component /= part;
+          +            auto rlock = lock_directory(component.wstring(), *anchor);
+          +            if (!rlock) return rlock.error();
+          +        }
+          +        for (auto& ch : full) {
+          +            if (ch == L'/') ch = L'\\';
+          +        }
+          +        // Uniform boundary logic: "C:\" stores as "C:"; anything else
+          +        // drops a trailing backslash.
+          +        while (full.size() > 3 && full.back() == L'\\') full.pop_back();
+          +        if (full.size() == 3 && full.back() == L'\\') full.pop_back();  // "C:\" -> "C:"
+          +        anchored.push_back(JailRootW{full, jail_lower(full), std::move(anchor)});
+          +    }
+          +    std::lock_guard<std::mutex> lk(g_jail_mu);
+          +    g_jail_roots = std::move(anchored);
+          +    return {};
+          +}
+          +
+          +void File::clear_data_jail() noexcept {
+          +    std::lock_guard<std::mutex> lk(g_jail_mu);
+          +    g_jail_roots.clear();
+          +}
+          +
+          +bool File::data_jail_active() noexcept {
+          +    std::lock_guard<std::mutex> lk(g_jail_mu);
+          +    return !g_jail_roots.empty();
+          +}
+          +
+           } // namespace openads::platform
+           
+           #endif // _WIN32
+          diff --git a/src/platform/path.cpp b/src/platform/path.cpp
+          index f66871c8..ec74bafb 100644
+          --- a/src/platform/path.cpp
+          +++ b/src/platform/path.cpp
+          @@ -1,4 +1,5 @@
+           #include "platform/path.h"
+          +#include "platform/file.h"
+           
+           #include <algorithm>
+           #include <cctype>
+          @@ -129,6 +130,10 @@ std::optional<std::string> resolve_under_root(const std::string& root,
+               // exactly what "--data /" means.
+               while (!root_s.empty() && root_s.back() == '/') root_s.pop_back();
+               if (!path_has_prefix(canon_s, root_s)) return std::nullopt;
+          +    // Server-only no-follow policy must see the original components.
+          +    // Returning the canonical spelling would erase an in-root symlink
+          +    // before File::open can refuse it (including legacy-path remounts).
+          +    if (File::data_jail_active()) return combined.string();
+               return canon_s;
+           }
+           
+          diff --git a/src/session/connection.cpp b/src/session/connection.cpp
+          index 50e58ce0..f08eaec0 100644
+          --- a/src/session/connection.cpp
+          +++ b/src/session/connection.cpp
+          @@ -7,6 +7,7 @@
+           #include "drivers/fpt/fpt_memo.h"
+           #include "drivers/ntx/ntx_driver.h"
+           #include "platform/dll.h"
+          +#include "platform/file.h"
+           #include "platform/fs_sandbox.h"
+           #include "platform/path.h"
+           #include "platform/time.h"
+          @@ -76,11 +77,21 @@ bool path_is_inside(const std::string&           base_dir,
+           // in which case the caller keeps whatever type it had.
+           std::optional<openads::engine::TableType>
+           sniff_table_type(const std::string& path) {
+          -    std::FILE* f = std::fopen(path.c_str(), "rb");
+          -    if (f == nullptr) return std::nullopt;
+               unsigned char hdr[16] = {0};
+          -    std::size_t n = std::fread(hdr, 1, sizeof(hdr), f);
+          -    std::fclose(f);
+          +    std::size_t n = 0;
+          +    if (platform::File::data_jail_active()) {
+          +        auto opened = platform::File::open(path, platform::OpenMode::ReadOnly);
+          +        if (!opened) return std::nullopt;
+          +        auto read = opened.value().read_at(0, hdr, sizeof(hdr));
+          +        if (!read) return std::nullopt;
+          +        n = read.value();
+          +    } else {
+          +        // Keep the DLL/local sniff exactly as before.
+          +        std::FILE* f = std::fopen(path.c_str(), "rb");
+          +        if (f == nullptr) return std::nullopt;
+          +        n = std::fread(hdr, 1, sizeof(hdr), f);
+          +        std::fclose(f);
+          +    }
+               if (n < 1) return std::nullopt;
+           
+               // ADT files open with the literal "Advantage Table".
+          @@ -232,6 +243,23 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
+                   util::write_audit(util::AuditKind::Resolved, conn_serial_, entry, seq,
+                                      msg, ts, log_alias);
+               };
+          +    // Serverd-only early containment check; File::open is the no-follow backstop.
+          +    auto jail_check = [&](const std::string& p) -> std::string {
+          +        if (!remote_server_ || !platform::File::data_jail_active() || p.empty()) return p;
+          +        const auto roots = platform::split_data_roots(data_dir_);
+          +        if (roots.empty()) return p;
+          +        if (platform::resolve_under_any_root(roots, p)) return p;
+          +        const std::uint32_t entry = next_entry_serial_++;
+          +        const std::uint32_t seq   = util::next_audit_seq();
+          +        last_audit_seq_ = seq;
+          +        std::string norm_p = p;
+          +        for (char& ch : norm_p) { if (ch == '\\') ch = '/'; }
+          +        util::write_audit(util::AuditKind::Resolved, conn_serial_, entry, seq,
+          +                          "REFUSED=\"" + norm_p +
+          +                              "\" ESCAPE ASKED=\"" + relative_path + "\"",
+          +                          ts, log_alias);
+          +        return std::string();
+          +    };
+               // The connection's data_dir is the directory the server owns; every
+               // table name is resolved *relative to* it. Clients (Harbour rddads,
+               // X# ADSRDD, …) routinely pass an absolute or drive-rooted path that
+          @@ -304,6 +332,8 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
+                       if (path_is_inside(data_dir_, rel)) {
+                           std::string resolved =
+                               platform::resolve_case_insensitive(rel.string());
+          +                resolved = jail_check(resolved);
+          +                if (resolved.empty()) return resolved;
+                           log_resolved(resolved, "JAILED");
+                           return resolved;
+                       }
+          @@ -444,6 +474,8 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
+               // own header have the last word, but never on a create: there the
+               // path names a file that does not exist yet (and if it does, the
+               // caller is deliberately overwriting it with a chosen format).
+          +    resolved = jail_check(resolved);
+          +    if (resolved.empty()) return resolved;
+               if (!for_create) align_type_with_file(resolved, type);
+               log_resolved(resolved, "JAILED");
+               return resolved;
+          @@ -549,27 +581,27 @@ util::Result<Handle> Connection::open_table(const std::string& relative_path,
+                       std::error_code ec;
+                       if (fs::exists(stem, ec)) {
+                           auto m = std::make_unique<openads::drivers::adm::AdmMemo>();
+          -                if (m->open(stem.string(), memo_open_mode)) {
+          -                    holder->attach_memo(std::move(m));
+          -                }
+          +                auto mr = m->open(stem.string(), memo_open_mode);
+          +                if (mr) holder->attach_memo(std::move(m));
+          +                else if (platform::File::data_jail_active()) return mr.error();
+                       }
+                   } else if (type == engine::TableType::Ntx) {
+                       stem.replace_extension(".dbt");
+                       std::error_code ec;
+                       if (fs::exists(stem, ec)) {
+                           auto m = std::make_unique<openads::drivers::dbt::DbtMemo>();
+          -                if (m->open(stem.string(), memo_open_mode)) {
+          -                    holder->attach_memo(std::move(m));
+          -                }
+          +                auto mr = m->open(stem.string(), memo_open_mode);
+          +                if (mr) holder->attach_memo(std::move(m));
+          +                else if (platform::File::data_jail_active()) return mr.error();
+                       }
+                   } else {
+                       stem.replace_extension(".fpt");
+                       std::error_code ec;
+                       if (fs::exists(stem, ec)) {
+                           auto m = std::make_unique<openads::drivers::fpt::FptMemo>();
+          -                if (m->open(stem.string(), memo_open_mode)) {
+          -                    holder->attach_memo(std::move(m));
+          -                }
+          +                auto mr = m->open(stem.string(), memo_open_mode);
+          +                if (mr) holder->attach_memo(std::move(m));
+          +                else if (platform::File::data_jail_active()) return mr.error();
+                       }
+                   }
+               }
+          diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+          index c445009f..083bc4fa 100644
+          --- a/tests/CMakeLists.txt
+          +++ b/tests/CMakeLists.txt
+          @@ -30,6 +30,7 @@ add_executable(openads_unit_tests
+               ${CMAKE_SOURCE_DIR}/tools/serverd/config_ini.cpp
+               unit/platform_file_test.cpp
+               unit/platform_lock_test.cpp
+          +    unit/file_jail_test.cpp
+               unit/platform_mmap_test.cpp
+               unit/platform_path_test.cpp
+               unit/fs_sandbox_test.cpp
+          diff --git a/tests/unit/file_jail_test.cpp b/tests/unit/file_jail_test.cpp
+          new file mode 100644
+          index 00000000..32ab108e
+          --- /dev/null
+          +++ b/tests/unit/file_jail_test.cpp
+          @@ -0,0 +1,277 @@
+          +
+          +#include "doctest.h"
+          +#include "platform/file.h"
+          +#include "platform/fs_sandbox.h"
+          +
+          +#include <filesystem>
+          +#include <string>
+          +#include <vector>
+          +
+          +namespace fs = std::filesystem;
+          +using openads::platform::File;
+          +using openads::platform::OpenMode;
+          +
+          +namespace {
+          +
+          +struct JailGuard {
+          +    explicit JailGuard(const std::vector<std::string>& roots) {
+          +        auto r = File::set_data_jail(roots);
+          +        REQUIRE(r.has_value());
+          +    }
+          +    ~JailGuard() { File::clear_data_jail(); }
+          +};
+          +
+          +fs::path canon(const fs::path& p) { return fs::weakly_canonical(p); }
+          +
+          +fs::path fresh_dir(const char* name) {
+          +    const fs::path d = fs::temp_directory_path() / name;
+          +    fs::remove_all(d);
+          +    fs::create_directories(d);
+          +    return d;
+          +}
+          +
+          +void put_file(const fs::path& p, const std::string& bytes) {
+          +    auto f = File::open(p.string(), OpenMode::CreateRW);
+          +    REQUIRE(f.has_value());
+          +    File file = std::move(f).value();
+          +    if (!bytes.empty()) {
+          +        auto w = file.write_at(0, bytes.data(), bytes.size());
+          +        REQUIRE(w.has_value());
+          +    }
+          +}
+          +
+          +} // namespace
+          +
+          +TEST_CASE("data jail: normal opens inside the root work, companions covered") {
+          +    const fs::path root  = fresh_dir("openads_jail_normal");
+          +    const fs::path croot = canon(root);
+          +    {
+          +        JailGuard jail({croot.string()});
+          +
+          +        for (const char* ext : {".dbf", ".cdx", ".z01", ".fpt"}) {
+          +            const fs::path p = croot / ("t" + std::string(ext));
+          +            put_file(p, "x");
+          +            auto r = File::open(p.string(), OpenMode::ReadOnly);
+          +            CHECK(r.has_value());
+          +        }
+          +
+          +        fs::create_directories(croot / "sub");
+          +        const fs::path sub_file = croot / "sub" / "inner.dbf";
+          +        put_file(sub_file, "y");
+          +        auto r = File::open(sub_file.string(), OpenMode::ReadOnly);
+          +        CHECK(r.has_value());
+          +
+          +        auto dots = File::open((croot / "sub" / ".." / "t.dbf").string(),
+          +                               OpenMode::ReadOnly);
+          +        CHECK(dots.has_value());
+          +    }
+          +    fs::remove_all(root);
+          +}
+          +
+          +TEST_CASE("data jail: ../ escape and outside absolute paths are refused") {
+          +    const fs::path base = fresh_dir("openads_jail_escape");
+          +    const fs::path root = base / "data";
+          +    fs::create_directories(root);
+          +    const fs::path croot = canon(root);
+          +    {
+          +        JailGuard jail({croot.string()});
+          +
+          +        auto esc = File::open((croot / ".." / "escape.dbf").string(),
+          +                              OpenMode::CreateRW);
+          +        CHECK(!esc.has_value());
+          +        CHECK(!fs::exists(base / "escape.dbf"));
+          +
+          +        auto abs_out = File::open((canon(base) / "abs.dbf").string(),
+          +                                  OpenMode::CreateRW);
+          +        CHECK(!abs_out.has_value());
+          +        CHECK(!fs::exists(base / "abs.dbf"));
+          +    }
+          +    fs::remove_all(base);
+          +}
+          +
+          +#ifndef _WIN32
+          +
+          +TEST_CASE("data jail: symlinked table file is refused (never-follow)") {
+          +    const fs::path base    = fresh_dir("openads_jail_symlink");
+          +    const fs::path root    = base / "data";
+          +    const fs::path outside = base / "outside";
+          +    fs::create_directories(root);
+          +    fs::create_directories(outside);
+          +    const fs::path croot = canon(root);
+          +
+          +    put_file(outside / "real.dbf", "secret");
+          +    fs::create_symlink(outside / "real.dbf", croot / "evil.dbf");
+          +    {
+          +        JailGuard jail({croot.string()});
+          +        auto r = File::open((croot / "evil.dbf").string(), OpenMode::ReadOnly);
+          +        CHECK(!r.has_value());
+          +        auto rw = File::open((croot / "evil.dbf").string(), OpenMode::ReadWrite);
+          +        CHECK(!rw.has_value());
+          +    }
+          +    fs::remove_all(base);
+          +}
+          +
+          +TEST_CASE("data jail: symlinked intermediate directory is refused") {
+          +    const fs::path base    = fresh_dir("openads_jail_linkdir");
+          +    const fs::path root    = base / "data";
+          +    const fs::path outside = base / "outside";
+          +    fs::create_directories(root);
+          +    fs::create_directories(outside);
+          +    const fs::path croot = canon(root);
+          +
+          +    put_file(outside / "t.dbf", "secret");
+          +    fs::create_directory_symlink(outside, croot / "linkdir");
+          +    {
+          +        JailGuard jail({croot.string()});
+          +        auto r = File::open((croot / "linkdir" / "t.dbf").string(),
+          +                            OpenMode::ReadOnly);
+          +        CHECK(!r.has_value());
+          +    }
+          +    fs::remove_all(base);
+          +}
+          +
+          +TEST_CASE("data jail: create over a symlink is refused, target untouched") {
+          +    const fs::path base    = fresh_dir("openads_jail_create");
+          +    const fs::path root    = base / "data";
+          +    const fs::path outside = base / "outside";
+          +    fs::create_directories(root);
+          +    fs::create_directories(outside);
+          +    const fs::path croot = canon(root);
+          +
+          +    put_file(outside / "target.dbf", "KEEP");
+          +    fs::create_symlink(outside / "target.dbf", croot / "new.dbf");
+          +    {
+          +        JailGuard jail({croot.string()});
+          +        auto c = File::open((croot / "new.dbf").string(), OpenMode::CreateRW);
+          +        CHECK(!c.has_value());
+          +        auto x = File::open((croot / "new.dbf").string(),
+          +                            OpenMode::CreateExclusive);
+          +        CHECK(!x.has_value());
+          +    }
+          +    {
+          +        auto r = File::open((outside / "target.dbf").string(),
+          +                            OpenMode::ReadOnly);
+          +        REQUIRE(r.has_value());
+          +        File f = std::move(r).value();
+          +        char buf[4] = {};
+          +        auto rd = f.read_at(0, buf, 4);
+          +        REQUIRE(rd.has_value());
+          +        CHECK(std::string(buf, rd.value()) == "KEEP");
+          +    }
+          +    fs::remove_all(base);
+          +}
+          +
+          +TEST_CASE("data jail: legacy .cdx -> .z01 symlink layout is refused") {
+          +    const fs::path root  = fresh_dir("openads_jail_z01");
+          +    const fs::path croot = canon(root);
+          +    put_file(croot / "bag.z01", "z");
+          +    fs::create_symlink("bag.z01", croot / "bag.cdx");  // relative link
+          +    {
+          +        JailGuard jail({croot.string()});
+          +        auto real = File::open((croot / "bag.z01").string(), OpenMode::ReadOnly);
+          +        CHECK(real.has_value());
+          +        auto link = File::open((croot / "bag.cdx").string(), OpenMode::ReadOnly);
+          +        CHECK(!link.has_value());
+          +    }
+          +    fs::remove_all(root);
+          +}
+          +
+          +TEST_CASE("data jail: in-root links and link/.. are never erased") {
+          +    const fs::path root = fresh_dir("openads_jail_inroot_link");
+          +    const fs::path croot = canon(root);
+          +    fs::create_directories(croot / "real");
+          +    put_file(croot / "real" / "t.dbf", "x");
+          +    put_file(croot / "t.dbf", "y");
+          +    for (const char* ext : {".dbf", ".cdx", ".fpt", ".z01"}) {
+          +        fs::create_symlink("t.dbf", croot / ("linked" + std::string(ext)));
+          +    }
+          +    fs::create_directory_symlink("real", croot / "linkdir");
+          +    {
+          +        JailGuard jail({croot.string()});
+          +        for (const char* ext : {".dbf", ".cdx", ".fpt", ".z01"}) {
+          +            CHECK_FALSE(File::open((croot / ("linked" + std::string(ext))).string(),
+          +                                   OpenMode::ReadOnly).has_value());
+          +        }
+          +        CHECK_FALSE(File::open((croot / "linkdir" / ".." / "t.dbf").string(),
+          +                               OpenMode::ReadOnly).has_value());
+          +        auto remounted = openads::platform::resolve_client_path(
+          +            {croot.string()}, (croot / "linked.dbf").string());
+          +        REQUIRE(remounted.has_value());
+          +        CHECK_FALSE(File::open(*remounted, OpenMode::ReadOnly).has_value());
+          +    }
+          +    fs::remove_all(root);
+          +}
+          +
+          +TEST_CASE("data jail: symlinked configured root is refused") {
+          +    const auto base = fresh_dir("openads_jail_root_link");
+          +    fs::create_directories(base / "real");
+          +    fs::create_directory_symlink("real", base / "linked");
+          +    auto r = File::set_data_jail({(base / "linked").string()});
+          +    CHECK_FALSE(r.has_value());
+          +    File::clear_data_jail();
+          +    fs::remove_all(base);
+          +}
+          +
+          +TEST_CASE("data jail cleared: legacy symlink follow returns for local use") {
+          +    const fs::path base    = fresh_dir("openads_jail_local");
+          +    const fs::path root    = base / "data";
+          +    const fs::path outside = base / "outside";
+          +    fs::create_directories(root);
+          +    fs::create_directories(outside);
+          +    const fs::path croot = canon(root);
+          +
+          +    put_file(outside / "real.dbf", "local");
+          +    fs::create_symlink(outside / "real.dbf", croot / "t.dbf");
+          +
+          +    File::clear_data_jail();  // the ace client library never sets one
+          +    CHECK(!File::data_jail_active());
+          +    auto r = File::open((croot / "t.dbf").string(), OpenMode::ReadOnly);
+          +    CHECK(r.has_value());
+          +    fs::remove_all(base);
+          +}
+          +
+          +#endif // !_WIN32
+          +
+          +TEST_CASE("data jail: longest matching root and multiple roots stay usable") {
+          +    const auto base = fresh_dir("openads_jail_multiroot");
+          +    const auto a = canon(base); fs::create_directories(a / "nested");
+          +    fs::create_directories(a / "other");
+          +    {
+          +        JailGuard jail({a.string(), (a / "nested").string(), (a / "other").string()});
+          +        put_file(a / "plain.dbf", "p");
+          +        put_file(a / "nested" / "inner.dbf", "n");
+          +        put_file(a / "other" / "memo.fpt", "m");
+          +        CHECK(File::open((a / "nested" / "inner.dbf").string(), OpenMode::ReadOnly));
+          +        CHECK(File::open((a / "other" / "memo.fpt").string(), OpenMode::ReadOnly));
+          +    }
+          +    fs::remove_all(base);
+          +}
+          +
+          +TEST_CASE("data jail: failed root replacement retains installed policy") {
+          +    const auto root = fresh_dir("openads_jail_atomic"); const auto croot = canon(root);
+          +    {
+          +        JailGuard jail({croot.string()});
+          +        CHECK_FALSE(File::set_data_jail({(croot / "missing").string()}));
+          +        CHECK(File::data_jail_active());
+          +        put_file(croot / "still.dbf", "x");
+          +        CHECK_FALSE(File::open((croot / ".." / "escaped.dbf").string(), OpenMode::CreateRW));
+          +    }
+          +    fs::remove_all(root);
+          +}
+          +
+          +#ifndef _WIN32
+          +TEST_CASE("data jail: root descriptor stays pinned after pathname replacement") {
+          +    const auto base = fresh_dir("openads_jail_pin"); const auto cbase = canon(base);
+          +    fs::create_directories(cbase / "data"); put_file(cbase / "data" / "t.dbf", "SAFE");
+          +    {
+          +        JailGuard jail({(cbase / "data").string()});
+          +        fs::rename(cbase / "data", cbase / "moved");
+          +        fs::create_directories(cbase / "data");
+          +        // Path-name replacement must not move the configured descriptor anchor.
+          +        auto opened = File::open((cbase / "data" / "t.dbf").string(), OpenMode::ReadOnly);
+          +        REQUIRE(opened); char b[4] = {}; auto n = opened.value().read_at(0, b, 4);
+          +        REQUIRE(n); CHECK(std::string(b, n.value()) == "SAFE");
+          +    }
+          +    fs::remove_all(base);
+          +}
+          +#endif
+          diff --git a/tools/serverd/main.cpp b/tools/serverd/main.cpp
+          index 1c8c9007..bde6f6ef 100644
+          --- a/tools/serverd/main.cpp
+          +++ b/tools/serverd/main.cpp
+          @@ -15,6 +15,7 @@
+           #include "mgmt/error_log.h"
+           #include "mgmt/mg_stats.h"
+           #include "network/server.h"
+          +#include "platform/file.h"
+           #include "platform/dll.h"
+           #include "engine/hrb_udf.h"
+           #if defined(OPENADS_WITH_HARBOUR_UDF)
+          @@ -469,6 +470,24 @@ int run_server(const Args& args, bool console) {
+           #endif
+               }
+           
+          +    // Activate the data jail only in serverd, before any listener starts.
+          +    {
+          +        std::vector<std::string> jail_roots =
+          +            openads::platform::split_data_roots(args.data_dir);
+          +        for (const auto& pe : args.extra_listeners) {
+          +            auto more = openads::platform::split_data_roots(pe.data_dir);
+          +            jail_roots.insert(jail_roots.end(), more.begin(), more.end());
+          +        }
+          +        if (auto jr =
+          +                openads::platform::File::set_data_jail(std::move(jail_roots));
+          +            !jr) {
+          +            std::fprintf(stderr,
+          +                         "data jail: %s - refusing to start without the jail\n",
+          +                         jr.error().message.c_str());
+          +            return 1;
+          +        }
+          +    }
+          +
+               openads::network::Server srv;
+               srv.set_established_session_idle_seconds(args.established_session_idle_seconds);
+               if (!args.tls_cert_file.empty()) {
+          OPENADS_REVIEWED_PORT_PATCH
+          echo "e6ceeff3ff207dc71ac45bddff028e37efe15640d0b4297b486a448744d2d156  $RUNNER_TEMP/port.patch" | sha256sum --check --strict
+          git apply --check "$RUNNER_TEMP/port.patch"
+          git apply "$RUNNER_TEMP/port.patch"
+          git add src tests tools/serverd/main.cpp
+          test "$(git write-tree)" = "e4ea4b365d158f73f295a8ab5c04173dadf47590"
+          git config user.name 'Pritpal Bedi'
+          git config user.email 'bedipritpal@users.noreply.github.com'
+          git commit -m 'Server-only no-link data jail for table opens'
+          test "$(git ls-remote https://github.com/FiveTechSoft/OpenADS.git refs/heads/main | cut -f1)" = "$base"
+          git push origin HEAD:refs/heads/port/data-jail-upstream

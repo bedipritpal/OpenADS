@@ -1,0 +1,26 @@
+name: Attach verified macOS artifact to private stable draft
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  actions: read
+jobs:
+  upload:
+    if: github.repository == 'bedipritpal/OpenADS'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download original verified artifact and upload without rebuilding
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: bedipritpal/OpenADS
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api repos/bedipritpal/OpenADS/releases/408976741 > release.json
+          jq -e '.draft == true and .target_commitish == "release/1.09.74-stable"' release.json
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/bedipritpal/OpenADS/actions/artifacts/11661986905/zip -o artifact.zip
+          unzip -q artifact.zip -d out
+          asset=out/openads-1.09.74-macos-universal.tar.gz
+          echo "6390b7c88d0b6ffb84b32d52b3488e325989b8e27c6acd1206ab33f9e66e6212  $asset" | sha256sum -c --strict
+          gh api --method POST -H "Content-Type: application/gzip" "https://uploads.github.com/repos/bedipritpal/OpenADS/releases/408976741/assets?name=openads-1.09.74-macos-universal.tar.gz" --input "$asset"
+          gh api repos/bedipritpal/OpenADS/releases/408976741 --jq '{draft, tag_name, target_commitish, assets: [.assets[] | {name, size, digest}]}'

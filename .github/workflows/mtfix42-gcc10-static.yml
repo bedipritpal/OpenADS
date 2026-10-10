@@ -45,7 +45,7 @@ jobs:
           set(CMAKE_AR $trip-ar)
           set(CMAKE_RC_COMPILER $trip-windres)
           TC
-          cmake -S . -B build-gcc10 -DCMAKE_TOOLCHAIN_FILE="$PWD/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake -S . -B build-gcc10 -DCMAKE_TOOLCHAIN_FILE="$PWD/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
           cmake --build build-gcc10 --target openads_ace_static openads_static_archive_smoke -j2
           archive=$(find build-gcc10 -name "libopenace$bits.a" | head -1)
           test -n "$archive"

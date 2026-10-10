@@ -1,0 +1,71 @@
+name: mtfix42 GCC10 static compatibility (Pritpal Bedi)
+on:
+  push:
+    branches: [security/mtfix42-gcc10-static]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x64]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
+          persist-credentials: false
+      - name: Pin stock Harbour source
+        run: |
+          git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour"
+          git -C "$RUNNER_TEMP/harbour" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+      - name: Build exact mtfix42 with GCC10 and inspect static imports
+        env:
+          ARCH: ${{ matrix.arch }}
+          WINEDEBUG: -all
+        shell: bash
+        run: |
+          set -euxo pipefail
+          arch=$ARCH
+          case $arch in x86) trip=i686-w64-mingw32;bits=32;; x64) trip=x86_64-w64-mingw32;bits=64;; esac
+          # Exact mtfix42 runtime sources; job branch contains only this build orchestration.
+          test "$(git rev-parse HEAD)" = 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y cmake make gcc-mingw-w64-$([ "$arch" = x86 ] && echo i686 || echo x86-64)-posix g++-mingw-w64-$([ "$arch" = x86 ] && echo i686 || echo x86-64)-posix wine64 wine32
+          "$trip-g++-posix" --version
+          "$trip-g++-posix" -dumpfullversion | grep '^10\.'
+          mkdir -p output
+          cat > toolchain.cmake <<TC
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_C_COMPILER $trip-gcc-posix)
+          set(CMAKE_CXX_COMPILER $trip-g++-posix)
+          set(CMAKE_AR $trip-ar)
+          set(CMAKE_RC_COMPILER $trip-windres)
+          TC
+          cmake -S . -B build-gcc10 -DCMAKE_TOOLCHAIN_FILE="$PWD/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build-gcc10 --target openads_ace_static openads_static_archive_smoke -j2
+          archive=$(find build-gcc10 -name libopenace32.a | head -1)
+          test -n "$archive"
+          cp "$archive" output/libopenace32.a
+          "$trip-nm" -u output/libopenace32.a > output/undefined-symbols.txt
+          ! grep -E '__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' output/undefined-symbols.txt
+          "$trip-g++-posix" -std=c++17 -Iinclude -Iinclude/openads tests/smoke/mingw_static_ace.cpp output/libopenace32.a -static -lws2_32 -lpsapi -o output/static-smoke.exe
+          "$trip-objdump" -p output/static-smoke.exe > output/static-smoke-imports.txt
+          ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/static-smoke-imports.txt
+          wine output/static-smoke.exe
+          for unit in ads1 adsfunc adsmgmnt adsx; do
+           "$trip-gcc-posix" -c "$RUNNER_TEMP/harbour/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour/include" -I"$RUNNER_TEMP/harbour/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
+          done
+          "$trip-ar" rcs output/librddads_openads_static.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
+          sha256sum output/*.a > output/SHA256SUMS.txt
+          git rev-parse HEAD > output/source-commit.txt
+          "$trip-g++-posix" --version > output/toolchain.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mtfix42-gcc10-static-${{ matrix.arch }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 14

@@ -76,7 +76,7 @@ jobs:
 
         p=pathlib.Path(''tools/serverd/CMakeLists.txt'');p.write_text(p.read_text()+''\nforeach(probe native_tamper_probe native_harbour_probe native_crash_probe)\n add_executable(auth_spike_${probe} ${CMAKE_SOURCE_DIR}/tests/hrb/auth-spike/${probe}.cpp)\n target_link_libraries(auth_spike_${probe} PRIVATE openads_core)\n target_include_directories(auth_spike_${probe} PRIVATE ${CMAKE_SOURCE_DIR}/src)\nendforeach()\n'')
 
-        p=pathlib.Path(''tests/hrb/auth-spike/native_diag.c'');p.write_text(''#include "hbapi.h"\n#include "ace.h"\nHB_FUNC( OADS_BEGINAUTH_RC ) {\n    ADSHANDLE pending=0; UNSIGNED8 challenge[32]={0};\n    UNSIGNED32 rc=OAdsBeginAuth(hb_parc(1),&pending,challenge);\n    hb_stornint((HB_MAXINT)pending,2);\n    if(rc==0) hb_storclen((const char*)challenge,32,3); else hb_storc("",3);\n    hb_retnint((HB_MAXINT)rc);\n}\n'')
+        p=pathlib.Path(''tests/hrb/auth-spike/native_diag_glue.c'');p.write_text(''#include "hbapi.h"\n#include "ace.h"\nHB_FUNC( OADS_BEGINAUTH_RC ) {\n    ADSHANDLE pending=0; UNSIGNED8 challenge[32]={0};\n    UNSIGNED32 rc=OAdsBeginAuth(hb_parc(1),&pending,challenge);\n    hb_stornint((HB_MAXINT)pending,2);\n    if(rc==0) hb_storclen((const char*)challenge,32,3); else hb_storc("",3);\n    hb_retnint((HB_MAXINT)rc);\n}\n'')
 
         p=pathlib.Path(''tests/hrb/auth-spike/native_diag.prg'');p.write_text(''PROCEDURE Main(cUrl)\n LOCAL p:=0,c:="",rc\n rc:=OAds_BeginAuth_RC(cUrl,@p,@c)\n QOut("diag rc="+LTrim(Str(rc))+" pending="+LTrim(Str(p))+" chlen="+LTrim(Str(Len(c))))\n IF rc==0 .AND. p!=0\n   OAds_CancelAuth(p)\n ENDIF\nRETURN\n'')
 
@@ -133,9 +133,9 @@ jobs:
         "$HBMK" tests/hrb/auth-spike/native_client.prg contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.a" -lstdc++ -lws2_32 -lbcrypt -lpsapi -mt -gtstd -ooutput/native_client_static.exe
 
 
-        "$HBMK" tests/hrb/auth-spike/native_diag.prg tests/hrb/auth-spike/native_diag.c contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.dll.a" -mt -gtstd -ooutput/native_diag_dll.exe
+        "$HBMK" tests/hrb/auth-spike/native_diag.prg tests/hrb/auth-spike/native_diag_glue.c contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.dll.a" -mt -gtstd -ooutput/native_diag_dll.exe
 
-        "$HBMK" tests/hrb/auth-spike/native_diag.prg tests/hrb/auth-spike/native_diag.c contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.a" -lstdc++ -lws2_32 -lbcrypt -lpsapi -mt -gtstd -ooutput/native_diag_static.exe
+        "$HBMK" tests/hrb/auth-spike/native_diag.prg tests/hrb/auth-spike/native_diag_glue.c contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.a" -lstdc++ -lws2_32 -lbcrypt -lpsapi -mt -gtstd -ooutput/native_diag_static.exe
 
         '
     - name: Protect test-only module and run worker/DB proofs

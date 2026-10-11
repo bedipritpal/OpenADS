@@ -84,6 +84,8 @@ jobs:
 
         p=pathlib.Path(''tools/serverd/auth_worker_main.cpp'');p.write_text(''#include <cstdlib>\n''+p.read_text().replace(''if(pos!=input.size())return 1;'',''if(pos!=input.size())return 1; if(args[1].s=="crash")std::abort();''))
 
+        p=pathlib.Path(''src/platform/path.cpp'');p.write_text(''#include <cstdio>\n''+p.read_text().replace(''if (ec) return std::nullopt;'',''if (ec) { std::fprintf(stderr,"scratch jail OS error=%s\\n",ec.message().c_str()); return std::nullopt; }'').replace(''if (!path_has_prefix(canon_s, root_s)) return std::nullopt;'',''std::fprintf(stderr,"scratch jail root=%s client=%s combined=%s canon=%s rootcanon=%s\\n",root.c_str(),client_path.c_str(),combined.generic_string().c_str(),canon_s.c_str(),root_s.c_str()); if (!path_has_prefix(canon_s, root_s)) return std::nullopt;''))
+
         PY
 
         '

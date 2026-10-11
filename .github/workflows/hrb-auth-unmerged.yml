@@ -1,4 +1,4 @@
-name: HRB auth UNMERGED native proof (Pritpal Bedi)
+name: HRB auth UNMERGED scratch gauntlet (Pritpal Bedi)
 permissions:
   contents: read
 jobs:
@@ -64,6 +64,23 @@ jobs:
         git apply spike.patch
 
         '
+    - name: Scratch-only native client/tamper/crash proof sources, no publication
+      shell: bash
+      run: 'python - <<''PY''
+
+        import json,gzip,base64,pathlib
+
+        files=json.loads(gzip.decompress(base64.b64decode(''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'')))
+
+        for n,s in files.items():pathlib.Path(''tests/hrb/auth-spike/''+n).write_text(s)
+
+        p=pathlib.Path(''tools/serverd/CMakeLists.txt'');p.write_text(p.read_text()+''\nforeach(probe native_tamper_probe native_harbour_probe native_crash_probe)\n add_executable(auth_spike_${probe} ${CMAKE_SOURCE_DIR}/tests/hrb/auth-spike/${probe}.cpp)\n target_link_libraries(auth_spike_${probe} PRIVATE openads_core)\n target_include_directories(auth_spike_${probe} PRIVATE ${CMAKE_SOURCE_DIR}/src)\nendforeach()\n'')
+
+        p=pathlib.Path(''tools/serverd/auth_worker_main.cpp'');p.write_text(''#include <cstdlib>\n''+p.read_text().replace(''if(pos!=input.size())return 1;'',''if(pos!=input.size())return 1; if(args[1].s=="crash")std::abort();''))
+
+        PY
+
+        '
     - name: Build matching Harbour and native isolated worker proofs
       shell: bash
       run: 'set -euxo pipefail
@@ -100,85 +117,25 @@ jobs:
 
         cmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_BUILD_ACE_STATIC=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR="$HBINC" -DHARBOUR_LIB_DIR="$HBLIB" ''-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon''
 
-        cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe auth_spike_integration_probe -j2
+        cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe auth_spike_integration_probe auth_spike_native_tamper_probe auth_spike_native_harbour_probe auth_spike_native_crash_probe -j2
 
         "$HBCC" tests/hrb/auth-spike/test_only.prg -gh -ooutput/test_only.hrb
+
+
+        HBMK="$HBROOT/bin/win/$HB_COMPILER/hbmk2.exe"
+
+        "$HBMK" tests/hrb/auth-spike/native_client.prg contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.dll.a" -mt -gtstd -ooutput/native_client_dll.exe
+
+        "$HBMK" tests/hrb/auth-spike/native_client.prg contrib/oads_hb/oads_hb.c -Iinclude/openads "build-auth/src/libopenace${{ matrix.bits }}.a" -lstdc++ -lws2_32 -lbcrypt -lpsapi -mt -gtstd -ooutput/native_client_static.exe
 
         '
     - name: Protect test-only module and run worker/DB proofs
       shell: pwsh
-      run: "$hrb=(Resolve-Path output/test_only.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\nicacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE -ne 0){throw 'ACL failed'}\n$worker=(Resolve-Path build-auth/tools/serverd/openads_auth_worker.exe).Path\n& build-auth/tools/serverd/auth_spike_worker_probe.exe $worker $hrb | Tee-Object output/worker-proof.txt\nif($LASTEXITCODE -ne 0){throw 'worker proof failed'}\n& build-auth/tools/serverd/auth_spike_integration_probe.exe $worker $hrb | Tee-Object output/db-proof.txt\nif($LASTEXITCODE -ne 0){throw 'DB proof failed'}\n$dll=@(Get-ChildItem build-auth/src/*ace*.dll)\nif($dll.Count -ne 1){throw 'Expected one matching ACE DLL'}\n& objdump -p $dll[0].FullName > output/exports.txt\nif($LASTEXITCODE -ne 0){throw 'Export dump failed'}\nforeach($symbol in @('OAdsBeginAuth','OAdsCompleteAuth','OAdsCancelAuth')) {\n if(-not (Select-String -Path output/exports.txt -Pattern $symbol)){throw \"Missing export $symbol\"}\n}\nGet-Item build-auth/src/*ace*.dll,build-auth/tools/serverd/openads_auth_worker.exe,build-auth/tools/serverd/openads_serverd.exe | Select-Object Name,Length | Out-File output/sizes.txt\n"
-    - name: Package UNMERGED owner-test binaries only
-      shell: pwsh
-      run: '$root=''output/hrb-auth-UNMERGED-${{ matrix.arch }}''
-
-        New-Item -ItemType Directory -Force "$root/bin","$root/lib","$root/include","$root/contrib","$root/docs" | Out-Null
-
-        Copy-Item build-auth/src/*ace*.dll "$root/bin/"
-
-        Copy-Item build-auth/src/*openace*.a "$root/lib/"
-
-        Copy-Item build-auth/tools/serverd/openads_serverd.exe,build-auth/tools/serverd/openads_auth_worker.exe "$root/bin/"
-
-        $gccdir=Split-Path (Get-Command gcc.exe).Source
-
-        Get-ChildItem "$gccdir/*.dll" | Where-Object { $_.Name -match ''^lib(gcc_s|stdc\+\+|winpthread)'' } | Copy-Item -Destination "$root/bin/"
-
-        Copy-Item include/openads/ace.h "$root/include/"
-
-        Copy-Item contrib/oads_hb/oads_hb.c "$root/contrib/"
-
-        Copy-Item docs/HRB_CHALLENGE_AUTH_SPIKE.md "$root/docs/"
-
-        @''
-
-        UNMERGED TEST ONLY - Pritpal Bedi owner testing. No release/main/PR.
-
-        Use matching x86/x64 files. Compiler stays Winlibs GCC10.2, Qt unchanged.
-
-        Server: openads_serverd.exe --port 6262 --data <root> --auth_module <absolute own.hrb>
-
-        The .hrb must have OADS_AUTH_V1(cChallenge,cBlob,cContext), exact result contract in docs.
-
-        Protect own.hrb ACL to service identity/SYSTEM/Administrators only; inheritance off.
-
-        Keep worker executable beside server. It loads the .hrb fresh per request.
-
-        Client URL: auth://host:port/path. Add matching oads_hb.c glue, ace.h, import or static archive.
-
-        cChallenge := OAds_BeginAuth(cUrl,@hPending)
-
-        cBlob := VouchBuildCredentials(cChallenge)
-
-        hConn := OAds_CompleteAuth(hPending,cBlob)
-
-        No private crypto included. Do NOT deploy synthetic test_only.hrb from proof artifacts.
-
-        TLS1.3 encrypted but SERVER UNVERIFIED: ACTIVE TERMINATION RELAY SUCCEEDS.
-
-        No pooling of extra authenticated sessions; challenge blob4096 bytes, lifetime30s.
-
-        Worker4 concurrent,2s timeout, trusted native module not a sandbox.
-
-        Native worker/normal DD login/wrong-password/DBFCDX record-lock proof passed.
-
-        Full suite, real Vouch module, native TLS record attacks/crash proof still incomplete.
-
-        Test on copies/backups, not production data. Owner''s tested pass required before any merge.
-
-        ''@ | Set-Content "$root/TEST_ONLY_README.txt"
-
-        $hashes=Get-ChildItem "$root" -File -Recurse | Where-Object { $_.Name -ne ''SHA256.txt'' } | Get-FileHash -Algorithm SHA256
-
-        $hashes | ForEach-Object { $_.Hash.ToLower()+''  ''+$_.Path.Substring((Resolve-Path $root).Path.Length+1) } | Set-Content "$root/SHA256.txt"
-
-        Compress-Archive -Path "$root/*" -DestinationPath "output/hrb-auth-UNMERGED-${{ matrix.arch }}.zip"
-
-        '
+      run: "$hrb=(Resolve-Path output/test_only.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\nicacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE -ne 0){throw 'ACL failed'}\n$worker=(Resolve-Path build-auth/tools/serverd/openads_auth_worker.exe).Path\n& build-auth/tools/serverd/auth_spike_worker_probe.exe $worker $hrb | Tee-Object output/worker-proof.txt\nif($LASTEXITCODE -ne 0){throw 'worker proof failed'}\n& build-auth/tools/serverd/auth_spike_integration_probe.exe $worker $hrb | Tee-Object output/db-proof.txt\nif($LASTEXITCODE -ne 0){throw 'DB proof failed'}\n$dll=@(Get-ChildItem build-auth/src/*ace*.dll)\nif($dll.Count -ne 1){throw 'Expected one matching ACE DLL'}\n& objdump -p $dll[0].FullName > output/exports.txt\nif($LASTEXITCODE -ne 0){throw 'Export dump failed'}\nforeach($symbol in @('OAdsBeginAuth','OAdsCompleteAuth','OAdsCancelAuth')) {\n if(-not (Select-String -Path output/exports.txt -Pattern $symbol)){throw \"Missing export $symbol\"}\n}\nGet-Item build-auth/src/*ace*.dll,build-auth/tools/serverd/openads_auth_worker.exe,build-auth/tools/serverd/openads_serverd.exe | Select-Object Name,Length | Out-File output/sizes.txt\n\n$env:PATH=(Resolve-Path build-auth/src).Path+';'+$env:PATH\n$worker=(Resolve-Path build-auth/tools/serverd/openads_auth_worker.exe).Path\n$hrb=(Resolve-Path output/test_only.hrb).Path\nforeach($kind in 'dll','static') {\n $client=(Resolve-Path \"output/native_client_$kind.exe\").Path\n & build-auth/tools/serverd/auth_spike_native_harbour_probe.exe $worker $hrb $client | Tee-Object \"output/native-harbour-$kind-proof.txt\"\n if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}\n}\nforeach($mode in 'tamper','replay') {\n & build-auth/tools/serverd/auth_spike_native_tamper_probe.exe $worker $hrb $mode | Tee-Object \"output/native-$mode-proof.txt\"\n if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}\n}\n& build-auth/tools/serverd/auth_spike_native_crash_probe.exe $worker $hrb | Tee-Object output/native-crash-proof.txt\nif($LASTEXITCODE -ne 0){exit $LASTEXITCODE}\n"
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: hrb-auth-unmerged-${{ matrix.arch }}
+        name: hrb-auth-scratch-gauntlet-${{ matrix.arch }}
         path: output/
         if-no-files-found: error
         retention-days: 14

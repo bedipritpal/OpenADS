@@ -1,7 +1,7 @@
-name: mtfix42 Winlibs GCC10.2 matched static (Pritpal Bedi)
+name: mtfix43 Winlibs GCC10.2 matched static (Pritpal Bedi)
 on:
   push:
-    branches: [security/mtfix42-gcc10-static]
+    branches: [security/wire-padding-mtfix43]
 permissions:
   contents: read
 jobs:
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
+          ref: 8c405beacc2308971d850ae722227f2de1de5793
           persist-credentials: false
       - name: Download and verify Winlibs GCC10.2
         shell: pwsh
@@ -48,7 +48,7 @@ jobs:
           BITS: ${{ matrix.bits }}
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
+          test "$(git rev-parse HEAD)" = 8c405beacc2308971d850ae722227f2de1de5793
           mkdir -p output
           gcc -v 2> output/toolchain.txt
           test "$(gcc -dumpfullversion)" = 10.2.0
@@ -58,8 +58,8 @@ jobs:
           g++ -dM -E config-check.cpp > output/runtime-macros.txt
           grep '_GLIBCXX_HAVE_TLS 1' output/runtime-macros.txt
           grep '__once_callable' output/runtime-symbols.txt
-          cmake -S . -B build-winlibs -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix42 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
-          cmake --build build-winlibs --target openads_ace_static openads_static_archive_smoke -j2
+          cmake -S . -B build-winlibs -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix43 -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build-winlibs --target openads_ace_static openads_static_archive_smoke openads_unit_tests -j2
           cp "build-winlibs/src/libopenace$BITS.a" output/libopenace32.a
           nm -u output/libopenace32.a > output/undefined-symbols.txt
           ! grep -E '__get_once_mutex|__once_functor|__set_once_functor_lock_ptr|__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' output/undefined-symbols.txt
@@ -69,6 +69,7 @@ jobs:
           ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/whole-archive-imports.txt
           ./output/static-smoke.exe
           ./output/whole-archive-smoke.exe
+          ./build-winlibs/tests/openads_unit_tests.exe --test-case='indexed fixed Character*' 
           git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour"
           git -C "$RUNNER_TEMP/harbour" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
           for unit in ads1 adsfunc adsmgmnt adsx; do
@@ -80,7 +81,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mtfix42-winlibs102-static-${{ matrix.arch }}
+          name: mtfix43-winlibs102-static-${{ matrix.arch }}
           path: output/
           if-no-files-found: error
           retention-days: 14

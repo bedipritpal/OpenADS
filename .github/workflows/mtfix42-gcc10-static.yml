@@ -69,6 +69,8 @@ jobs:
           ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' output/whole-archive-imports.txt
           ./output/static-smoke.exe
           ./output/whole-archive-smoke.exe
+          export TEMP="$(cygpath -w "$RUNNER_TEMP")"
+          export TMP="$TEMP"
           ./build-winlibs/tests/openads_unit_tests.exe --test-case='indexed fixed Character*' 
           git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour"
           git -C "$RUNNER_TEMP/harbour" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209

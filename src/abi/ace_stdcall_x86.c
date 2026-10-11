@@ -6073,3 +6073,11 @@ extern UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE, UNSIGNED8*, UNSIGNED3
 __declspec(dllexport) UNSIGNED32 __stdcall OAdsGetServerStats(ADSHANDLE a0, UNSIGNED8* a1, UNSIGNED32* a2) {
     return oadsimpl_OAdsGetServerStats(a0, a1, a2);
 }
+
+/* No argument logging: PSK bytes are secrets. */
+extern UNSIGNED32 oadsimpl_OAds_SetTlsPsk(const UNSIGNED8*, const UNSIGNED8*, UNSIGNED32);
+#pragma comment(linker, "/alternatename:_oadsimpl_OAds_SetTlsPsk=_OAds_SetTlsPsk")
+#pragma comment(linker, "/export:OAds_SetTlsPsk=_OAds_SetTlsPsk")
+__declspec(dllexport) UNSIGNED32 __stdcall OAds_SetTlsPsk(const UNSIGNED8* identity, const UNSIGNED8* key, UNSIGNED32 length) {
+    return oadsimpl_OAds_SetTlsPsk(identity, key, length);
+}

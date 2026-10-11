@@ -1574,6 +1574,10 @@ UNSIGNED32 ENTRYPOINT AdsGetDefaultConnection(ADSHANDLE* phConn);
 // OpenADS extension: process-wide logging kill-switch (audit + arc
 // traces). 0 = silent (production), non-zero = enabled (default).
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn);
+/* Per-thread external TLS1.3 PSK for subsequent tls:// connections. 32 random
+ * key bytes, identity 1..128 bytes. NULL,NULL,0 clears; existing sessions stay.
+ * No secret logging or environment/INI client-key configuration. */
+UNSIGNED32 ENTRYPOINT OAds_SetTlsPsk(const UNSIGNED8* identity, const UNSIGNED8* key, UNSIGNED32 keyLength);
 // Aggregate health JSON from an AdsMgConnect handle (NOT a data connection).
 // *pulLen is buffer capacity incl. NUL; out is required size incl. NUL.
 // NULL/short buffer: AE_INSUFFICIENT_BUFFER, no partial JSON written.

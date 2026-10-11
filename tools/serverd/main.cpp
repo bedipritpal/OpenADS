@@ -37,20 +37,77 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <filesystem>
 #include <iterator>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+#include <sstream>
+#include <sys/stat.h>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
+#  include <aclapi.h>
 #endif
 
 namespace {
+
+#if defined(_WIN32)
+// Fail closed unless every allowed ACE belongs to this service identity,
+// LocalSystem or Administrators. Reject null DACLs and unusual ACE types.
+bool read_protected_psk_file(const std::string& path, std::string& contents) {
+    const auto wide = std::filesystem::path(path).wstring();
+    HANDLE file = CreateFileW(wide.c_str(), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file == INVALID_HANDLE_VALUE) { std::fprintf(stderr, "PSK protected open failed (%lu).\n", GetLastError()); return false; }
+    BY_HANDLE_FILE_INFORMATION fi{};
+    LARGE_INTEGER size{};
+    if (!GetFileInformationByHandle(file, &fi) ||
+        (fi.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
+        !GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 1024 * 1024) {
+        std::fprintf(stderr, "PSK file metadata rejected (%lu).\n", GetLastError()); CloseHandle(file); return false;
+    }
+    PSECURITY_DESCRIPTOR sd = nullptr; PACL acl = nullptr;
+    if (GetSecurityInfo(file, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, &acl, nullptr, &sd) != ERROR_SUCCESS) { std::fprintf(stderr, "PSK security descriptor read failed.\n"); CloseHandle(file); return false; }
+    HANDLE token = nullptr; DWORD bytes = 0; bool ok = acl != nullptr;
+    std::vector<unsigned char> info;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) { std::fprintf(stderr, "PSK token read failed.\n"); ok = false; }
+    if (ok) {
+        GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
+        info.resize(bytes);
+        ok = bytes != 0 && GetTokenInformation(token, TokenUser, info.data(), bytes, &bytes);
+    }
+    for (DWORD i = 0; ok && i < acl->AceCount; ++i) {
+        void* ptr = nullptr; if (!GetAce(acl, i, &ptr)) { ok = false; break; }
+        const auto* header = static_cast<ACE_HEADER*>(ptr);
+        if (header->AceType == ACCESS_DENIED_ACE_TYPE) continue;
+        if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) { std::fprintf(stderr, "PSK unexpected ACE type %u.\n", static_cast<unsigned>(header->AceType)); ok = false; break; }
+        auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(ptr);
+        PSID sid = &ace->SidStart;
+        if (!IsValidSid(sid) || (!EqualSid(sid, reinterpret_cast<TOKEN_USER*>(info.data())->User.Sid) &&
+            !IsWellKnownSid(sid, WinLocalSystemSid) && !IsWellKnownSid(sid, WinBuiltinAdministratorsSid))) { std::fprintf(stderr, "PSK ACL has an unapproved principal.\n"); ok = false; }
+    }
+    if (token) CloseHandle(token);
+    if (sd) LocalFree(sd);
+    if (ok) {
+        contents.resize(static_cast<std::size_t>(size.QuadPart));
+        DWORD received = 0;
+        ok = ReadFile(file, &contents[0], static_cast<DWORD>(contents.size()), &received, nullptr) && received == contents.size();
+    }
+    CloseHandle(file);
+    if (!ok) { std::fprintf(stderr, "PSK protected ACL/read validation failed.\n"); std::fill(contents.begin(), contents.end(), '\0'); contents.clear(); }
+    return ok;
+}
+#endif
 
 std::atomic<bool> g_running{true};
 
@@ -107,6 +164,9 @@ void usage(const char* argv0) {
         "               ini: error_log_max. See docs/en/error-log.md\n"
         "  --http_user  user:password — register a Studio login\n"
         "               (repeatable; if none given, console is open)\n"
+        "  --tls_mode off|optional|required --tls_psk_file FILE\n"
+        "               Optional also requires distinct --plaintext_port N.\n"
+        "               PSK file: identity:64_hex_digits, 32 random key bytes.\n"
         "  --tls_cert FILE --tls_key FILE  PEM certificate chain and unencrypted key\n"
         "               All TCP data listeners require TLS when configured.\n"
         "               Needs OPENADS_WITH_TLS=ON. Studio HTTP is unchanged.\n"
@@ -132,6 +192,9 @@ struct Args {
     std::string   host        = "127.0.0.1";
     bool          diagnostics = false;
     bool          allow_anonymous = false;
+    std::string tls_mode = ""; // empty preserves existing certificate CLI
+    std::string tls_psk_file;
+    std::uint16_t plaintext_port = 0;
     std::string tls_cert_file;
     std::string tls_key_file;
     std::uint16_t port        = 6262;
@@ -214,6 +277,13 @@ bool parse_args(int argc, char** argv, Args& out) {
         }
         else if (flag_eq(a, "http_port") && i + 1 < argc) out.http_port = static_cast<std::uint16_t>(std::atoi(argv[++i]));
         else if (flag_eq(a, "data")      && i + 1 < argc) out.data_dir = argv[++i];
+        else if (flag_eq(a, "tls_mode") && i + 1 < argc) out.tls_mode = argv[++i];
+        else if (flag_eq(a, "tls_psk_file") && i + 1 < argc) out.tls_psk_file = argv[++i];
+        else if (flag_eq(a, "plaintext_port") && i + 1 < argc) {
+            char* end = nullptr; auto n = std::strtoul(argv[++i], &end, 10);
+            if (!end || *end || n == 0 || n > 65535) return false;
+            out.plaintext_port = static_cast<std::uint16_t>(n);
+        }
         else if (flag_eq(a, "tls_cert") && i + 1 < argc) out.tls_cert_file = argv[++i];
         else if (flag_eq(a, "tls_key") && i + 1 < argc) out.tls_key_file = argv[++i];
         else if (flag_eq(a, "allow_anonymous")) out.allow_anonymous = true;
@@ -290,6 +360,9 @@ bool parse_args(int argc, char** argv, Args& out) {
 // file actually set are touched, so this sits cleanly between the built-in
 // defaults (Args ctor) and the command line: defaults < config file < CLI.
 void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
+    if (cfg.has_tls_mode) out.tls_mode = cfg.tls_mode;
+    if (cfg.has_tls_psk_file) out.tls_psk_file = cfg.tls_psk_file;
+    if (cfg.has_plaintext_port) out.plaintext_port = cfg.plaintext_port;
     if (cfg.has_diagnostics) out.diagnostics = cfg.diagnostics;
     if (cfg.has_host)      out.host      = cfg.host;
     if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
@@ -421,6 +494,16 @@ int run_server(const Args& args, bool console) {
         std::fprintf(stderr, "Both --tls_cert and --tls_key are required.\n");
         return 1;
     }
+    const bool native_tls = !args.tls_psk_file.empty() || !args.tls_cert_file.empty();
+    const std::string mode = args.tls_mode.empty() ? (native_tls ? "required" : "off") : args.tls_mode;
+    if ((mode != "off" && mode != "optional" && mode != "required") ||
+        (mode == "off" && native_tls) || (mode != "off" && !native_tls) ||
+        (mode == "optional" && (args.plaintext_port == 0 || args.plaintext_port == args.port)) ||
+        (mode != "optional" && args.plaintext_port != 0) ||
+        (!args.tls_psk_file.empty() && !args.tls_cert_file.empty())) {
+        std::fprintf(stderr, "Invalid TLS mode/configuration. Optional needs a distinct explicit plaintext_port.\n");
+        return 1;
+    }
     // Only literal loopback addresses are trusted. A hostname can resolve
     // to a public interface, so fail closed rather than infer its safety.
     const bool loopback = args.host == "127.0.0.1" || args.host == "::1";
@@ -437,7 +520,7 @@ int run_server(const Args& args, bool console) {
                 "http_user or explicitly pass --allow_anonymous.\n");
             return 1;
         }
-        if (args.tls_cert_file.empty()) std::fprintf(stderr,
+        if (!native_tls || mode == "optional") std::fprintf(stderr,
             "WARNING: TCP listener has no native TLS. Credentials and data "
             "travel in cleartext. Use a TLS proxy and firewall the backend.\n");
         if (args.auth_users.empty() || (args.http_port != 0 && args.http_users.empty()))
@@ -514,7 +597,7 @@ int run_server(const Args& args, bool console) {
 
     openads::network::Server srv;
     srv.set_established_session_idle_seconds(args.established_session_idle_seconds);
-    if (!args.tls_cert_file.empty()) {
+    if (native_tls) {
 #if defined(OPENADS_WITH_TLS)
         auto read_pem = [](const std::string& path) {
             std::ifstream input(path, std::ios::binary | std::ios::ate);
@@ -524,11 +607,62 @@ int run_server(const Args& args, bool console) {
             return std::string(std::istreambuf_iterator<char>(input), {});
         };
         openads::network::TlsConfig config;
+        if (!args.tls_psk_file.empty()) {
+#if defined(_WIN32)
+            std::string contents;
+            if (!read_protected_psk_file(args.tls_psk_file, contents)) {
+                std::fprintf(stderr, "PSK file ACL must allow only service identity, SYSTEM and Administrators.\n"); return 1;
+            }
+#else
+            const int keyfd = ::open(args.tls_psk_file.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            struct stat st{};
+            if (keyfd < 0 || ::fstat(keyfd, &st) != 0 || !S_ISREG(st.st_mode) ||
+                st.st_size <= 0 || st.st_size > 1024 * 1024 ||
+                (st.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+                if (keyfd >= 0) ::close(keyfd);
+                std::fprintf(stderr, "PSK file must be a protected regular file (0600).\n"); return 1;
+            }
+#endif
+#if !defined(_WIN32)
+            std::string contents(static_cast<std::size_t>(st.st_size), '\0');
+            std::size_t offset = 0;
+            while (offset < contents.size()) {
+                const auto n = ::read(keyfd, &contents[offset], contents.size() - offset);
+                if (n <= 0) break;
+                offset += static_cast<std::size_t>(n);
+            }
+            ::close(keyfd);
+            if (offset != contents.size()) { std::fprintf(stderr, "Cannot read protected PSK file.\n"); return 1; }
+#endif
+            std::istringstream input(contents); std::string line;
+            while (std::getline(input, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty() || line[0] == '#') continue;
+                auto split = line.find(':');
+                if (split == std::string::npos || split == 0 || split > 128 || line.size() - split - 1 != 64 || config.psk_store.size() >= 1024) {
+                    std::fprintf(stderr, "Invalid PSK file format.\n"); return 1;
+                }
+                auto hex = [](char c) -> int { if (c >= '0' && c <= '9') return c - '0'; if (c >= 'a' && c <= 'f') return c - 'a' + 10; if (c >= 'A' && c <= 'F') return c - 'A' + 10; return -1; };
+                std::array<std::uint8_t, 32> key{};
+                for (std::size_t i = 0; i < 32; ++i) {
+                    int a = hex(line[split + 1 + i * 2]), b = hex(line[split + 2 + i * 2]);
+                    if (a < 0 || b < 0) { std::fprintf(stderr, "Invalid PSK hex.\n"); return 1; }
+                    key[i] = static_cast<std::uint8_t>((a << 4) | b);
+                }
+                if (!config.psk_store.emplace(line.substr(0, split), key).second) {
+                    std::fprintf(stderr, "Duplicate PSK identity.\n"); return 1;
+                }
+                std::fill(key.begin(), key.end(), 0); std::fill(line.begin(), line.end(), '\0');
+            }
+            std::fill(contents.begin(), contents.end(), '\0');
+            if (config.psk_store.empty()) { std::fprintf(stderr, "PSK file empty/unreadable.\n"); return 1; }
+        } else {
         config.cert_pem = read_pem(args.tls_cert_file);
         config.key_pem = read_pem(args.tls_key_file);
         if (config.cert_pem.empty() || config.key_pem.empty()) {
             std::fprintf(stderr, "Cannot read TLS certificate/key files.\n");
             return 1;
+        }
         }
         auto tls = srv.set_tls(config);
         if (!tls) {
@@ -552,6 +686,18 @@ int run_server(const Args& args, bool console) {
     for (const auto& u : args.auth_users)
         srv.add_credential(u.first, u.second);
 
+    openads::network::Server plaintext_srv;
+    if (mode == "optional") {
+        plaintext_srv.set_established_session_idle_seconds(args.established_session_idle_seconds);
+        plaintext_srv.set_data_dir(args.data_dir);
+        plaintext_srv.set_enable_file_func(args.enable_file_func);
+        plaintext_srv.set_legacy_paths(args.legacy_paths);
+        plaintext_srv.set_backlog(args.backlog);
+        if (args.has_max_sessions) plaintext_srv.set_max_sessions(args.max_sessions, args.max_sessions_source);
+        for (const auto& u : args.auth_users) plaintext_srv.add_credential(u.first, u.second);
+        auto plain = plaintext_srv.start(args.host, args.plaintext_port);
+        if (!plain) { std::fprintf(stderr, "Plaintext migration port failed.\n"); return 1; }
+    }
     // The HTTP Studio console browses one directory; when --data lists
     // several roots (";"-separated, for the wire-protocol jail — see
     // Server::set_data_dir), the console gets the first one.
@@ -735,6 +881,7 @@ int run_server(const Args& args, bool console) {
 #if defined(OPENADS_WITH_HTTP)
     if (args.http_port != 0) http.stop();
 #endif
+    plaintext_srv.stop();
     srv.stop();
     return 0;
 }

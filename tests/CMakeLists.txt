@@ -267,6 +267,7 @@ add_executable(openads_unit_tests
     unit/abi_ntxpl852_collation_abi_test.cpp
     unit/abi_index_collation_persist_test.cpp
     unit/network_socket_test.cpp
+    unit/network_psk_test.cpp
     unit/network_server_test.cpp
     unit/network_pool_test.cpp
     unit/network_frame_reader_test.cpp
@@ -594,3 +595,8 @@ endif()
 # Fresh process: these existing settings are intentionally cached on first use.
 add_test(NAME master_diagnostics_integration
     COMMAND openads_unit_tests "--test-case=master diagnostics file gating*" --no-skip=true)
+
+# Isolated PSK spike measurement tool, never shipped in production packages.
+add_executable(openads_tls_psk_bench smoke/tls_psk_bench.cpp)
+target_link_libraries(openads_tls_psk_bench PRIVATE openads_core)
+target_include_directories(openads_tls_psk_bench PRIVATE ${CMAKE_SOURCE_DIR}/src)

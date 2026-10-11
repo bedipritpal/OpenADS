@@ -33,6 +33,12 @@ struct PortEntry {
 // overrides the built-in defaults, and the command line in turn overrides
 // the file. `http_users` is additive (every `http_user` line appends).
 struct IniConfig {
+    bool          has_tls_mode = false;
+    std::string   tls_mode;
+    bool          has_tls_psk_file = false;
+    std::string   tls_psk_file;
+    bool          has_plaintext_port = false;
+    std::uint16_t plaintext_port = 0;
     bool          has_diagnostics = false;
     bool          diagnostics = false;
     bool          has_allow_anonymous = false;

@@ -322,6 +322,7 @@ EXPORTS
     AdsSetDefault
     AdsSetDefaultConnection
     OAdsGetServerStats
+    OAds_SetTlsPsk
     OAdsSetLogging
     AdsSetEpoch
     AdsSetExact

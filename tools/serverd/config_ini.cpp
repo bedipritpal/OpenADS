@@ -142,6 +142,17 @@ bool parse_ini(const std::string& text, IniConfig& out, std::string& error) {
             }
             out.has_allow_anonymous = true;
             out.allow_anonymous = v == "1" || v == "true" || v == "yes" || v == "on";
+        } else if (key == "tls_mode") {
+            if (val != "off" && val != "optional" && val != "required") {
+                error = "tls_mode must be off, optional or required"; return false;
+            }
+            out.has_tls_mode = true; out.tls_mode = val;
+        } else if (key == "tls_psk_file") {
+            out.has_tls_psk_file = true; out.tls_psk_file = val;
+        } else if (key == "plaintext_port") {
+            unsigned long n = 0;
+            if (!parse_uint(val, 65535, n) || n == 0) { error = "plaintext_port must be 1..65535"; return false; }
+            out.has_plaintext_port = true; out.plaintext_port = static_cast<std::uint16_t>(n);
         } else if (key == "diagnostics") {
             std::string v = val;
             for (char& c : v) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';

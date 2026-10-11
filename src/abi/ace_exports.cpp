@@ -55,6 +55,18 @@ thread_local std::string correlation;
 #include "network/remote_index_nav.h"
 #if defined(OPENADS_WITH_TLS)
 #include "network/tls_transport.h"
+#include <mbedtls/platform_util.h>
+namespace {
+struct ThreadPsk {
+    std::string identity;
+    std::array<std::uint8_t, 32> key{};
+    bool enabled = false;
+    void clear() { mbedtls_platform_zeroize(key.data(), key.size()); identity.clear(); enabled = false; }
+    ~ThreadPsk() { clear(); }
+};
+thread_local ThreadPsk thread_psk;
+}
+
 #endif
 #include "network/mg_wire.h"
 #include "network/server.h"
@@ -7336,6 +7348,12 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
             cfg.insecure_skip_verify = openads::util::client_setting_truthy(
                 "OPENADS_TLS_INSECURE", "tls_insecure");
             cfg.sni_hostname         = thost;
+            if (thread_psk.enabled) {
+                cfg.has_psk = true;
+                cfg.psk_identity = thread_psk.identity;
+                cfg.psk_key = thread_psk.key;
+                cfg.insecure_skip_verify = false;
+            }
             auto tt = openads::network::connect_tls(thost, tport, cfg);
             if (!tt) return fail(tt.error());
             auto rc = std::make_unique<openads::network::RemoteConnection>();
@@ -39629,6 +39647,25 @@ UNSIGNED32 ENTRYPOINT AdsSetDefaultConnection(ADSHANDLE hConn) {
     arc2_trace("AdsSetDefaultConnection");
     rddads_default_connection() = hConn;
     return openads::AE_SUCCESS;
+}
+
+UNSIGNED32 ENTRYPOINT OAds_SetTlsPsk(const UNSIGNED8* identity, const UNSIGNED8* key, UNSIGNED32 keyLength) {
+#if defined(OPENADS_WITH_TLS)
+    if (!identity && !key && keyLength == 0) { thread_psk.clear(); return openads::AE_SUCCESS; }
+    if (!identity || !key || keyLength != 32)
+        return fail(openads::AE_INTERNAL_ERROR, "PSK requires identity and exactly 32 key bytes");
+    std::size_t n = 0;
+    while (n <= 128 && identity[n]) ++n;
+    if (n == 0 || n > 128) return fail(openads::AE_INTERNAL_ERROR, "PSK identity must be 1..128 bytes");
+    thread_psk.clear();
+    thread_psk.identity.assign(reinterpret_cast<const char*>(identity), n);
+    std::copy(key, key + 32, thread_psk.key.begin());
+    thread_psk.enabled = true;
+    return openads::AE_SUCCESS;
+#else
+    (void)identity; (void)key; (void)keyLength;
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE, "Build lacks TLS support");
+#endif
 }
 
 // -- OAdsSetLogging -----------------------------------------------------

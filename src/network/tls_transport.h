@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <array>
+#include <map>
 
 #if defined(OPENADS_WITH_TLS)
 
@@ -22,9 +24,16 @@ namespace openads::network {
 // TlsTransport instead of returning AE_FUNCTION_NOT_AVAILABLE.
 
 struct TlsConfig {
+    ~TlsConfig();
     // PEM-encoded CA bundle the client uses to verify the server.
     // Empty fails verification unless insecure_skip_verify is explicit.
     std::string ca_pem;
+    // External TLS1.3 PSK, never a password. Client uses identity/key;
+    // server uses immutable identity-to-key store. Empty retains cert mode.
+    std::string psk_identity;
+    std::array<std::uint8_t, 32> psk_key{};
+    bool has_psk = false;
+    std::map<std::string, std::array<std::uint8_t, 32>> psk_store;
     // PEM-encoded server cert + key (server-side only).
     std::string cert_pem;
     std::string key_pem;

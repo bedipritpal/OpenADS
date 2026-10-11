@@ -11,12 +11,20 @@
 #include <mbedtls/pk.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
+#include <mbedtls/platform_util.h>
+#include <psa/crypto.h>
 
 #include <cstring>
 #include <algorithm>
 #include <utility>
+#include <mutex>
 
 namespace openads::network {
+TlsConfig::~TlsConfig() {
+    mbedtls_platform_zeroize(psk_key.data(), psk_key.size());
+    for (auto& item : psk_store) mbedtls_platform_zeroize(item.second.data(), item.second.size());
+}
+
 
 namespace {
 
@@ -81,6 +89,8 @@ public:
     void close() noexcept override {
         if (closed_) return;
         closed_ = true;
+        for (auto& item : psk_store_) mbedtls_platform_zeroize(item.second.data(), item.second.size());
+        psk_store_.clear();
         // Teardown cannot block a reactor on a stalled peer.
         if (!server_) (void)mbedtls_ssl_close_notify(&ssl_);
         mbedtls_x509_crt_free(&ca_);
@@ -115,7 +125,14 @@ public:
         if (rc != 0) return util::Error{openads::AE_REMOTE_ERROR, rc,
             "ssl_config_defaults: " + mbed_msg(rc), ""};
 
-        if (cfg.insecure_skip_verify) {
+        if (cfg.has_psk) {
+            if (cfg.psk_identity.empty() || cfg.psk_identity.size() > 128)
+                return util::Error{openads::AE_REMOTE_ERROR, 0, "TLS PSK identity invalid", ""};
+            if (auto r = configure_psk_mode(); !r) return r.error();
+            rc = mbedtls_ssl_conf_psk(&conf_, cfg.psk_key.data(), cfg.psk_key.size(),
+                reinterpret_cast<const unsigned char*>(cfg.psk_identity.data()), cfg.psk_identity.size());
+            if (rc != 0) return tls_error(rc);
+        } else if (cfg.insecure_skip_verify) {
             mbedtls_ssl_conf_authmode(&conf_, MBEDTLS_SSL_VERIFY_NONE);
         } else if (cfg.ca_pem.empty()) {
             mbedtls_ssl_conf_authmode(&conf_, MBEDTLS_SSL_VERIFY_REQUIRED);
@@ -160,14 +177,23 @@ public:
     util::Result<void> server_setup(Socket socket, const TlsConfig& cfg) {
         server_ = true;
         socket_ = socket;
-        if (cfg.cert_pem.empty() || cfg.key_pem.empty() ||
-            cfg.cert_pem.size() > 1024 * 1024 || cfg.key_pem.size() > 1024 * 1024)
+        if (cfg.psk_store.empty() && (cfg.cert_pem.empty() || cfg.key_pem.empty() ||
+            cfg.cert_pem.size() > 1024 * 1024 || cfg.key_pem.size() > 1024 * 1024))
             return util::Error{openads::AE_REMOTE_ERROR, 0, "TLS PEM size invalid", ""};
         int rc = mbedtls_ctr_drbg_seed(&drbg_, mbedtls_entropy_func, &entropy_, nullptr, 0);
         if (rc != 0) return tls_error(rc);
         rc = mbedtls_ssl_config_defaults(&conf_, MBEDTLS_SSL_IS_SERVER,
             MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
         if (rc != 0) return tls_error(rc);
+        if (!cfg.psk_store.empty()) {
+            psk_store_ = cfg.psk_store;
+            if (psk_store_.size() > 1024) return util::Error{openads::AE_REMOTE_ERROR, 0, "TLS PSK store too large", ""};
+            for (const auto& item : psk_store_)
+                if (item.first.empty() || item.first.size() > 128)
+                    return util::Error{openads::AE_REMOTE_ERROR, 0, "TLS PSK identity invalid", ""};
+            if (auto r = configure_psk_mode(); !r) return r.error();
+            mbedtls_ssl_conf_psk_cb(&conf_, psk_callback, this);
+        } else {
         rc = mbedtls_x509_crt_parse(&srv_cert_,
             reinterpret_cast<const unsigned char*>(cfg.cert_pem.c_str()), cfg.cert_pem.size() + 1);
         if (rc != 0) return tls_error(rc);
@@ -177,6 +203,7 @@ public:
         if (rc != 0) return tls_error(rc);
         rc = mbedtls_pk_check_pair(&srv_cert_.pk, &srv_key_, mbedtls_ctr_drbg_random, &drbg_);
         if (rc != 0) return tls_error(rc);
+        }
         mbedtls_ssl_conf_rng(&conf_, mbedtls_ctr_drbg_random, &drbg_);
 #if defined(MBEDTLS_SSL_RENEGOTIATION)
         mbedtls_ssl_conf_renegotiation(&conf_, MBEDTLS_SSL_RENEGOTIATION_DISABLED);
@@ -184,14 +211,38 @@ public:
         // This listener authenticates application users through Connect.
         // Client certificates are not required; no insecure server fallback.
         mbedtls_ssl_conf_authmode(&conf_, MBEDTLS_SSL_VERIFY_NONE);
-        rc = mbedtls_ssl_conf_own_cert(&conf_, &srv_cert_, &srv_key_);
-        if (rc != 0) return tls_error(rc);
+        if (cfg.psk_store.empty()) {
+            rc = mbedtls_ssl_conf_own_cert(&conf_, &srv_cert_, &srv_key_);
+            if (rc != 0) return tls_error(rc);
+        }
         rc = mbedtls_ssl_setup(&ssl_, &conf_);
         if (rc != 0) return tls_error(rc);
         mbedtls_ssl_set_bio(&ssl_, this, bio_send, bio_recv, nullptr);
         return {};
     }
 private:
+    std::map<std::string, std::array<std::uint8_t, 32>> psk_store_;
+    util::Result<void> configure_psk_mode() {
+        static std::once_flag init_once;
+        static psa_status_t status = PSA_ERROR_BAD_STATE;
+        std::call_once(init_once, [] { status = psa_crypto_init(); });
+        if (status != PSA_SUCCESS)
+            return util::Error{openads::AE_REMOTE_ERROR, 0, "TLS crypto initialization failed", ""};
+        mbedtls_ssl_conf_min_tls_version(&conf_, MBEDTLS_SSL_VERSION_TLS1_3);
+        mbedtls_ssl_conf_max_tls_version(&conf_, MBEDTLS_SSL_VERSION_TLS1_3);
+        mbedtls_ssl_conf_tls13_key_exchange_modes(&conf_, MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK_EPHEMERAL);
+        mbedtls_ssl_conf_session_tickets(&conf_, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+        mbedtls_ssl_conf_new_session_tickets(&conf_, 0);
+        return {};
+    }
+    static int psk_callback(void* ctx, mbedtls_ssl_context* ssl,
+                            const unsigned char* identity, std::size_t n) {
+        if (n == 0 || n > 128) return MBEDTLS_ERR_SSL_UNKNOWN_IDENTITY;
+        auto* self = static_cast<MbedTlsTransport*>(ctx);
+        auto it = self->psk_store_.find(std::string(reinterpret_cast<const char*>(identity), n));
+        if (it == self->psk_store_.end()) return MBEDTLS_ERR_SSL_UNKNOWN_IDENTITY;
+        return mbedtls_ssl_set_hs_psk(ssl, it->second.data(), it->second.size());
+    }
     static util::Error tls_error(int rc) {
         return {openads::AE_REMOTE_ERROR, rc, "TLS server: " + mbed_msg(rc), ""};
     }

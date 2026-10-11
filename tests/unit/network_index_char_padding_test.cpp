@@ -26,7 +26,7 @@ std::string wp_value(int i) {
 }
 TEST_CASE("indexed fixed Character wire compactness preserves exact bytes and raw records") {
     namespace fs=std::filesystem;
-    auto dir=fs::temp_directory_path()/"openads_index_char_padding";
+    auto dir=fs::current_path()/"openads_index_char_padding";
     std::error_code ec; fs::remove_all(dir,ec); fs::create_directories(dir);
     auto path=dir.string(); std::vector<UNSIGNED8> local(path.begin(),path.end());local.push_back(0);
     ADSHANDLE lc=0,t=0,idx=0;

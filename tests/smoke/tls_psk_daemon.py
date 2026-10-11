@@ -7,6 +7,8 @@ with tempfile.TemporaryDirectory() as d:
     if os.name=='nt':
         owner=subprocess.check_output(['whoami'],text=True).strip()
         subprocess.run(['icacls',str(p),'/inheritance:r','/grant:r',owner+':F'],check=True,capture_output=True)
+        # CI temp files preserve an explicit OWNER RIGHTS ACE. Remove it; do not relax the loader.
+        subprocess.run(['icacls',str(p),'/remove:g','*S-1-3-4'],check=True,capture_output=True)
     else:p.chmod(0o600)
     def rejected(*flags):
         r=subprocess.run([server,'--data',d,*flags],capture_output=True,text=True,timeout=5)

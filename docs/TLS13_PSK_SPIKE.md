@@ -25,9 +25,11 @@ Protected key files are checked and read through one descriptor/handle.
 Status at publication: focused native x86/x64 client proofs pass 21 assertions
 per architecture. POSIX tamper/replay probes reject the affected session and
 permit the next legitimate session. Selected local network tests passed.
-Windows valid owner-only file daemon startup is STILL FAILING the ACL gate.
-The gate has not been weakened. Native size/lean TCP comparison is unfinished;
-handshake timings are preliminary synthetic evidence, not Vouch timings.
+Native required/optional protected-key-file daemon fixtures now PASS on x86/x64.
+The fixture had an extra OWNER RIGHTS ACE; removing it fixed the fixture.
+The production validator has not been weakened. Native TLS-on and lean TCP
+size/export/timing comparison completed in run 38110622788. These are synthetic
+loopback timings, not Vouch or WAN evidence.
 The full suite is not green: slow timeouts and baseline index/duplicate-key
 failures are separately recorded. Do not treat this source as a release.
 
@@ -35,3 +37,22 @@ Start reading include/openads/ace.h and src/abi/ace_exports.cpp for the API,
 src/network/tls_transport.cpp for handshake policy, tools/serverd/main.cpp
 for file protection and listener policy, and tests/unit/network_psk_test.cpp,
 tests/smoke/tls_psk_daemon.py and tls_psk_adversarial_posix.cpp for proofs.
+
+## Matched Winlibs10.2 measurements
+
+TLS-capable TCP / PSK / lean TLS-off TCP medians (milliseconds):
+
+| Architecture | Fresh connection (50) | 1000 small operations (5 runs) | 150 indexed prefetched rows (5 runs) |
+|---|---|---|---|
+| x86 | 0.6379 / 10.3567 / 0.6268 | 226.901 / 242.782 / 223.766 | 1.7966 / 2.0751 / 1.7768 |
+| x64 | 0.5628 / 5.8502 / 0.5209 | 196.558 / 199.339 / 194.334 | 1.5952 / 1.6577 / 1.6429 |
+
+Unstripped binary sizes (bytes), TLS-on / lean TLS-off:
+x86 ACE 11,724,283 / 10,758,662; server 11,876,262 / 10,896,033.
+x64 ACE 12,144,341 / 11,219,166; server 12,308,144 / 11,368,700.
+Both DLLs export OAds_SetTlsPsk. No production release is implied.
+Proof: https://github.com/bedipritpal/OpenADS/actions/runs/38110622788
+
+The C API is exported; Harbour HB_FUNC glue is not yet bundled in this spike.
+The supplied learning .prg example embeds a small C bridge. Do not call the
+C export as a bare Harbour function without linking an appropriate bridge.

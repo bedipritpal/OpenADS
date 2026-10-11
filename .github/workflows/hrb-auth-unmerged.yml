@@ -78,6 +78,8 @@ jobs:
 
         p=pathlib.Path(''tests/hrb/auth-spike/native_diag_glue.c'');p.write_text(''#include "hbapi.h"\n#include "ace.h"\nHB_FUNC( OADS_BEGINAUTH_RC ) {\n    ADSHANDLE pending=0; UNSIGNED8 challenge[32]={0};\n    UNSIGNED32 rc=OAdsBeginAuth(hb_parc(1),&pending,challenge);\n    hb_stornint((HB_MAXINT)pending,2);\n    if(rc==0) hb_storclen((const char*)challenge,32,3); else hb_storc("",3);\n    hb_retnint((HB_MAXINT)rc);\n}\n'')
 
+        p=pathlib.Path(''src/network/client.cpp'');p.write_text(''#include <cstdio>\n''+p.read_text().replace(''transport_->close();return util::Error{5000,0,"BeginAuth failed",""};'',''if(!rep) std::fprintf(stderr,"scratch BeginAuth underlying code=%u msg=%s\\n",rep.error().code,rep.error().message.c_str()); else std::fprintf(stderr,"scratch BeginAuth reply opcode=%u bytes=%u\\n",static_cast<unsigned>(rep.value().opcode),static_cast<unsigned>(rep.value().payload.size())); transport_->close();return util::Error{5000,0,"BeginAuth failed",""};''))
+
         p=pathlib.Path(''tests/hrb/auth-spike/native_diag.prg'');p.write_text(''PROCEDURE Main(cUrl)\n LOCAL p:=0,c:="",rc\n rc:=OAds_BeginAuth_RC(cUrl,@p,@c)\n QOut("diag rc="+LTrim(Str(rc))+" pending="+LTrim(Str(p))+" chlen="+LTrim(Str(Len(c))))\n IF rc==0 .AND. p!=0\n   OAds_CancelAuth(p)\n ENDIF\nRETURN\n'')
 
         p=pathlib.Path(''tools/serverd/auth_worker_main.cpp'');p.write_text(''#include <cstdlib>\n''+p.read_text().replace(''if(pos!=input.size())return 1;'',''if(pos!=input.size())return 1; if(args[1].s=="crash")std::abort();''))

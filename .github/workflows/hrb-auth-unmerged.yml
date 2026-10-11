@@ -49,7 +49,8 @@ jobs:
         "$env:RUNNER_TEMP/winlibs/${{ matrix.folder }}/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
         '
-    - name: Apply exact unmerged auth spike
+    - &id001
+      name: Apply exact unmerged auth spike
       shell: bash
       run: 'set -euxo pipefail
 
@@ -98,9 +99,9 @@ jobs:
 
         HBCC="$HBROOT/bin/win/$HB_COMPILER/harbour.exe"
 
-        cmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR="$HBINC" -DHARBOUR_LIB_DIR="$HBLIB" ''-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon''
+        cmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_BUILD_ACE_STATIC=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR="$HBINC" -DHARBOUR_LIB_DIR="$HBLIB" ''-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon''
 
-        cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace auth_spike_worker_probe auth_spike_integration_probe -j2
+        cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe auth_spike_integration_probe -j2
 
         "$HBCC" tests/hrb/auth-spike/test_only.prg -gh -ooutput/test_only.hrb
 
@@ -108,6 +109,71 @@ jobs:
     - name: Protect test-only module and run worker/DB proofs
       shell: pwsh
       run: "$hrb=(Resolve-Path output/test_only.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\nicacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE -ne 0){throw 'ACL failed'}\n$worker=(Resolve-Path build-auth/tools/serverd/openads_auth_worker.exe).Path\n& build-auth/tools/serverd/auth_spike_worker_probe.exe $worker $hrb | Tee-Object output/worker-proof.txt\nif($LASTEXITCODE -ne 0){throw 'worker proof failed'}\n& build-auth/tools/serverd/auth_spike_integration_probe.exe $worker $hrb | Tee-Object output/db-proof.txt\nif($LASTEXITCODE -ne 0){throw 'DB proof failed'}\n$dll=@(Get-ChildItem build-auth/src/*ace*.dll)\nif($dll.Count -ne 1){throw 'Expected one matching ACE DLL'}\n& objdump -p $dll[0].FullName > output/exports.txt\nif($LASTEXITCODE -ne 0){throw 'Export dump failed'}\nforeach($symbol in @('OAdsBeginAuth','OAdsCompleteAuth','OAdsCancelAuth')) {\n if(-not (Select-String -Path output/exports.txt -Pattern $symbol)){throw \"Missing export $symbol\"}\n}\nGet-Item build-auth/src/*ace*.dll,build-auth/tools/serverd/openads_auth_worker.exe,build-auth/tools/serverd/openads_serverd.exe | Select-Object Name,Length | Out-File output/sizes.txt\n"
+    - name: Package UNMERGED owner-test binaries only
+      shell: pwsh
+      run: '$root=''output/hrb-auth-UNMERGED-${{ matrix.arch }}''
+
+        New-Item -ItemType Directory -Force "$root/bin","$root/lib","$root/include","$root/contrib","$root/docs" | Out-Null
+
+        Copy-Item build-auth/src/*ace*.dll "$root/bin/"
+
+        Copy-Item build-auth/src/*openace*.a "$root/lib/"
+
+        Copy-Item build-auth/tools/serverd/openads_serverd.exe,build-auth/tools/serverd/openads_auth_worker.exe "$root/bin/"
+
+        $gccdir=Split-Path (Get-Command gcc.exe).Source
+
+        Get-ChildItem "$gccdir/*.dll" | Where-Object { $_.Name -match ''^lib(gcc_s|stdc\+\+|winpthread)'' } | Copy-Item -Destination "$root/bin/"
+
+        Copy-Item include/openads/ace.h "$root/include/"
+
+        Copy-Item contrib/oads_hb/oads_hb.c "$root/contrib/"
+
+        Copy-Item docs/HRB_CHALLENGE_AUTH_SPIKE.md "$root/docs/"
+
+        @''
+
+        UNMERGED TEST ONLY - Pritpal Bedi owner testing. No release/main/PR.
+
+        Use matching x86/x64 files. Compiler stays Winlibs GCC10.2, Qt unchanged.
+
+        Server: openads_serverd.exe --port 6262 --data <root> --auth_module <absolute own.hrb>
+
+        The .hrb must have OADS_AUTH_V1(cChallenge,cBlob,cContext), exact result contract in docs.
+
+        Protect own.hrb ACL to service identity/SYSTEM/Administrators only; inheritance off.
+
+        Keep worker executable beside server. It loads the .hrb fresh per request.
+
+        Client URL: auth://host:port/path. Add matching oads_hb.c glue, ace.h, import or static archive.
+
+        cChallenge := OAds_BeginAuth(cUrl,@hPending)
+
+        cBlob := VouchBuildCredentials(cChallenge)
+
+        hConn := OAds_CompleteAuth(hPending,cBlob)
+
+        No private crypto included. Do NOT deploy synthetic test_only.hrb from proof artifacts.
+
+        TLS1.3 encrypted but SERVER UNVERIFIED: ACTIVE TERMINATION RELAY SUCCEEDS.
+
+        No pooling of extra authenticated sessions; challenge blob4096 bytes, lifetime30s.
+
+        Worker4 concurrent,2s timeout, trusted native module not a sandbox.
+
+        Native worker/normal DD login/wrong-password/DBFCDX record-lock proof passed.
+
+        Full suite, real Vouch module, native TLS record attacks/crash proof still incomplete.
+
+        Test on copies/backups, not production data. Owner''s tested pass required before any merge.
+
+        ''@ | Set-Content "$root/TEST_ONLY_README.txt"
+
+        Get-ChildItem "$root" -File -Recurse | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-File "$root/SHA256.txt" -Width 400
+
+        Compress-Archive -Path "$root/*" -DestinationPath "output/hrb-auth-UNMERGED-${{ matrix.arch }}.zip"
+
+        '
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -115,6 +181,37 @@ jobs:
         path: output/
         if-no-files-found: error
         retention-days: 14
+  sync-source:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 50d51a5e64f62b6f980df0d6aaa4b2df9fc8868f
+        fetch-depth: 0
+    - *id001
+    - name: Fast-forward UNMERGED review tree to native-proven checkpoint
+      shell: bash
+      run: 'set -euxo pipefail
+
+        git fetch origin spike-unmerged/hrb-challenge-auth
+
+        git add src include contrib tools tests docs
+
+        tree=$(git write-tree)
+
+        test "$tree" = 89aa2ad008104a50206078b212988fd444fc330a
+
+        git config user.name ''github-actions[bot]''
+
+        git config user.email ''41898282+github-actions[bot]@users.noreply.github.com''
+
+        commit=$(printf ''%s\n'' ''Sync UNMERGED review source to native-proven tree, no release'' | git commit-tree "$tree" -p FETCH_HEAD)
+
+        git push origin "$commit:refs/heads/spike-unmerged/hrb-challenge-auth"
+
+        '
 'on':
   push:
     branches:

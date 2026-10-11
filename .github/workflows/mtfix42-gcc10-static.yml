@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: 8c405beacc2308971d850ae722227f2de1de5793
+          ref: fc91e66d6ec76871b5d3ec8bb06b746f4cc909d9
           persist-credentials: false
       - name: Download and verify Winlibs GCC10.2
         shell: pwsh
@@ -48,7 +48,7 @@ jobs:
           BITS: ${{ matrix.bits }}
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD)" = 8c405beacc2308971d850ae722227f2de1de5793
+          test "$(git rev-parse HEAD)" = fc91e66d6ec76871b5d3ec8bb06b746f4cc909d9
           mkdir -p output
           gcc -v 2> output/toolchain.txt
           test "$(gcc -dumpfullversion)" = 10.2.0

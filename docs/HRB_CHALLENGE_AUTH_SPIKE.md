@@ -98,3 +98,14 @@ dictionary ACL/DBFCDX and TLS record attack gauntlet still outstanding.
 
 Linux TLS record tamper/replay isolation and normal dictionary-login /
 wrong-password / two-session DBFCDX record-lock handoff probes passed locally.
+Local dedicated listener also denies prelogin DB op, ordinary Connect,
+management login, TLS1.2 downgrade and plaintext challenge. Eight concurrent
+hanging worker requests: at least four deny immediately under the global
+limit; supervised remaining calls time out; next-good worker probe passes.
+Native job is separate proof, not established by these Linux results.
+
+ACTIVE RELAY DEMONSTRATED LOCALLY: an unrelated-certificate TLS-terminating
+proxy opened a second TLS connection to daemon and forwarded challenge/blob.
+Synthetic HRB-approved database login SUCCEEDED through that proxy. This
+protocol is deliberately NOT MITM-safe. TLS ciphertext tamper/replay rejection
+does not imply server identity or application relay rejection.

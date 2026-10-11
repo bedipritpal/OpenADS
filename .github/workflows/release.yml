@@ -150,13 +150,67 @@ jobs:
         run: ctest --test-dir build/${{ matrix.preset }}
                    --output-on-failure -C Release
 
-      # Static ACE library for Harbour + MinGW (libopenace32.a /
-      # libopenace64.a): linking it into an hbmk2 -comp=mingw[64] app
-      # embeds the whole ACE client+engine in the .exe — no ace32.dll /
-      # ace64.dll to deploy. Built with MSYS2's matching MinGW toolchain
-      # (the MSVC legs above can't produce a GNU archive). Lean config:
-      # no HTTP console or TLS; this sub-build runs its own tests.
-      - name: Set up MinGW for the static ACE library
+      # Owner directive: every static kit uses Winlibs10.2 TLS/emutls, never rolling GCC.
+      - name: Download pinned Winlibs GCC10.2 static toolchain
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ("${{ matrix.arch }}" -eq "x64") {
+            $url = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z'
+            $checksumUrl = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256'
+            $expected = '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'
+            $folder = 'mingw64'
+          } else {
+            $url = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z'
+            $checksumUrl = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256'
+            $expected = '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'
+            $folder = 'mingw32'
+          }
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+          $sum = (Invoke-WebRequest $checksumUrl).Content
+          Write-Host "Expected: $expected"
+          $actual = (Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Actual: $actual"
+          if ($actual -ne $expected) { throw 'Toolchain digest mismatch' }
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:RUNNER_TEMP/winlibs/$folder/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build and validate matched static ACE library
+        if: always() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BITS="${{ matrix.arch == 'x64' && '64' || '32' }}"
+          mkdir -p build/static-proof
+          gcc -v 2> build/static-proof/toolchain.txt
+          test "$(gcc -dumpfullversion)" = 10.2.0
+          g++ -print-file-name=libstdc++.a > build/static-proof/runtime-path.txt
+          nm -C "$(g++ -print-file-name=libstdc++.a)" > build/static-proof/runtime-symbols.txt
+          echo '#include <bits/c++config.h>' > config-check.cpp
+          g++ -dM -E config-check.cpp > build/static-proof/runtime-macros.txt
+          grep '_GLIBCXX_HAVE_TLS 1' build/static-proof/runtime-macros.txt
+          grep '__once_callable' build/static-proof/runtime-symbols.txt
+          cmake -S . -B build/mingw-${{ matrix.arch }} -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build/mingw-${{ matrix.arch }} --target openads_ace_static openads_static_archive_smoke -j2
+          cp "build/mingw-${{ matrix.arch }}/src/libopenace$BITS.a" build/static-proof/libopenace32.a
+          nm -u build/static-proof/libopenace32.a > build/static-proof/undefined-symbols.txt
+          ! grep -E '__get_once_mutex|__once_functor|__set_once_functor_lock_ptr|__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' build/static-proof/undefined-symbols.txt
+          g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp build/static-proof/libopenace32.a -static -lws2_32 -lpsapi -o build/static-proof/static-smoke.exe
+          g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp -Wl,--whole-archive build/static-proof/libopenace32.a -Wl,--no-whole-archive -static -lws2_32 -lpsapi -o build/static-proof/whole-archive-smoke.exe
+          objdump -p build/static-proof/whole-archive-smoke.exe > build/static-proof/whole-archive-imports.txt
+          ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' build/static-proof/whole-archive-imports.txt
+          ./build/static-proof/static-smoke.exe
+          ./build/static-proof/whole-archive-smoke.exe
+          git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour"
+          git -C "$RUNNER_TEMP/harbour" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+          for unit in ads1 adsfunc adsmgmnt adsx; do
+            gcc -c "$RUNNER_TEMP/harbour/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour/include" -I"$RUNNER_TEMP/harbour/contrib/rddads" -Iinclude/openads -o "build/static-proof/$unit.o"
+          done
+          ar rcs build/static-proof/librddads_openads_static.a build/static-proof/ads1.o build/static-proof/adsfunc.o build/static-proof/adsmgmnt.o build/static-proof/adsx.o
+          git rev-parse HEAD > build/static-proof/source-commit.txt
+          sha256sum build/static-proof/*.a > build/static-proof/SHA256SUMS.txt
+          cp "$RUNNER_TEMP/harbour/contrib/rddads/ads.ch" build/static-proof/
+      - name: Set up auxiliary Harbour and DLL-import tools
         if: always() && runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
@@ -174,26 +228,14 @@ jobs:
           install: >-
             ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake python' }} git make
 
-      - name: Build static ACE library (MinGW)
-        if: always() && runner.os == 'Windows'
-        shell: msys2 {0}
-        run: |
-          cmake -S . -B build/mingw-${{ matrix.arch }} -G "MinGW Makefiles" \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DOPENADS_BUILD_TESTS=ON \
-                -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" \
-                -DOPENADS_WITH_HTTP=OFF \
-                -DOPENADS_WITH_TLS=OFF \
-                -DOPENADS_WARNINGS_AS_ERRORS=OFF
-          cmake --build build/mingw-${{ matrix.arch }} \
-                --target openads_ace_static openads_unit_tests openads_static_archive_smoke -j"$(nproc)"
-          ctest --test-dir build/mingw-${{ matrix.arch }} --output-on-failure -C Release
-          ls -la build/mingw-${{ matrix.arch }}/src/libopenace*.a
-
       - name: Harbour merged static archive link and run
         if: always() && runner.os == 'Windows'
         shell: msys2 {0}
         run: |
+          # Keep the matched compiler even inside the auxiliary MSYS2 shell.
+          WINLIBS_BIN="$(cygpath -u "$RUNNER_TEMP")/winlibs/${{ matrix.arch == 'x64' && 'mingw64' || 'mingw32' }}/bin"
+          export PATH="$WINLIBS_BIN:$PATH"
+          test "$(gcc -dumpfullversion)" = 10.2.0
           bash tools/scripts/test_harbour_static_mingw.sh \
             "build/mingw-${{ matrix.arch }}/src/libopenace${{ matrix.arch == 'x64' && '64' || '32' }}.a" \
             "${{ matrix.arch == 'x64' && '64' || '32' }}"
@@ -291,6 +333,11 @@ jobs:
               throw "Static ACE library missing: $staticLib"
           }
           Copy-Item $staticLib "$stage/libopenace$bits.a"
+          Copy-Item "build/static-proof/librddads_openads_static.a" "$stage/"
+          Copy-Item "build/static-proof/ads.ch" "$stage/include/"
+          New-Item -ItemType Directory "$stage/static-toolchain-proof" -Force | Out-Null
+          Copy-Item "build/static-proof/toolchain.txt","build/static-proof/runtime-macros.txt","build/static-proof/undefined-symbols.txt","build/static-proof/whole-archive-imports.txt" "$stage/static-toolchain-proof/"
+          Copy-Item OWNER_DIRECTIVES.md "$stage/"
           Copy-Item docs/master-diagnostics.md,docs/mingw-static-ace.md "$stage/"
           New-Item -ItemType Directory "$stage/static-smoke" -Force | Out-Null
           Copy-Item tests/smoke/mingw_static_ace.cpp,tests/smoke/harbour_static_ace.prg,tools/scripts/test_harbour_static_mingw.sh "$stage/static-smoke/"
@@ -598,7 +645,868 @@ jobs:
               windows = '-windows-' in path.name
               if windows:
                   bits = '64' if '-x64.' in path.name else '32'
-                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','openads_serverd.exe','openads_bench.exe','oads_hb.c','oads_stats_display.prg']
+                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','include/ads.ch','static-toolchain-proof/runtime-macros.txt','OWNER_DIRECTIVES.md','openads_serverd.exe','openads_bench.exe','oads_hb.c','oads_stats_display.prg']
+                  assert byname[f'ace{bits}.dll'] == byname[f'openace{bits}.dll'], 'ACE aliases differ'
+                  binary = byname['openads_serverd.exe']
+              else:
+                  ext = 'dylib' if '-macos-' in path.name else 'so'
+                  required += [f'libace64.{ext}',f'libopenace64.{ext}','openads_serverd','openads_bench']
+                  assert byname[f'libace64.{ext}'] == byname[f'libopenace64.{ext}'], 'ACE aliases differ'
+                  binary = byname['openads_serverd']
+              for name in required:
+                  assert name in byname and byname[name], f'{path}: missing/empty {name}'
+              for header in ['ace','error','openads_sql','platform','version']:
+                  assert any(n.endswith(f'include/openads/{header}.h') for n in files), f'Missing header {header}'
+              assert version.encode() in binary, f'{path}: server version stamp absent'
+              assert version.encode() in byname[('openace'+bits+'.dll') if windows else ('libopenace64.'+ext)], f'{path}: ACE version stamp absent'
+              if '-macos-' in path.name:
+                  assert binary[:4] in [bytes.fromhex('cafebabe'),bytes.fromhex('cafebabf')], 'Not a universal server'
+              print(f'VERIFIED {path.name}: {len(files)} files; version {version}; sha256 {hashlib.sha256(path.read_bytes()).hexdigest()}', flush=True)
+          PYVERIFY
+
+      - name: Require all legs green and all assets present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          missing=0
+          for asset in \
+            "openads-${V}-windows-x64.zip" \
+            "openads-${V}-windows-x86.zip" \
+            "openads-${V}-linux-x64.tar.gz" \
+            "openads-${V}-macos-universal.tar.gz" \
+            "openads-${V}-linux-glibc231.tar.gz"; do
+            if [ ! -f "out/${asset}" ]; then
+              echo "::error::Missing required release asset: ${asset}"
+              missing=1
+            else
+              echo "Found: ${asset}"
+            fi
+          done
+          JOBS_URL="repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?per_page=20"
+          echo "Leg conclusions:"
+          gh api "$JOBS_URL" --jq '.jobs[] | "\(.name): \(.conclusion)"'
+          for leg in \
+            "windows-2022 / x64" \
+            "windows-2022 / x86" \
+            "ubuntu-24.04 / x64" \
+            "macos-14 / universal" \
+            "ubuntu 20.04 container / x64 (glibc 2.31)"; do
+            concl=$(gh api "$JOBS_URL" --jq \
+              ".jobs[] | select(.name == \"$leg\") | .conclusion")
+            if [ "$concl" != "success" ]; then
+              echo "::error::Leg '$leg' conclusion is '${concl:-missing}' — blocking publish."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Refusing partial release."
+            exit 1
+          fi
+          echo "All legs green, all assets present."
+
+      # The short *-win-x64.zip / *-win-x86.zip names are forbidden.
+      # They were a manual FiveTechSoft kit that sat next to the CI
+      # *-windows-*.zip and confused users (different binary + layout).
+      - name: Reject leftover *-win-*.zip names
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bad=(out/openads-*-win-*.zip)
+          if ((${#bad[@]})); then
+            echo "::error::Do not ship *-win-x64.zip / *-win-x86.zip."
+            echo "Canonical names are *-windows-x64.zip / *-windows-x86.zip."
+            printf '%s\n' "${bad[@]}"
+            exit 1
+          fi
+
+      - name: Refuse to replace an existing public test build
+        if: ${{ contains(steps.tag.outputs.tag, '-mtfix') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_TAG: ${{ steps.tag.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TEST_TAG" --json isDraft > existing-release.json 2>release-error.txt; then
+            if ! jq -e '.isDraft == true' existing-release.json >/dev/null; then
+              echo "::error::Public test-build assets are immutable; use a new mtfix tag."
+              exit 1
+            fi
+          elif ! grep -qi 'release not found' release-error.txt; then
+            cat release-error.txt
+            echo "::error::Could not verify existing release state; refusing upload."
+            exit 1
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ inputs.source_ref || github.sha }}
+          # All candidates stay draft until exact-content review and application clearance.
+          draft: true
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-mtfix') }}
+          make_latest: ${{ contains(steps.tag.outputs.tag, '-mtfix') && 'false' || 'legacy' }}
+          body_path: ${{ steps.notes.outputs.path }}
+          files: out/*
+
+      # If the tag was published by hand with the old slim kit already
+      # attached, drop those assets so only the CI windows-* zips remain.
+      - name: Drop leftover manual *-win-*.zip assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          mapfile -t names < <(
+            gh release view "$TAG" --json assets --jq '.assets[].name' \
+              | grep -E '^openads-.+-win-(x64|x86)\.zip$' || true
+          )
+          for name in "${names[@]}"; do
+            echo "Removing leftover duplicate asset: $name"
+            gh release delete-asset "$TAG" "$name" --yes
+          done
+
+  repack:
+    name: Repackage existing assets (identical binaries)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.repack_only }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Download original release assets and snapshot metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > before.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > tag-before.json
+          mkdir original out
+          gh release download "$TAG" --dir original
+      - name: Add tag headers and prove every original file is unchanged
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          python3 - <<'PYREPACK'
+          import hashlib, io, json, os, pathlib, tarfile, zipfile
+          version = os.environ['TAG'][1:]
+          expected = {f'openads-{version}-{p}.{ext}' for p, ext in [('windows-x64','zip'),('windows-x86','zip'),('linux-x64','tar.gz'),('macos-universal','tar.gz')]}
+          release = json.loads(pathlib.Path('before.json').read_text())
+          assert not release['draft'], 'Only existing public releases can be repackaged'
+          assert {a['name'] for a in release['assets']} == expected, 'Unexpected release assets; refusing replacement'
+          headers = {f'include/openads/{h}.h': pathlib.Path(f'include/openads/{h}.h').read_bytes() for h in ['ace','error','openads_sql','platform','version']}
+          headers['include/ace.h'] = headers['include/openads/ace.h']
+          def members(path):
+              if path.suffix == '.zip':
+                  with zipfile.ZipFile(path) as z:
+                      assert z.testzip() is None
+                      return {i.filename: z.read(i) for i in z.infolist() if not i.is_dir()}
+              with tarfile.open(path) as t:
+                  return {m.name: t.extractfile(m).read() for m in t if m.isfile()}
+          for asset in release['assets']:
+              source = pathlib.Path('original') / asset['name']
+              digest = 'sha256:' + hashlib.sha256(source.read_bytes()).hexdigest()
+              assert asset.get('digest') == digest, f'Original asset digest mismatch: {source}'
+              old = members(source)
+              target = pathlib.Path('out') / source.name
+              prefix = '' if source.suffix == '.zip' else source.name[:-7] + '/'
+              if source.suffix == '.zip':
+                  with zipfile.ZipFile(source) as src, zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as dst:
+                      for entry in src.infolist():
+                          dst.writestr(entry, src.read(entry))
+                      for name, data in headers.items():
+                          assert prefix + name not in old, 'Header already exists; stop to avoid silent changes'
+                          dst.writestr(prefix + name, data)
+              else:
+                  with tarfile.open(source) as src, tarfile.open(target, 'w:gz') as dst:
+                      for entry in src:
+                          dst.addfile(entry, src.extractfile(entry) if entry.isfile() else None)
+                      for name, data in headers.items():
+                          assert prefix + name not in old, 'Header already exists; stop to avoid silent changes'
+                          entry = tarfile.TarInfo(prefix + name)
+                          entry.size, entry.mode = len(data), 0o644
+                          dst.addfile(entry, io.BytesIO(data))
+              new = members(target)
+              assert set(new) == set(old) | {prefix + h for h in headers}, 'Unexpected file changes'
+              for name, data in old.items():
+                  assert hashlib.sha256(new[name]).digest() == hashlib.sha256(data).digest(), f'Original file changed: {name}'
+              for name, data in headers.items():
+                  assert new[prefix + name] == data, f'Header mismatch: {name}'
+              print(f'IDENTICAL original files: {source.name} ({len(old)} files); added {sorted(headers)}', flush=True)
+          PYREPACK
+      - name: Open every archive and verify contents and version
+        env:
+          RELEASE_VERSION: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          python3 - <<'PYVERIFY'
+          import os, pathlib, tarfile, zipfile, hashlib
+          version = os.environ['RELEASE_VERSION'].removeprefix('v')
+          assets = list(pathlib.Path('out').glob('*'))
+          assert assets, 'No archives'
+          for path in assets:
+              if path.suffix == '.zip':
+                  with zipfile.ZipFile(path) as z:
+                      assert z.testzip() is None, 'ZIP CRC failure'
+                      files = {n: z.read(n) for n in z.namelist() if not n.endswith('/')}
+              else:
+                  with tarfile.open(path) as t:
+                      files = {m.name: t.extractfile(m).read() for m in t.getmembers() if m.isfile()}
+              byname = {pathlib.PurePosixPath(n).name: data for n, data in files.items()}
+              required = ['LICENSE','NOTICE','README.md','openads.ini.sample']
+              windows = '-windows-' in path.name
+              if windows:
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to package (e.g. v1.0.0-rc1)"
+        required: true
+      source_ref:
+        description: "source commit for a new test-build tag (optional)"
+        required: false
+      repack_only:
+        description: "Repackage existing public assets without rebuilding any binaries"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Published mtfix assets are the reviewed bytes, never rebuild on tag push.
+    if: ${{ !inputs.repack_only && (github.event_name == 'workflow_dispatch' || !contains(github.ref, '-mtfix')) }}
+    name: ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    # 90: a cold Harbour SDK build (Linux leg) plus the full tree can
+    # exceed the old 60-minute cap; cached runs finish far sooner.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: x64
+            preset: msvc-x64
+            artifact_ext: zip
+            cmake_extra: ""
+          - os: windows-2022
+            arch: x86
+            preset: msvc-x86
+            artifact_ext: zip
+            cmake_extra: ""
+          - os: ubuntu-24.04
+            arch: x64
+            preset: ninja-clang
+            artifact_ext: tar.gz
+            cmake_extra: ""
+          # One macOS leg builds a universal (arm64 + x86_64)
+          # binary on the Apple-Silicon runner — GitHub's Intel
+          # macos-13 runners are scarce and stall the release in
+          # the queue. A universal archive runs on both arches.
+          - os: macos-14
+            arch: universal
+            preset: default
+            artifact_ext: tar.gz
+            cmake_extra: '-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"'
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Ninja (Linux / macOS)
+        if: runner.os != 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      # Server-side Harbour UDFs (.hrb): the Linux leg embeds hbvm,
+      # so it needs a Harbour SDK. Built from source once, then cached
+      # (mirrors tools/scripts/bootstrap_harbour_ci.ps1 on Windows).
+      - name: Cache Harbour SDK (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harbour-udf
+          key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+
+      - name: Provision Harbour SDK (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+        run: |
+          set -e
+          HB="$RUNNER_TEMP/harbour-udf"
+          echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+          if [ -f "$HB/install/include/hbvm.h" ] && \
+             [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] && \
+             [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+            echo "Harbour SDK cached at $HB/install"
+          else
+            sudo apt-get update
+            sudo apt-get install -y build-essential libncurses-dev libx11-dev
+            rm -rf "$HB"
+            mkdir -p "$HB"
+            git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+            git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+            git -C "$HB/src" checkout "$HARBOUR_REF"
+            cd "$HB/src"
+            make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+          fi
+          # Resolve exact SDK paths (no layout guessing in CMake):
+          # headers, MT VM archive, compiler binary.
+          HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+          HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+          HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+          echo "Harbour SDK layout:"
+          echo "  include: ${HB_INC:-MISSING}"
+          echo "  libdir:  ${HB_LIBDIR:-MISSING}"
+          echo "  compiler:${HB_CC:-MISSING}"
+          if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+            echo "::error::Harbour SDK layout unexpected — full listing:"
+            find "$HB/install" -maxdepth 4 | sort | head -80
+            exit 1
+          fi
+          {
+            echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+            echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+            echo "HARBOUR_COMPILER=$HB_CC"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ${{ matrix.preset }} \
+                -DOPENADS_WITH_TLS=ON \
+                -DOPENADS_WITH_HTTP=ON \
+                -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" \
+                ${{ matrix.cmake_extra }} \
+                ${{ runner.os == 'Linux' && format('-DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR={0} -DHARBOUR_LIB_DIR={1} -DHARBOUR_COMPILER={2}', env.HARBOUR_INCLUDE_DIR, env.HARBOUR_LIB_DIR, env.HARBOUR_COMPILER) || '' }}
+
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }} --config Release
+
+      - name: Test
+        # macOS tests are a hard release gate; bound a stalled runner.
+        timeout-minutes: ${{ startsWith(matrix.os, 'macos') && 20 || 30 }}
+        run: ctest --test-dir build/${{ matrix.preset }}
+                   --output-on-failure -C Release
+
+      # Owner directive: every static kit uses Winlibs10.2 TLS/emutls, never rolling GCC.
+      - name: Download pinned Winlibs GCC10.2 static toolchain
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ("${{ matrix.arch }}" -eq "x64") {
+            $url = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z'
+            $checksumUrl = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256'
+            $expected = '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'
+            $folder = 'mingw64'
+          } else {
+            $url = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z'
+            $checksumUrl = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256'
+            $expected = '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'
+            $folder = 'mingw32'
+          }
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+          $sum = (Invoke-WebRequest $checksumUrl).Content
+          Write-Host "Expected: $expected"
+          $actual = (Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Actual: $actual"
+          if ($actual -ne $expected) { throw 'Toolchain digest mismatch' }
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:RUNNER_TEMP/winlibs/$folder/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build and validate matched static ACE library
+        if: always() && runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BITS="${{ matrix.arch == 'x64' && '64' || '32' }}"
+          mkdir -p build/static-proof
+          gcc -v 2> build/static-proof/toolchain.txt
+          test "$(gcc -dumpfullversion)" = 10.2.0
+          g++ -print-file-name=libstdc++.a > build/static-proof/runtime-path.txt
+          nm -C "$(g++ -print-file-name=libstdc++.a)" > build/static-proof/runtime-symbols.txt
+          echo '#include <bits/c++config.h>' > config-check.cpp
+          g++ -dM -E config-check.cpp > build/static-proof/runtime-macros.txt
+          grep '_GLIBCXX_HAVE_TLS 1' build/static-proof/runtime-macros.txt
+          grep '__once_callable' build/static-proof/runtime-symbols.txt
+          cmake -S . -B build/mingw-${{ matrix.arch }} -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build/mingw-${{ matrix.arch }} --target openads_ace_static openads_static_archive_smoke -j2
+          cp "build/mingw-${{ matrix.arch }}/src/libopenace$BITS.a" build/static-proof/libopenace32.a
+          nm -u build/static-proof/libopenace32.a > build/static-proof/undefined-symbols.txt
+          ! grep -E '__get_once_mutex|__once_functor|__set_once_functor_lock_ptr|__throw_bad_array_new_length|pthread_cond_timedwait32|nanosleep32' build/static-proof/undefined-symbols.txt
+          g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp build/static-proof/libopenace32.a -static -lws2_32 -lpsapi -o build/static-proof/static-smoke.exe
+          g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp -Wl,--whole-archive build/static-proof/libopenace32.a -Wl,--no-whole-archive -static -lws2_32 -lpsapi -o build/static-proof/whole-archive-smoke.exe
+          objdump -p build/static-proof/whole-archive-smoke.exe > build/static-proof/whole-archive-imports.txt
+          ! grep -Ei 'DLL Name:.*(ace32|ace64|openace|libstdc|libgcc|libwinpthread)' build/static-proof/whole-archive-imports.txt
+          ./build/static-proof/static-smoke.exe
+          ./build/static-proof/whole-archive-smoke.exe
+          git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-rdd-matched"
+          git -C "$RUNNER_TEMP/harbour-rdd-matched" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+          for unit in ads1 adsfunc adsmgmnt adsx; do
+            gcc -c "$RUNNER_TEMP/harbour-rdd-matched/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour-rdd-matched/include" -I"$RUNNER_TEMP/harbour-rdd-matched/contrib/rddads" -Iinclude/openads -o "build/static-proof/$unit.o"
+          done
+          ar rcs build/static-proof/librddads_openads_static.a build/static-proof/ads1.o build/static-proof/adsfunc.o build/static-proof/adsmgmnt.o build/static-proof/adsx.o
+          git rev-parse HEAD > build/static-proof/source-commit.txt
+          sha256sum build/static-proof/*.a > build/static-proof/SHA256SUMS.txt
+          cp "$RUNNER_TEMP/harbour-rdd-matched/contrib/rddads/ads.ch" build/static-proof/
+      - name: Set up auxiliary Harbour and DLL-import tools
+        if: always() && runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.arch == 'x64' && 'MINGW64' || 'MINGW32' }}
+          # v1.09.62 postmortem: update:true + upstream base (June) died
+          # deterministically on both Windows legs at this step (MSYS2
+          # mirror PGP/db-sync rot hits the full -Syuu upgrade path;
+          # our diff cannot influence this step). Use the runner image's
+          # preinstalled MSYS2 (days old, not months) and install only
+          # the toolchain — no system upgrade. If this still fails, the
+          # step-9 log lines (not just the exit code) are required
+          # before further workflow surgery.
+          release: false
+          update: false
+          install: >-
+            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake python' }} git make
+
+      - name: Harbour merged static archive link and run
+        if: always() && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          # Keep the matched compiler even inside the auxiliary MSYS2 shell.
+          WINLIBS_BIN="$(cygpath -u "$RUNNER_TEMP")/winlibs/${{ matrix.arch == 'x64' && 'mingw64' || 'mingw32' }}/bin"
+          export PATH="$WINLIBS_BIN:$PATH"
+          test "$(gcc -dumpfullversion)" = 10.2.0
+          bash tools/scripts/test_harbour_static_mingw.sh \
+            "build/mingw-${{ matrix.arch }}/src/libopenace${{ matrix.arch == 'x64' && '64' || '32' }}.a" \
+            "${{ matrix.arch == 'x64' && '64' || '32' }}"
+
+      - name: Regenerate MinGW DLL imports and link health probe
+        if: always() && runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          BITS="${{ matrix.arch == 'x64' && '64' || '32' }}"
+          mkdir -p build/fresh-imports
+          python3 tests/mingw_import_parser_test.py
+          python3 tools/scripts/regenerate_mingw_imports.py \
+            "build/${{ matrix.preset }}/src/Release/openace${BITS}.dll" \
+            "dist/import-libs/${{ matrix.arch }}/mingw/libace${BITS}.a" \
+            "build/fresh-imports/libace${BITS}.a" "$BITS"
+
+      - name: Stage release files (POSIX)
+        if: always() && runner.os != 'Windows'
+        shell: bash
+        run: |
+          STAGE="openads-${{ steps.tag.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'macos' }}-${{ matrix.arch }}"
+          mkdir -p "$STAGE"
+          BUILD="build/${{ matrix.preset }}"
+          # Engine shared lib is built as libopenace64.{so,dylib}. Ship it,
+          # plus a drop-in-named copy libace64.* for apps that load by the
+          # canonical ACE name.
+          for f in "$BUILD"/src/libopenace64.*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
+          # Server + bench CLIs
+          cp "$BUILD"/tools/serverd/openads_serverd "$STAGE/"
+          cp "$BUILD"/tools/bench/openads_bench   "$STAGE/"
+          cp LICENSE NOTICE README.md openads.ini.sample "$STAGE/"
+          mkdir -p "$STAGE/include/openads"
+          cp include/openads/ace.h "$STAGE/include/ace.h"
+          cp include/openads/{ace,error,openads_sql,platform,version}.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/{oads_hb.c,oads_stats_display.prg,README.md} "$STAGE/contrib/oads_hb/"
+          tar czvf "$STAGE.tar.gz" "$STAGE"
+          ls -la "$STAGE.tar.gz"
+          echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
+
+      # Canonical Windows ZIP name is openads-<ver>-windows-<arch>.zip
+      # (CPack and this workflow). Never emit openads-<ver>-win-<arch>.zip —
+      # that short name was a hand-rolled slim kit uploaded beside the CI
+      # zip on v1.8.84–v1.8.86 and shipped a different ace64.dll. See
+      # packaging/windows/README.md ("Release ZIP names").
+      - name: Stage release files (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = "openads-${{ steps.tag.outputs.version }}-windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          $build = "build/${{ matrix.preset }}"
+          $bits  = if ("${{ matrix.arch }}" -eq "x64") { "64" } else { "32" }
+          $builtDll = "$build/src/Release/openace$bits.dll"
+          $builtLib = "$build/src/Release/openace$bits.lib"
+          if (-not (Test-Path $builtDll)) {
+              throw "Engine DLL missing: $builtDll"
+          }
+          if (-not (Test-Path $builtLib)) {
+              throw "Import library missing: $builtLib"
+          }
+          # Ship BOTH names at the archive root:
+          #   openace64.dll / openace32.dll — OpenADS build product (PHP ext,
+          #     side-by-side with SAP ACE)
+          #   ace64.dll     / ace32.dll     — drop-in for Harbour rddads / FWH
+          Copy-Item $builtDll "$stage/openace$bits.dll"
+          Copy-Item $builtLib "$stage/openace$bits.lib"
+          Copy-Item "$build/src/Release/openace$bits.exp" "$stage/" -ErrorAction SilentlyContinue
+          Copy-Item $builtDll "$stage/ace$bits.dll"
+          Copy-Item $builtLib "$stage/ace$bits.lib"
+          foreach ($req in @(
+              "openace$bits.dll", "openace$bits.lib",
+              "ace$bits.dll",     "ace$bits.lib")) {
+              if (-not (Test-Path "$stage/$req")) {
+                  throw "Release staging incomplete: missing $req"
+              }
+          }
+          # Per-compiler import libraries (MSVC / MinGW-GCC / Borland) for
+          # ace<bits>.dll — prebuilt under dist/import-libs because the CI
+          # runners have no Borland toolchain (see dist/import-libs/gen.ps1).
+          New-Item -ItemType Directory "$stage/lib" | Out-Null
+          Copy-Item -Recurse "dist/import-libs/${{ matrix.arch }}/*" "$stage/lib/"
+          # Replace stale MinGW archives with this DLL's actual exports.
+          Copy-Item "build/fresh-imports/libace$bits.a" "$stage/lib/mingw/libace$bits.a" -Force
+          # Static ACE library (MinGW): link into an hbmk2 -comp=mingw[64]
+          # app and no ace<bits>.dll is needed at all. Built in the
+          # "Build static ACE library (MinGW)" step above.
+          $staticLib = "build/mingw-${{ matrix.arch }}/src/libopenace$bits.a"
+          if (-not (Test-Path $staticLib)) {
+              throw "Static ACE library missing: $staticLib"
+          }
+          Copy-Item $staticLib "$stage/libopenace$bits.a"
+          Copy-Item "build/static-proof/librddads_openads_static.a" "$stage/"
+          Copy-Item "build/static-proof/ads.ch" "$stage/include/"
+          New-Item -ItemType Directory "$stage/static-toolchain-proof" -Force | Out-Null
+          Copy-Item "build/static-proof/toolchain.txt","build/static-proof/runtime-macros.txt","build/static-proof/undefined-symbols.txt","build/static-proof/whole-archive-imports.txt" "$stage/static-toolchain-proof/"
+          Copy-Item "build/static-proof/source-commit.txt","build/static-proof/SHA256SUMS.txt" "$stage/static-toolchain-proof/"
+          Copy-Item docs/master-diagnostics.md,docs/mingw-static-ace.md "$stage/"
+          New-Item -ItemType Directory "$stage/static-smoke" -Force | Out-Null
+          Copy-Item tests/smoke/mingw_static_ace.cpp,tests/smoke/harbour_static_ace.prg,tools/scripts/test_harbour_static_mingw.sh "$stage/static-smoke/"
+          # Server + bench CLIs
+          Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
+          Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"
+          Copy-Item LICENSE,NOTICE,README.md,openads.ini.sample  $stage/
+          Copy-Item QUICKSTART.md                              "$stage/" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory "$stage/include/openads" -Force | Out-Null
+          Copy-Item include/openads/ace.h "$stage/include/ace.h"
+          Copy-Item include/openads/ace.h,include/openads/error.h,include/openads/openads_sql.h,include/openads/platform.h,include/openads/version.h "$stage/include/openads/"
+          # Harbour HB_FUNC wrappers for the oads_* VFS API — compiled
+          # into the app, not shipped in the DLL. Arch-independent C
+          # source: both Windows zips carry it. (Pritpal Bedi.)
+          New-Item -ItemType Directory "$stage/contrib/oads_hb" -Force | Out-Null
+          Copy-Item contrib/oads_hb/oads_hb.c,contrib/oads_hb/oads_stats_display.prg,contrib/oads_hb/README.md "$stage/contrib/oads_hb/"
+          if ("${{ matrix.arch }}" -eq "x86") {
+              Copy-Item src/openads_ace_x86_stdcall.def      "$stage/"
+              # Ship the 32-bit MinGW import library at the archive root too:
+              # 32-bit Harbour (hbmk2 -comp=mingw, rddads) links it directly.
+              # (Reported by Pritpal Bedi.)
+              Copy-Item build/fresh-imports/libace32.a "$stage/"
+          } else {
+              Copy-Item src/openads_ace.def                   "$stage/"
+          }
+          Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force
+          Get-Item "$stage.zip"
+          "ASSET=$stage.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload artifact (workflow run)
+        if: always() && env.ASSET != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openads-${{ runner.os }}-${{ matrix.arch }}
+          path: ${{ env.ASSET }}
+
+  # glibc 2.31 compatibility build for older Linux servers (Ubuntu 20.04):
+  # the ubuntu-24.04 leg's binaries require GLIBC_2.38+, so the same tree
+  # is built inside an ubuntu:20.04 container. Its asset and successful
+  # job conclusion are required before creating a draft release.
+  # Required for the older-Linux package in this candidate.
+  build-glibc231:
+    if: ${{ !inputs.repack_only && (github.event_name == 'workflow_dispatch' || !contains(github.ref, '-mtfix')) }}
+    name: ubuntu 20.04 container / x64 (glibc 2.31)
+    runs-on: ubuntu-24.04
+    container: ubuntu:20.04
+    timeout-minutes: 90
+    steps:
+      # Bare image: git/curl first so checkout + CMake FetchContent work.
+      - name: Install bootstrap tools
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git ca-certificates curl xz-utils
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || inputs.tag || github.ref }}
+          # Full history + tags: the version stamp falls back to
+          # `git describe --tags`, and a shallow tag checkout can leave
+          # the tag unresolvable to the container's older git.
+          fetch-depth: 0
+
+      # The container's git refuses the runner-owned workspace ("dubious
+      # ownership"), which silently broke `git describe --tags` and shipped
+      # a plain-version stamp on the 20.04 asset. Mark it safe and re-fetch
+      # the tag refs so describe resolves even for a tag checkout.
+      - name: Make the tag resolvable to git in the container
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --tags --force origin
+          git describe --tags
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+          echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+      # CMakePresets v4 needs CMake >= 3.23; 20.04's apt ships 3.16, so
+      # vendor the official binary (runs on any glibc >= 2.17). Compiler:
+      # focal's clang-10 rejects this tree's C++20 implicit-move returns
+      # (P1825, e.g. server_fs.cpp), so this leg builds with g++-10 (in
+      # the focal archive, implements P1825); warnings-as-errors stays
+      # off for the older toolchain.
+      - name: Install toolchain and CMake
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential g++-10 ninja-build pkg-config \
+            libncurses-dev libx11-dev bison flex python3 perl
+          curl -sSL -o /tmp/cmake.tar.gz \
+            https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz
+          mkdir -p /opt/cmake
+          tar xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+          echo "/opt/cmake/bin" >> "$GITHUB_PATH"
+          /opt/cmake/bin/cmake --version
+
+      # Same Harbour UDF SDK as the 24.04 leg, cached under its own key
+      # (binaries are glibc-specific).
+      - name: Cache Harbour SDK (glibc 2.31)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harbour-udf-glibc231
+          key: harbour-udf-linux-glibc231-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+
+      - name: Provision Harbour SDK (glibc 2.31)
+        shell: bash
+        env:
+          HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+        run: |
+          set -e
+          HB="$RUNNER_TEMP/harbour-udf-glibc231"
+          echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+          if [ -f "$HB/install/include/hbvm.h" ] && \
+             [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] && \
+             [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+            echo "Harbour SDK cached at $HB/install"
+          else
+            rm -rf "$HB"
+            mkdir -p "$HB"
+            git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+            git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+            git -C "$HB/src" checkout "$HARBOUR_REF"
+            cd "$HB/src"
+            make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+          fi
+          HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+          HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+          HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+          echo "Harbour SDK layout:"
+          echo "  include: ${HB_INC:-MISSING}"
+          echo "  libdir:  ${HB_LIBDIR:-MISSING}"
+          echo "  compiler:${HB_CC:-MISSING}"
+          if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+            echo "::error::Harbour SDK layout unexpected - full listing:"
+            find "$HB/install" -maxdepth 4 | sort | head -80
+            exit 1
+          fi
+          {
+            echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+            echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+            echo "HARBOUR_COMPILER=$HB_CC"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ninja-clang \
+                -DOPENADS_VERSION_FORCE=${{ steps.tag.outputs.version }} \
+                -DCMAKE_C_COMPILER=gcc-10 \
+                -DCMAKE_CXX_COMPILER=g++-10 \
+                -DOPENADS_WITH_TLS=ON \
+                -DOPENADS_WITH_HTTP=ON \
+                -DOPENADS_WARNINGS_AS_ERRORS=OFF \
+                -DOPENADS_WITH_HARBOUR_UDF=ON \
+                -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR" \
+                -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR" \
+                -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+
+      - name: Build
+        run: cmake --build build/ninja-clang --config Release
+
+      - name: Test
+        timeout-minutes: 30
+        run: ctest --test-dir build/ninja-clang --output-on-failure -C Release
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          STAGE="openads-${{ steps.tag.outputs.version }}-linux-glibc231"
+          mkdir -p "$STAGE"
+          BUILD="build/ninja-clang"
+          for f in "$BUILD"/src/libopenace64.*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
+          cp "$BUILD"/tools/serverd/openads_serverd "$STAGE/"
+          cp "$BUILD"/tools/bench/openads_bench   "$STAGE/"
+          cp LICENSE NOTICE README.md openads.ini.sample "$STAGE/"
+          mkdir -p "$STAGE/include/openads"
+          cp include/openads/ace.h "$STAGE/include/ace.h"
+          cp include/openads/{ace,error,openads_sql,platform,version}.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/{oads_hb.c,oads_stats_display.prg,README.md} "$STAGE/contrib/oads_hb/"
+          tar czvf "$STAGE.tar.gz" "$STAGE"
+          ls -la "$STAGE.tar.gz"
+          echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
+
+      # The whole point of the leg: prove the binaries stay within
+      # glibc 2.31 before they ship.
+      - name: Verify glibc ceiling (<= 2.31)
+        shell: bash
+        run: |
+          set -e
+          STAGE="openads-${{ steps.tag.outputs.version }}-linux-glibc231"
+          fail=0
+          for b in "$STAGE"/openads_serverd "$STAGE"/openads_bench \
+                   "$STAGE"/libopenace64.so "$STAGE"/libace64.so; do
+            hit=$(objdump -T "$b" | grep -oE 'GLIBC_2\.(3[2-9]|[4-9][0-9])' | sort -uV || true)
+            if [ -n "$hit" ]; then
+              echo "::error::$b references > GLIBC_2.31: $hit"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "All staged binaries within GLIBC_2.31."
+
+      - name: Upload artifact (workflow run)
+        if: always() && env.ASSET != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openads-Linux-x64-glibc231
+          path: ${{ env.ASSET }}
+
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build, build-glibc231]
+    # A cancelled/failed best-effort leg (macOS) must not skip publish;
+    # only a genuine workflow-run cancellation should.
+    if: ${{ always() && !inputs.repack_only && needs.build.result != 'skipped' && (github.event_name == 'workflow_dispatch' || !contains(github.ref, '-mtfix')) }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref || inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          T="${{ inputs.tag }}"
+          if [ -z "$T" ]; then T="${GITHUB_REF#refs/tags/}"; fi
+          echo "tag=$T" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p out
+          find dist -type f \( -name "*.zip" -o -name "*.tar.gz" \) \
+            -exec cp {} out/ \;
+          ls -la out
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          T="${{ steps.tag.outputs.tag }}"
+          echo "version=${T#v}" >> "$GITHUB_OUTPUT"
+
+      # Repo convention: every release commit ships release-notes-<ver>.md
+      # (see v1.09.22/v1.09.23). The published GitHub Release body is that
+      # file verbatim — never the auto-generated commit list — so the
+      # "What to test" and Packages sections reach users intact.
+      - name: Resolve release notes
+        id: notes
+        shell: bash
+        run: |
+          F="release-notes-${{ steps.ver.outputs.version }}.md"
+          if [ ! -f "$F" ]; then
+            echo "::error::Missing $F — every release tag needs its notes file."
+            ls release-notes-*.md || true
+            exit 1
+          fi
+          echo "path=$F" >> "$GITHUB_OUTPUT"
+
+      # All-or-nothing release: every leg must be green AND every
+      # canonical asset present, otherwise fail loudly instead of
+      # shipping a partial kit (v1.09.50 went out without the Linux
+      # tarball because publish ran on 3 of 4 legs). macOS keeps its
+      # stall-tolerant test step, but a real macOS build break still
+      # blocks here via the job conclusion.
+      - name: Open every archive and verify contents and version
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+        shell: bash
+        run: |
+          python3 - <<'PYVERIFY'
+          import os, pathlib, tarfile, zipfile, hashlib
+          version = os.environ['RELEASE_VERSION']
+          assets = list(pathlib.Path('out').glob('*'))
+          assert assets, 'No archives'
+          for path in assets:
+              if path.suffix == '.zip':
+                  with zipfile.ZipFile(path) as z:
+                      assert z.testzip() is None, 'ZIP CRC failure'
+                      files = {n: z.read(n) for n in z.namelist() if not n.endswith('/')}
+              else:
+                  with tarfile.open(path) as t:
+                      files = {m.name: t.extractfile(m).read() for m in t.getmembers() if m.isfile()}
+              byname = {pathlib.PurePosixPath(n).name: data for n, data in files.items()}
+              required = ['LICENSE','NOTICE','README.md','openads.ini.sample','oads_hb.c','oads_stats_display.prg']
+              windows = '-windows-' in path.name
+              if windows:
+                  bits = '64' if '-x64.' in path.name else '32'
+                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','include/ads.ch','static-toolchain-proof/runtime-macros.txt','static-toolchain-proof/source-commit.txt','openads_serverd.exe','openads_bench.exe','oads_hb.c','oads_stats_display.prg']
                   assert byname[f'ace{bits}.dll'] == byname[f'openace{bits}.dll'], 'ACE aliases differ'
                   binary = byname['openads_serverd.exe']
               else:
@@ -814,7 +1722,7 @@ jobs:
               windows = '-windows-' in path.name
               if windows:
                   bits = '64' if '-x64.' in path.name else '32'
-                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','openads_serverd.exe','openads_bench.exe','oads_hb.c']
+                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','include/ads.ch','static-toolchain-proof/runtime-macros.txt','static-toolchain-proof/source-commit.txt','openads_serverd.exe','openads_bench.exe','oads_hb.c']
                   assert byname[f'ace{bits}.dll'] == byname[f'openace{bits}.dll'], 'ACE aliases differ'
                   binary = byname['openads_serverd.exe']
               else:

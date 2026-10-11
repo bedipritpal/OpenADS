@@ -14,11 +14,13 @@ jobs:
         include:
           - arch: x86
             bits: 32
+            checksum: 019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907
             folder: mingw32
             url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z
             checksum_url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256
           - arch: x64
             bits: 64
+            checksum: 1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74
             folder: mingw64
             url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z
             checksum_url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256
@@ -32,8 +34,10 @@ jobs:
         run: |
           Invoke-WebRequest '${{ matrix.url }}' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
           $sum = (Invoke-WebRequest '${{ matrix.checksum_url }}').Content
-          $expected = [regex]::Match($sum, '[a-fA-F0-9]{64}').Value.ToLower()
+          $expected = '${{ matrix.checksum }}'
+          Write-Host "Expected: $expected"
           $actual = (Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Actual: $actual"
           if ($actual -ne $expected) { throw 'Toolchain digest mismatch' }
           & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -645,7 +645,8 @@ jobs:
               windows = '-windows-' in path.name
               if windows:
                   bits = '64' if '-x64.' in path.name else '32'
-                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','include/ads.ch','static-toolchain-proof/runtime-macros.txt','static-toolchain-proof/source-commit.txt','openads_serverd.exe','openads_bench.exe','oads_hb.c','oads_stats_display.prg']
+                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','ads.ch','runtime-macros.txt','source-commit.txt','openads_serverd.exe','openads_bench.exe','oads_hb.c','oads_stats_display.prg']
+                  assert b'_GLIBCXX_HAVE_TLS 1' in byname['runtime-macros.txt'], 'Static compiler runtime TLS missing'
                   assert byname[f'ace{bits}.dll'] == byname[f'openace{bits}.dll'], 'ACE aliases differ'
                   binary = byname['openads_serverd.exe']
               else:
@@ -861,7 +862,8 @@ jobs:
               windows = '-windows-' in path.name
               if windows:
                   bits = '64' if '-x64.' in path.name else '32'
-                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','include/ads.ch','static-toolchain-proof/runtime-macros.txt','static-toolchain-proof/source-commit.txt','openads_serverd.exe','openads_bench.exe','oads_hb.c']
+                  required += [f'ace{bits}.dll',f'openace{bits}.dll',f'ace{bits}.lib',f'openace{bits}.lib',f'libopenace{bits}.a','librddads_openads_static.a','ads.ch','runtime-macros.txt','source-commit.txt','openads_serverd.exe','openads_bench.exe','oads_hb.c']
+                  assert b'_GLIBCXX_HAVE_TLS 1' in byname['runtime-macros.txt'], 'Static compiler runtime TLS missing'
                   assert byname[f'ace{bits}.dll'] == byname[f'openace{bits}.dll'], 'ACE aliases differ'
                   binary = byname['openads_serverd.exe']
               else:

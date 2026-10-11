@@ -334,6 +334,7 @@ jobs:
           }
           Copy-Item $staticLib "$stage/libopenace$bits.a"
           Copy-Item "build/static-proof/librddads_openads_static.a" "$stage/"
+          New-Item -ItemType Directory "$stage/include" -Force | Out-Null
           Copy-Item "build/static-proof/ads.ch" "$stage/include/"
           New-Item -ItemType Directory "$stage/static-toolchain-proof" -Force | Out-Null
           Copy-Item "build/static-proof/toolchain.txt","build/static-proof/runtime-macros.txt","build/static-proof/undefined-symbols.txt","build/static-proof/whole-archive-imports.txt" "$stage/static-toolchain-proof/"

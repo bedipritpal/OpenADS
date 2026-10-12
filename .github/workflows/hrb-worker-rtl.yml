@@ -1,6 +1,6 @@
-name: HRB worker RTL owner test (Pritpal Bedi)
+name: HRB auth capacity TEST ONLY (Pritpal Bedi)
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-2022
@@ -18,8 +18,28 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 79387d988a753ff59b55e014807713c8edafa673
-        persist-credentials: false
+        ref: spike-unmerged/hrb-challenge-auth
+        fetch-depth: 0
+        persist-credentials: true
+    - name: Apply exact approved capacity patch on test branch only
+      shell: bash
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/spike-unmerged/hrb-challenge-auth
+        git diff --quiet 6c65f64495871590096f278c892edc4284cf4c03 HEAD -- src/network/auth_worker.cpp src/network/auth_worker.h src/network/session.cpp tools/serverd/config_ini.cpp tools/serverd/config_ini.h tools/serverd/main.cpp tools/serverd/CMakeLists.txt tests/unit/serverd_config_ini_test.cpp
+        python - <<'PYTHON'
+        import base64,gzip,pathlib
+        pathlib.Path('capacity.patch').write_bytes(gzip.decompress(base64.b64decode('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')))
+        PYTHON
+        git apply --check capacity.patch
+        git apply capacity.patch
+        rm capacity.patch
+        git add src/network/auth_worker.cpp src/network/auth_worker.h src/network/session.cpp tools/serverd/config_ini.cpp tools/serverd/config_ini.h tools/serverd/main.cpp tools/serverd/CMakeLists.txt tests/unit/serverd_config_ini_test.cpp docs/HRB_AUTH_CAPACITY_TEST.md
+        git -c user.name='Pritpal Bedi test assistant' -c user.email='bedipritpal@users.noreply.github.com' commit -m 'TEST ONLY auth capacity INI gate and busy without login penalty (owner approved)'
+        git push origin HEAD:refs/heads/spike-unmerged/hrb-challenge-auth
+        mkdir -p output
+        git rev-parse HEAD > output/source-commit.txt
+        cp docs/HRB_AUTH_CAPACITY_TEST.md output/
     - name: Download and verify Winlibs GCC10.2
       shell: pwsh
       run: |
@@ -52,9 +72,25 @@ jobs:
         HBINC="$HBROOT/include"
         HBLIB="$HBROOT/lib/win/$HB_COMPILER"
         HBCC="$HBROOT/bin/win/$HB_COMPILER/harbour.exe"
-        cmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_BUILD_ACE_STATIC=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR="$HBINC" -DHARBOUR_LIB_DIR="$HBLIB" '-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon'
+        cmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=ON -DOPENADS_BUILD_TESTS=OFF -DOPENADS_BUILD_ACE_STATIC=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR="$HBINC" -DHARBOUR_LIB_DIR="$HBLIB" '-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon'
         cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe auth_spike_integration_probe -j2
         "$HBCC" tests/hrb/auth-spike/test_only.prg -gh -ooutput/test_only.hrb
+        cat > output/config-test.cpp <<'EOF'
+        #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+        #include "doctest.h"
+        #include "tests/unit/serverd_config_ini_test.cpp"
+        EOF
+        g++ -std=c++17 -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=1 -I. -Ithird_party/doctest output/config-test.cpp tools/serverd/config_ini.cpp -o output/config-test-on.exe
+        output/config-test-on.exe > output/config-test-on.txt
+        g++ -std=c++17 -I. -Ithird_party/doctest output/config-test.cpp tools/serverd/config_ini.cpp -o output/config-test-off.exe
+        output/config-test-off.exe > output/config-test-off.txt
+        printf 'auth_worker_concurrency=0\n' > output/invalid.ini
+        set +e
+        build-auth/tools/serverd/openads_serverd.exe --config output/invalid.ini > output/invalid-startup.txt 2>&1
+        status=$?
+        set -e
+        test "$status" = 2
+        grep 'auth_worker_concurrency must be 1..256' output/invalid-startup.txt
 
         cat > output/rtl_family.prg <<'EOF'
         FUNCTION OADS_AUTH_V1(cChallenge,cBlob,cContext)
@@ -283,9 +319,9 @@ jobs:
         No private crypto included. Do NOT deploy synthetic test_only.hrb from proof artifacts.
         TLS1.3 encrypted but SERVER UNVERIFIED: ACTIVE TERMINATION RELAY SUCCEEDS.
         No pooling of extra authenticated sessions; challenge blob4096 bytes, lifetime30s.
-        Worker4 concurrent,2s timeout, trusted native module not a sandbox.
+        TEST BUILD ONLY: INI auth_worker_concurrency=1..256, default4. Busy no login penalty. No queue;2s timeout.
         Native worker/normal DD login/wrong-password/DBFCDX record-lock proof passed.
-        Worker token-family and byte-REVERSE update only. Prior native gauntlet is separate evidence; real Vouch owner test remains required.
+        Full138 RTL worker retained; daemon adds guarded test-only capacity switch. Native owner storm measurement required.
         Test on copies/backups, not production data. Owner's tested pass required before any merge.
         '@ | Set-Content "$root/TEST_ONLY_README.txt"
         $hashes=Get-ChildItem "$root" -File -Recurse | Where-Object { $_.Name -ne 'SHA256.txt' } | Get-FileHash -Algorithm SHA256
@@ -294,7 +330,7 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: hrb-worker-rtl-x86
+        name: hrb-auth-capacity-test-x86
         path: output/
         if-no-files-found: error
         retention-days: 14

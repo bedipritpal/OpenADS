@@ -18,7 +18,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 396276605abef40d9528e68e5467b9f70a4259fd
+        ref: 79387d988a753ff59b55e014807713c8edafa673
         persist-credentials: false
     - name: Download and verify Winlibs GCC10.2
       shell: pwsh
@@ -57,10 +57,45 @@ jobs:
         cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe\
         \ auth_spike_integration_probe -j2\n\"$HBCC\" tests/hrb/auth-spike/test_only.prg -gh -ooutput/test_only.hrb\n\ncat\
         \ > output/rtl_family.prg <<'EOF'\nFUNCTION OADS_AUTH_V1(cChallenge,cBlob,cContext)\n   LOCAL a := hb_ATokens(\"a|b\"\
-        , \"|\"), nPos := 0, cTok\n   cTok := hb_TokenPtr(\"a|b\",@nPos,\"|\")\n   IF Len(a) != 2 .OR. a[2] != \"b\" .OR.\
-        \ hb_TokenCount(\"a|b\",\"|\") != 2 .OR. ;\n      hb_TokenGet(\"a|b\",2,\"|\") != \"b\" .OR. cTok != \"a\" .OR. ;\n\
-        \      Reverse(\"A\"+Chr(0)+\"B\") != \"B\"+Chr(0)+\"A\" .OR. Reverse(\"\") != \"\"\n      RETURN \"BAD\"\n   ENDIF\n\
-        \   RETURN \"OAUTH\"+Chr(1)+Chr(0)+Replicate(Chr(0),4)\nEOF\n\"$HBCC\" output/rtl_family.prg -gh -ooutput/rtl_family.hrb\n"
+        , \"|\"), nPos := 0, cTok, cJson, aJson, cName, cBin := \"A\"+Chr(0)+Chr(255)+\"B\"\n   FOR EACH cName IN { \"ALLTRIM\"\
+        , ;\n      \"ASC\", ;\n      \"AT\", ;\n      \"BIN2I\", ;\n      \"BIN2L\", ;\n      \"BIN2W\", ;\n      \"CHR\"\
+        , ;\n      \"DESCEND\", ;\n      \"HARDCR\", ;\n      \"HB_ANSITOOEM\", ;\n      \"HB_ASCIIISALPHA\", ;\n      \"\
+        HB_ASCIIISDIGIT\", ;\n      \"HB_ASCIIISLOWER\", ;\n      \"HB_ASCIIISUPPER\", ;\n      \"HB_ASCIILOWER\", ;\n   \
+        \   \"HB_ASCIIUPPER\", ;\n      \"HB_AT\", ;\n      \"HB_ATI\", ;\n      \"HB_ATOKENS\", ;\n      \"HB_ATX\", ;\n\
+        \      \"HB_BASE64DECODE\", ;\n      \"HB_BASE64ENCODE\", ;\n      \"HB_BAT\", ;\n      \"HB_BCHAR\", ;\n      \"\
+        HB_BCODE\", ;\n      \"HB_BLEFT\", ;\n      \"HB_BLEN\", ;\n      \"HB_BPADC\", ;\n      \"HB_BPADL\", ;\n      \"\
+        HB_BPADR\", ;\n      \"HB_BPEEK\", ;\n      \"HB_BPOKE\", ;\n      \"HB_BRAT\", ;\n      \"HB_BRIGHT\", ;\n      \"\
+        HB_BSTUFF\", ;\n      \"HB_BSUBSTR\", ;\n      \"HB_HEXTONUM\", ;\n      \"HB_HEXTOSTR\", ;\n      \"HB_ISREGEX\"\
+        , ;\n      \"HB_JSONDECODE\", ;\n      \"HB_JSONENCODE\", ;\n      \"HB_LEFTEQ\", ;\n      \"HB_LEFTEQI\", ;\n   \
+        \   \"HB_MLEVAL\", ;\n      \"HB_NTOC\", ;\n      \"HB_NTOS\", ;\n      \"HB_NUMTOHEX\", ;\n      \"HB_OEMTOANSI\"\
+        , ;\n      \"HB_RAT\", ;\n      \"HB_REGEX\", ;\n      \"HB_REGEXALL\", ;\n      \"HB_REGEXATX\", ;\n      \"HB_REGEXCOMP\"\
+        , ;\n      \"HB_REGEXHAS\", ;\n      \"HB_REGEXLIKE\", ;\n      \"HB_REGEXMATCH\", ;\n      \"HB_REGEXSPLIT\", ;\n\
+        \      \"HB_STRCDECODE\", ;\n      \"HB_STRCLEAR\", ;\n      \"HB_STRDECODESCAPE\", ;\n      \"HB_STRFORMAT\", ;\n\
+        \      \"HB_STRISUTF8\", ;\n      \"HB_STRREPLACE\", ;\n      \"HB_STRSHRINK\", ;\n      \"HB_STRTOEXP\", ;\n    \
+        \  \"HB_STRTOHEX\", ;\n      \"HB_STRTOUTF8\", ;\n      \"HB_STRXOR\", ;\n      \"HB_TOKENCOUNT\", ;\n      \"HB_TOKENGET\"\
+        , ;\n      \"HB_TOKENPTR\", ;\n      \"HB_TRANSLATE\", ;\n      \"HB_UAT\", ;\n      \"HB_UCHAR\", ;\n      \"HB_UCODE\"\
+        , ;\n      \"HB_ULEFT\", ;\n      \"HB_ULEN\", ;\n      \"HB_UPADC\", ;\n      \"HB_UPADL\", ;\n      \"HB_UPADR\"\
+        , ;\n      \"HB_UPEEK\", ;\n      \"HB_UPOKE\", ;\n      \"HB_URIGHT\", ;\n      \"HB_USTUFF\", ;\n      \"HB_USUBSTR\"\
+        , ;\n      \"HB_UTF8ASC\", ;\n      \"HB_UTF8AT\", ;\n      \"HB_UTF8CHR\", ;\n      \"HB_UTF8LEFT\", ;\n      \"\
+        HB_UTF8LEN\", ;\n      \"HB_UTF8PEEK\", ;\n      \"HB_UTF8POKE\", ;\n      \"HB_UTF8RAT\", ;\n      \"HB_UTF8RIGHT\"\
+        , ;\n      \"HB_UTF8STRTRAN\", ;\n      \"HB_UTF8STUFF\", ;\n      \"HB_UTF8SUBSTR\", ;\n      \"HB_UTF8TOSTR\", ;\n\
+        \      \"HB_VAL\", ;\n      \"HB_VALTOSTR\", ;\n      \"HB_WILDMATCH\", ;\n      \"HB_WILDMATCHI\", ;\n      \"I2BIN\"\
+        , ;\n      \"ISALPHA\", ;\n      \"ISDIGIT\", ;\n      \"ISLOWER\", ;\n      \"ISUPPER\", ;\n      \"L2BIN\", ;\n\
+        \      \"LEFT\", ;\n      \"LEN\", ;\n      \"LOWER\", ;\n      \"LTRIM\", ;\n      \"MEMOLINE\", ;\n      \"MEMOTRAN\"\
+        , ;\n      \"MLCOUNT\", ;\n      \"MLCTOPOS\", ;\n      \"MLPOS\", ;\n      \"MPOSTOLC\", ;\n      \"PAD\", ;\n  \
+        \    \"PADC\", ;\n      \"PADL\", ;\n      \"PADR\", ;\n      \"RAT\", ;\n      \"REPLICATE\", ;\n      \"RIGHT\"\
+        , ;\n      \"RTRIM\", ;\n      \"SOUNDEX\", ;\n      \"SPACE\", ;\n      \"STR\", ;\n      \"STRTRAN\", ;\n      \"\
+        STRZERO\", ;\n      \"STUFF\", ;\n      \"SUBSTR\", ;\n      \"TRANSFORM\", ;\n      \"TRIM\", ;\n      \"UPPER\"\
+        , ;\n      \"VAL\", ;\n      \"REVERSE\" }\n      IF !hb_IsFunction(cName)\n         RETURN \"MISSING:\"+cName\n \
+        \     ENDIF\n   NEXT\n   cTok := hb_TokenPtr(\"a|b\",@nPos,\"|\")\n   IF Len(a) != 2 .OR. a[2] != \"b\" .OR. hb_TokenCount(\"\
+        a|b\",\"|\") != 2 .OR. ;\n      hb_TokenGet(\"a|b\",2,\"|\") != \"b\" .OR. cTok != \"a\" .OR. ;\n      Reverse(\"\
+        A\"+Chr(0)+\"B\") != \"B\"+Chr(0)+\"A\" .OR. Reverse(\"\") != \"\"\n      RETURN \"BAD\"\n   ENDIF\n   IF Right(\"\
+        abcd\",2) != \"cd\" .OR. PadR(\"a\",3,\"x\") != \"axx\" .OR. ;\n      PadL(\"a\",3,\"x\") != \"xxa\" .OR. PadC(\"\
+        a\",3,\"x\") != \"xax\" .OR. ;\n      hb_Utf8Len(hb_Utf8Chr(233)) != 1 .OR. hb_StrToHex(\"A\"+Chr(0)) != \"4100\"\n\
+        \      RETURN \"BADSTR\"\n   ENDIF\n   cJson := hb_JsonEncode({\"alpha\",123,.T.})\n   IF hb_JsonDecode(cJson,@aJson)\
+        \ != Len(cJson)\n      RETURN \"BADJSON\"\n   ENDIF\n   IF Len(aJson) != 3 .OR. aJson[1] != \"alpha\" .OR. aJson[2]\
+        \ != 123 .OR. !aJson[3] .OR. ;\n      hb_Base64Decode(hb_Base64Encode(cBin)) != cBin\n      RETURN \"BADCODEC\"\n\
+        \   ENDIF\n   RETURN \"OAUTH\"+Chr(1)+Chr(0)+Replicate(Chr(0),4)\nEOF\n\"$HBCC\" output/rtl_family.prg -gh -ooutput/rtl_family.hrb\n"
     - name: Protect test-only module and run worker/DB proofs
       shell: pwsh
       run: "$hrb=(Resolve-Path output/test_only.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n\
@@ -73,20 +108,175 @@ jobs:
         \ {\n if(-not (Select-String -Path output/exports.txt -Pattern $symbol)){throw \"Missing export $symbol\"}\n}\nGet-Item\
         \ build-auth/src/*ace*.dll,build-auth/tools/serverd/openads_auth_worker.exe,build-auth/tools/serverd/openads_serverd.exe\
         \ | Select-Object Name,Length | Out-File output/sizes.txt\n"
-    - name: Verify token family and binary REVERSE in native worker
+    - name: Verify enumerated RTL strings, JSON, Base64 and REVERSE in native worker
       shell: pwsh
       run: "$hrb=(Resolve-Path output/rtl_family.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n\
         icacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE\
         \ -ne 0){throw 'ACL failed'}\n& objdump -t build-auth/tools/serverd/openads_auth_worker.exe > output/worker-symbols.txt\n\
-        if($LASTEXITCODE -ne 0){throw 'symbol dump failed'}\nforeach($symbol in @('HB_ATOKENS','HB_TOKENCOUNT','HB_TOKENGET','HB_TOKENPTR','REVERSE'))\
+        if($LASTEXITCODE -ne 0){throw 'symbol dump failed'}\nforeach($symbol in @('ALLTRIM','ASC','AT','BIN2I','BIN2L','BIN2W','CHR','DESCEND','HARDCR','HB_ANSITOOEM','HB_ASCIIISALPHA','HB_ASCIIISDIGIT','HB_ASCIIISLOWER','HB_ASCIIISUPPER','HB_ASCIILOWER','HB_ASCIIUPPER','HB_AT','HB_ATI','HB_ATOKENS','HB_ATX','HB_BASE64DECODE','HB_BASE64ENCODE','HB_BAT','HB_BCHAR','HB_BCODE','HB_BLEFT','HB_BLEN','HB_BPADC','HB_BPADL','HB_BPADR','HB_BPEEK','HB_BPOKE','HB_BRAT','HB_BRIGHT','HB_BSTUFF','HB_BSUBSTR','HB_HEXTONUM','HB_HEXTOSTR','HB_ISREGEX','HB_JSONDECODE','HB_JSONENCODE','HB_LEFTEQ','HB_LEFTEQI','HB_MLEVAL','HB_NTOC','HB_NTOS','HB_NUMTOHEX','HB_OEMTOANSI','HB_RAT','HB_REGEX','HB_REGEXALL','HB_REGEXATX','HB_REGEXCOMP','HB_REGEXHAS','HB_REGEXLIKE','HB_REGEXMATCH','HB_REGEXSPLIT','HB_STRCDECODE','HB_STRCLEAR','HB_STRDECODESCAPE','HB_STRFORMAT','HB_STRISUTF8','HB_STRREPLACE','HB_STRSHRINK','HB_STRTOEXP','HB_STRTOHEX','HB_STRTOUTF8','HB_STRXOR','HB_TOKENCOUNT','HB_TOKENGET','HB_TOKENPTR','HB_TRANSLATE','HB_UAT','HB_UCHAR','HB_UCODE','HB_ULEFT','HB_ULEN','HB_UPADC','HB_UPADL','HB_UPADR','HB_UPEEK','HB_UPOKE','HB_URIGHT','HB_USTUFF','HB_USUBSTR','HB_UTF8ASC','HB_UTF8AT','HB_UTF8CHR','HB_UTF8LEFT','HB_UTF8LEN','HB_UTF8PEEK','HB_UTF8POKE','HB_UTF8RAT','HB_UTF8RIGHT','HB_UTF8STRTRAN','HB_UTF8STUFF','HB_UTF8SUBSTR','HB_UTF8TOSTR','HB_VAL','HB_VALTOSTR','HB_WILDMATCH','HB_WILDMATCHI','I2BIN','ISALPHA','ISDIGIT','ISLOWER','ISUPPER','L2BIN','LEFT','LEN','LOWER','LTRIM','MEMOLINE','MEMOTRAN','MLCOUNT','MLCTOPOS','MLPOS','MPOSTOLC','PAD','PADC','PADL','PADR','RAT','REPLICATE','RIGHT','RTRIM','SOUNDEX','SPACE','STR','STRTRAN','STRZERO','STUFF','SUBSTR','TRANSFORM','TRIM','UPPER','VAL','REVERSE'))\
         \ {\n if(-not (Select-String -Path output/worker-symbols.txt -Pattern \"HB_FUN_${symbol}$\")){throw \"Missing worker\
         \ function $symbol\"}\n}\npython -c \"import subprocess,struct; w='build-auth/tools/serverd/openads_auth_worker.exe';\
         \ m='output/rtl_family.hrb'; p=subprocess.run([w,m],input=b'P',capture_output=True,timeout=5); assert p.returncode==0\
         \ and p.stdout==b'READY',(p.returncode,p.stdout,p.stderr); print('READY probe PASS'); f=b'A'+bytes(range(32))+struct.pack('<I',1)+b'x'+struct.pack('<I',0);\
         \ p=subprocess.run([w,m],input=f,capture_output=True,timeout=5); assert p.returncode==0 and p.stdout==b'OAUTH'+bytes([1,0])+bytes(4),(p.returncode,p.stdout,p.stderr);\
-        \ print('token family and NUL-byte REVERSE live call PASS')\" | Tee-Object output/rtl-live-proof.txt\nif($LASTEXITCODE\
-        \ -ne 0){throw 'RTL live proof failed'}\nGet-FileHash build-auth/tools/serverd/openads_auth_worker.exe -Algorithm\
-        \ SHA256 | Format-List | Out-File output/worker-sha256.txt\n"
+        \ print('token-family, padding, UTF8, JSON, binary-Base64 and REVERSE live calls PASS')\" | Tee-Object output/rtl-live-proof.txt\n\
+        if($LASTEXITCODE -ne 0){throw 'RTL live proof failed'}\nGet-FileHash build-auth/tools/serverd/openads_auth_worker.exe\
+        \ -Algorithm SHA256 | Format-List | Out-File output/worker-sha256.txt\n"
+    - name: Package UNMERGED owner-test binaries only
+      shell: pwsh
+      run: '$root=''output/hrb-auth-UNMERGED-${{ matrix.arch }}''
+
+        New-Item -ItemType Directory -Force "$root/bin","$root/lib","$root/include","$root/contrib","$root/docs" | Out-Null
+
+        Copy-Item build-auth/src/*ace*.dll "$root/bin/"
+
+        Copy-Item build-auth/src/*openace*.a "$root/lib/"
+
+        Copy-Item build-auth/tools/serverd/openads_serverd.exe,build-auth/tools/serverd/openads_auth_worker.exe "$root/bin/"
+
+        $gccdir=Split-Path (Get-Command gcc.exe).Source
+
+        Get-ChildItem "$gccdir/*.dll" | Where-Object { $_.Name -match ''^lib(gcc_s|stdc\+\+|winpthread)'' } | Copy-Item -Destination
+        "$root/bin/"
+
+        Copy-Item include/openads/ace.h "$root/include/"
+
+        Copy-Item contrib/oads_hb/oads_hb.c "$root/contrib/"
+
+        Copy-Item docs/HRB_CHALLENGE_AUTH_SPIKE.md "$root/docs/"
+
+        @''
+
+        UNMERGED TEST ONLY - Pritpal Bedi owner testing. No release/main/PR.
+
+        Use matching x86/x64 files. Compiler stays Winlibs GCC10.2, Qt unchanged.
+
+        Server: openads_serverd.exe --port 6262 --data <root> --auth_module <absolute own.hrb>
+
+        The .hrb must have OADS_AUTH_V1(cChallenge,cBlob,cContext), exact result contract in docs.
+
+        Protect own.hrb ACL to service identity/SYSTEM/Administrators only; inheritance off.
+
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: x86
+          bits: 32
+          checksum: 019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907
+          folder: mingw32
+          url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z
+          checksum_url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 79387d988a753ff59b55e014807713c8edafa673
+        persist-credentials: false
+    - name: Download and verify Winlibs GCC10.2
+      shell: pwsh
+      run: 'Invoke-WebRequest ''${{ matrix.url }}'' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+
+        $sum = (Invoke-WebRequest ''${{ matrix.checksum_url }}'').Content
+
+        $expected = ''${{ matrix.checksum }}''
+
+        Write-Host "Expected: $expected"
+
+        $actual = (Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower()
+
+        Write-Host "Actual: $actual"
+
+        if ($actual -ne $expected) { throw ''Toolchain digest mismatch'' }
+
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        "$env:RUNNER_TEMP/winlibs/${{ matrix.folder }}/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+        '
+    - name: Build matching Harbour and native isolated worker proofs
+      shell: bash
+      run: "set -euxo pipefail\nmkdir -p output\ngcc -v 2> output/toolchain.txt\ntest \"$(gcc -dumpfullversion)\" = 10.2.0\n\
+        git clone https://github.com/harbour/core.git \"$RUNNER_TEMP/harbour-auth\"\ncd \"$RUNNER_TEMP/harbour-auth\"\ngit\
+        \ checkout 6deac9cf3ad977ae829e5bca543d553b92dd4b6d\nexport HB_COMPILER=${{ matrix.bits == 32 && 'mingw' || 'mingw64'\
+        \ }}\nexport HB_BUILD_CONTRIBS=no\nexport HB_BUILD_DYN=no\nmingw32-make -j2\ncd \"$GITHUB_WORKSPACE\"\nHBROOT=\"$RUNNER_TEMP/harbour-auth\"\
+        \nHBINC=\"$HBROOT/include\"\nHBLIB=\"$HBROOT/lib/win/$HB_COMPILER\"\nHBCC=\"$HBROOT/bin/win/$HB_COMPILER/harbour.exe\"\
+        \ncmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600\
+        \ -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_BUILD_ACE_STATIC=ON -DOPENADS_WITH_HTTP=OFF\
+        \ -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR=\"$HBINC\"\
+        \ -DHARBOUR_LIB_DIR=\"$HBLIB\" '-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon'\n\
+        cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe\
+        \ auth_spike_integration_probe -j2\n\"$HBCC\" tests/hrb/auth-spike/test_only.prg -gh -ooutput/test_only.hrb\n\ncat\
+        \ > output/rtl_family.prg <<'EOF'\nFUNCTION OADS_AUTH_V1(cChallenge,cBlob,cContext)\n   LOCAL a := hb_ATokens(\"a|b\"\
+        , \"|\"), nPos := 0, cTok, cJson, aJson, cName, cBin := \"A\"+Chr(0)+Chr(255)+\"B\"\n   IF cBlob == \"__link_only_never_sent\"\
+        \n      ALLTRIM(NIL)\n      ASC(NIL)\n      AT(NIL,NIL)\n      BIN2I(NIL)\n      BIN2L(NIL)\n      BIN2W(NIL)\n  \
+        \    CHR(NIL)\n      DESCEND(NIL)\n      HARDCR(NIL)\n      HB_ANSITOOEM(NIL)\n      HB_ASCIIISALPHA(NIL)\n      HB_ASCIIISDIGIT(NIL)\n\
+        \      HB_ASCIIISLOWER(NIL)\n      HB_ASCIIISUPPER(NIL)\n      HB_ASCIILOWER(NIL)\n      HB_ASCIIUPPER(NIL)\n    \
+        \  HB_AT(NIL)\n      HB_ATI(NIL)\n      HB_ATOKENS(NIL)\n      HB_ATX(NIL)\n      HB_BASE64DECODE(NIL)\n      HB_BASE64ENCODE(NIL)\n\
+        \      HB_BAT(NIL)\n      HB_BCHAR(NIL)\n      HB_BCODE(NIL)\n      HB_BLEFT(NIL)\n      HB_BLEN(NIL)\n      HB_BPADC(NIL)\n\
+        \      HB_BPADL(NIL)\n      HB_BPADR(NIL)\n      HB_BPEEK(NIL)\n      HB_BPOKE(NIL)\n      HB_BRAT(NIL)\n      HB_BRIGHT(NIL)\n\
+        \      HB_BSTUFF(NIL)\n      HB_BSUBSTR(NIL)\n      HB_HEXTONUM(NIL)\n      HB_HEXTOSTR(NIL)\n      HB_ISREGEX(NIL)\n\
+        \      HB_JSONDECODE(NIL)\n      HB_JSONENCODE(NIL)\n      HB_LEFTEQ(NIL)\n      HB_LEFTEQI(NIL)\n      HB_MLEVAL(NIL)\n\
+        \      HB_NTOC(NIL)\n      HB_NTOS(NIL)\n      HB_NUMTOHEX(NIL)\n      HB_OEMTOANSI(NIL)\n      HB_RAT(NIL)\n    \
+        \  HB_REGEX(NIL)\n      HB_REGEXALL(NIL)\n      HB_REGEXATX(NIL)\n      HB_REGEXCOMP(NIL)\n      HB_REGEXHAS(NIL)\n\
+        \      HB_REGEXLIKE(NIL)\n      HB_REGEXMATCH(NIL)\n      HB_REGEXSPLIT(NIL)\n      HB_STRCDECODE(NIL)\n      HB_STRCLEAR(NIL)\n\
+        \      HB_STRDECODESCAPE(NIL)\n      HB_STRFORMAT(NIL)\n      HB_STRISUTF8(NIL)\n      HB_STRREPLACE(NIL)\n      HB_STRSHRINK(NIL)\n\
+        \      HB_STRTOEXP(NIL)\n      HB_STRTOHEX(NIL)\n      HB_STRTOUTF8(NIL)\n      HB_STRXOR(NIL)\n      HB_TOKENCOUNT(NIL)\n\
+        \      HB_TOKENGET(NIL)\n      HB_TOKENPTR(NIL)\n      HB_TRANSLATE(NIL)\n      HB_UAT(NIL)\n      HB_UCHAR(NIL)\n\
+        \      HB_UCODE(NIL)\n      HB_ULEFT(NIL)\n      HB_ULEN(NIL)\n      HB_UPADC(NIL)\n      HB_UPADL(NIL)\n      HB_UPADR(NIL)\n\
+        \      HB_UPEEK(NIL)\n      HB_UPOKE(NIL)\n      HB_URIGHT(NIL)\n      HB_USTUFF(NIL)\n      HB_USUBSTR(NIL)\n   \
+        \   HB_UTF8ASC(NIL)\n      HB_UTF8AT(NIL)\n      HB_UTF8CHR(NIL)\n      HB_UTF8LEFT(NIL)\n      HB_UTF8LEN(NIL)\n\
+        \      HB_UTF8PEEK(NIL)\n      HB_UTF8POKE(NIL)\n      HB_UTF8RAT(NIL)\n      HB_UTF8RIGHT(NIL)\n      HB_UTF8STRTRAN(NIL)\n\
+        \      HB_UTF8STUFF(NIL)\n      HB_UTF8SUBSTR(NIL)\n      HB_UTF8TOSTR(NIL)\n      HB_VAL(NIL)\n      HB_VALTOSTR(NIL)\n\
+        \      HB_WILDMATCH(NIL)\n      HB_WILDMATCHI(NIL)\n      I2BIN(NIL)\n      ISALPHA(NIL)\n      ISDIGIT(NIL)\n   \
+        \   ISLOWER(NIL)\n      ISUPPER(NIL)\n      L2BIN(NIL)\n      LEFT(NIL,NIL)\n      LEN(NIL)\n      LOWER(NIL)\n  \
+        \    LTRIM(NIL)\n      MEMOLINE(NIL)\n      MEMOTRAN(NIL)\n      MLCOUNT(NIL)\n      MLCTOPOS(NIL)\n      MLPOS(NIL)\n\
+        \      MPOSTOLC(NIL)\n      PAD(NIL)\n      PADC(NIL)\n      PADL(NIL)\n      PADR(NIL)\n      RAT(NIL)\n      REPLICATE(NIL,NIL)\n\
+        \      RIGHT(NIL)\n      RTRIM(NIL)\n      SOUNDEX(NIL)\n      SPACE(NIL)\n      STR(NIL)\n      STRTRAN(NIL)\n  \
+        \    STRZERO(NIL)\n      STUFF(NIL)\n      SUBSTR(NIL,NIL)\n      TRANSFORM(NIL,NIL)\n      TRIM(NIL)\n      UPPER(NIL)\n\
+        \      VAL(NIL)\n      REVERSE(NIL)\n   ENDIF\n   cTok := hb_TokenPtr(\"a|b\",@nPos,\"|\")\n   IF Len(a) != 2 .OR.\
+        \ a[2] != \"b\" .OR. hb_TokenCount(\"a|b\",\"|\") != 2 .OR. ;\n      hb_TokenGet(\"a|b\",2,\"|\") != \"b\" .OR. cTok\
+        \ != \"a\" .OR. ;\n      Reverse(\"A\"+Chr(0)+\"B\") != \"B\"+Chr(0)+\"A\" .OR. Reverse(\"\") != \"\"\n      RETURN\
+        \ \"BAD\"\n   ENDIF\n   IF Right(\"abcd\",2) != \"cd\" .OR. PadR(\"a\",3,\"x\") != \"axx\" .OR. ;\n      PadL(\"a\"\
+        ,3,\"x\") != \"xxa\" .OR. PadC(\"a\",3,\"x\") != \"xax\" .OR. ;\n      hb_Utf8Len(hb_Utf8Chr(233)) != 1 .OR. hb_StrToHex(\"\
+        A\"+Chr(0)) != \"4100\"\n      RETURN \"BADSTR\"\n   ENDIF\n   cJson := hb_JsonEncode({\"alpha\",123,.T.})\n   IF\
+        \ hb_JsonDecode(cJson,@aJson) != Len(cJson)\n      RETURN \"BADJSON\"\n   ENDIF\n   IF Len(aJson) != 3 .OR. aJson[1]\
+        \ != \"alpha\" .OR. aJson[2] != 123 .OR. !aJson[3] .OR. ;\n      hb_Base64Decode(hb_Base64Encode(cBin)) != cBin\n\
+        \      RETURN \"BADCODEC\"\n   ENDIF\n   RETURN \"OAUTH\"+Chr(1)+Chr(0)+Replicate(Chr(0),4)\nEOF\n\"$HBCC\" output/rtl_family.prg\
+        \ -gh -ooutput/rtl_family.hrb\n"
+    - name: Protect test-only module and run worker/DB proofs
+      shell: pwsh
+      run: "$hrb=(Resolve-Path output/test_only.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n\
+        icacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE\
+        \ -ne 0){throw 'ACL failed'}\n$worker=(Resolve-Path build-auth/tools/serverd/openads_auth_worker.exe).Path\n& build-auth/tools/serverd/auth_spike_worker_probe.exe\
+        \ $worker $hrb | Tee-Object output/worker-proof.txt\nif($LASTEXITCODE -ne 0){throw 'worker proof failed'}\n& build-auth/tools/serverd/auth_spike_integration_probe.exe\
+        \ $worker $hrb | Tee-Object output/db-proof.txt\nif($LASTEXITCODE -ne 0){throw 'DB proof failed'}\n$dll=@(Get-ChildItem\
+        \ build-auth/src/*ace*.dll)\nif($dll.Count -ne 1){throw 'Expected one matching ACE DLL'}\n& objdump -p $dll[0].FullName\
+        \ > output/exports.txt\nif($LASTEXITCODE -ne 0){throw 'Export dump failed'}\nforeach($symbol in @('OAdsBeginAuth','OAdsCompleteAuth','OAdsCancelAuth'))\
+        \ {\n if(-not (Select-String -Path output/exports.txt -Pattern $symbol)){throw \"Missing export $symbol\"}\n}\nGet-Item\
+        \ build-auth/src/*ace*.dll,build-auth/tools/serverd/openads_auth_worker.exe,build-auth/tools/serverd/openads_serverd.exe\
+        \ | Select-Object Name,Length | Out-File output/sizes.txt\n"
+    - name: Verify enumerated RTL strings, JSON, Base64 and REVERSE in native worker
+      shell: pwsh
+      run: "$hrb=(Resolve-Path output/rtl_family.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n\
+        icacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE\
+        \ -ne 0){throw 'ACL failed'}\n& objdump -t build-auth/tools/serverd/openads_auth_worker.exe > output/worker-symbols.txt\n\
+        if($LASTEXITCODE -ne 0){throw 'symbol dump failed'}\nforeach($symbol in @('ALLTRIM','ASC','AT','BIN2I','BIN2L','BIN2W','CHR','DESCEND','HARDCR','HB_ANSITOOEM','HB_ASCIIISALPHA','HB_ASCIIISDIGIT','HB_ASCIIISLOWER','HB_ASCIIISUPPER','HB_ASCIILOWER','HB_ASCIIUPPER','HB_AT','HB_ATI','HB_ATOKENS','HB_ATX','HB_BASE64DECODE','HB_BASE64ENCODE','HB_BAT','HB_BCHAR','HB_BCODE','HB_BLEFT','HB_BLEN','HB_BPADC','HB_BPADL','HB_BPADR','HB_BPEEK','HB_BPOKE','HB_BRAT','HB_BRIGHT','HB_BSTUFF','HB_BSUBSTR','HB_HEXTONUM','HB_HEXTOSTR','HB_ISREGEX','HB_JSONDECODE','HB_JSONENCODE','HB_LEFTEQ','HB_LEFTEQI','HB_MLEVAL','HB_NTOC','HB_NTOS','HB_NUMTOHEX','HB_OEMTOANSI','HB_RAT','HB_REGEX','HB_REGEXALL','HB_REGEXATX','HB_REGEXCOMP','HB_REGEXHAS','HB_REGEXLIKE','HB_REGEXMATCH','HB_REGEXSPLIT','HB_STRCDECODE','HB_STRCLEAR','HB_STRDECODESCAPE','HB_STRFORMAT','HB_STRISUTF8','HB_STRREPLACE','HB_STRSHRINK','HB_STRTOEXP','HB_STRTOHEX','HB_STRTOUTF8','HB_STRXOR','HB_TOKENCOUNT','HB_TOKENGET','HB_TOKENPTR','HB_TRANSLATE','HB_UAT','HB_UCHAR','HB_UCODE','HB_ULEFT','HB_ULEN','HB_UPADC','HB_UPADL','HB_UPADR','HB_UPEEK','HB_UPOKE','HB_URIGHT','HB_USTUFF','HB_USUBSTR','HB_UTF8ASC','HB_UTF8AT','HB_UTF8CHR','HB_UTF8LEFT','HB_UTF8LEN','HB_UTF8PEEK','HB_UTF8POKE','HB_UTF8RAT','HB_UTF8RIGHT','HB_UTF8STRTRAN','HB_UTF8STUFF','HB_UTF8SUBSTR','HB_UTF8TOSTR','HB_VAL','HB_VALTOSTR','HB_WILDMATCH','HB_WILDMATCHI','I2BIN','ISALPHA','ISDIGIT','ISLOWER','ISUPPER','L2BIN','LEFT','LEN','LOWER','LTRIM','MEMOLINE','MEMOTRAN','MLCOUNT','MLCTOPOS','MLPOS','MPOSTOLC','PAD','PADC','PADL','PADR','RAT','REPLICATE','RIGHT','RTRIM','SOUNDEX','SPACE','STR','STRTRAN','STRZERO','STUFF','SUBSTR','TRANSFORM','TRIM','UPPER','VAL','REVERSE'))\
+        \ {\n if(-not (Select-String -Path output/worker-symbols.txt -Pattern \"HB_FUN_${symbol}$\")){throw \"Missing worker\
+        \ function $symbol\"}\n}\npython -c \"import subprocess,struct; w='build-auth/tools/serverd/openads_auth_worker.exe';\
+        \ m='output/rtl_family.hrb'; p=subprocess.run([w,m],input=b'P',capture_output=True,timeout=5); assert p.returncode==0\
+        \ and p.stdout==b'READY',(p.returncode,p.stdout,p.stderr); print('READY probe PASS'); f=b'A'+bytes(range(32))+struct.pack('<I',1)+b'x'+struct.pack('<I',0);\
+        \ p=subprocess.run([w,m],input=f,capture_output=True,timeout=5); assert p.returncode==0 and p.stdout==b'OAUTH'+bytes([1,0])+bytes(4),(p.returncode,p.stdout,p.stderr);\
+        \ print('token-family, padding, UTF8, JSON, binary-Base64 and REVERSE live calls PASS')\" | Tee-Object output/rtl-live-proof.txt\n\
+        if($LASTEXITCODE -ne 0){throw 'RTL live proof failed'}\nGet-FileHash build-auth/tools/serverd/openads_auth_worker.exe\
+        \ -Algorithm SHA256 | Format-List | Out-File output/worker-sha256.txt\n"
     - name: Package UNMERGED owner-test binaries only
       shell: pwsh
       run: '$root=''output/hrb-auth-UNMERGED-${{ matrix.arch }}''

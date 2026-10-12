@@ -4,6 +4,7 @@
 // but remote DbCreate still wrote MyTable.dbf beside the app; the post-
 // create AdsOpenTable (remote) then failed with ADSCDX/5103.
 #include "doctest.h"
+#include "util/log.h"
 #include "openads/ace.h"
 #include "network/server.h"
 
@@ -20,6 +21,12 @@
 namespace fs = std::filesystem;
 
 namespace {
+struct DiagnosticsOptIn {
+    bool old=openads::util::logging_enabled();
+    DiagnosticsOptIn(){openads::util::set_logging_enabled(true);}
+    ~DiagnosticsOptIn(){openads::util::set_logging_enabled(old);}
+};
+
 
 ADSHANDLE remote_connect(const fs::path& dir, std::uint16_t port) {
     std::string uri = "tcp://127.0.0.1:" + std::to_string(port) + "/" +
@@ -140,6 +147,7 @@ TEST_CASE("remote AdsCreateTable with drive-rooted name still under data dir") {
 }
 
 TEST_CASE("CreateTable diagnostic isolates post-write reopen failure") {
+    DiagnosticsOptIn diagnostics;
     using openads::network::Server;
     auto data = fs::temp_directory_path() / "openads_create_diag_post_open";
     auto diag = data / "create-diag.log";
@@ -194,6 +202,8 @@ TEST_CASE("CreateTable diagnostic isolates post-write reopen failure") {
     std::ifstream log(diag);
     std::string content((std::istreambuf_iterator<char>(log)),
                         std::istreambuf_iterator<char>());
+    CHECK(content.find("table=TBL_") != std::string::npos);
+    CHECK(content.find("USERCFG.dbf") == std::string::npos);
     CHECK(content.find("stage=dbf-write-ok") != std::string::npos);
 #if defined(_WIN32)
     CHECK(content.find("stage=memo-create-fail code=" +
@@ -217,6 +227,7 @@ TEST_CASE("CreateTable diagnostic isolates post-write reopen failure") {
 }
 
 TEST_CASE("CreateTable broad diagnostic records first-user open and append") {
+    DiagnosticsOptIn diagnostics;
     using openads::network::Server;
     auto data = fs::temp_directory_path() / "openads_create_diag_first_user";
     auto diag = data / "create-diag.log";
@@ -244,11 +255,13 @@ TEST_CASE("CreateTable broad diagnostic records first-user open and append") {
     std::ifstream log(diag);
     std::string content((std::istreambuf_iterator<char>(log)),
                         std::istreambuf_iterator<char>());
-    CHECK(content.find("table=USERCFG.dbf stage=dbf-write-ok") != std::string::npos);
-    CHECK(content.find("table=USERCFG.dbf stage=server-open-ok") != std::string::npos);
-    CHECK(content.find("table=USERCFG.dbf stage=client-append-enter") != std::string::npos);
-    CHECK(content.find("table=USERCFG.dbf stage=client-append-ok") != std::string::npos);
-    CHECK(content.find("table=USERCFG.dbf stage=server-first-append-ok") != std::string::npos);
+    CHECK(content.find("table=TBL_") != std::string::npos);
+    CHECK(content.find("USERCFG.dbf") == std::string::npos);
+    CHECK(content.find("stage=dbf-write-ok") != std::string::npos);
+    CHECK(content.find("stage=server-open-ok") != std::string::npos);
+    CHECK(content.find("stage=client-append-enter") != std::string::npos);
+    CHECK(content.find("stage=client-append-ok") != std::string::npos);
+    CHECK(content.find("stage=server-first-append-ok") != std::string::npos);
 #if defined(_WIN32)
     _putenv_s("OPENADS_CREATE_TABLE_DIAG_FILE", "");
 #else

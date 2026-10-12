@@ -15,6 +15,12 @@
 namespace fs = std::filesystem;
 
 namespace {
+struct DiagnosticsOptIn {
+    bool old=openads::util::logging_enabled();
+    DiagnosticsOptIn(){openads::util::set_logging_enabled(true);}
+    ~DiagnosticsOptIn(){openads::util::set_logging_enabled(old);}
+};
+
 
 // Sets an env var for the test's lifetime and clears it on exit (leak-proof
 // across doctest's shared process, even if a REQUIRE throws).
@@ -39,6 +45,7 @@ struct EnvGuard {
 } // namespace
 
 TEST_CASE("OPENADS_REMOTE_ONLY_ACCESS blocks local open/create, allows remote-mode flow") {
+    DiagnosticsOptIn diagnostics;
     const auto dir = fs::temp_directory_path() / "openads_remote_only_access";
     std::error_code ec;
     fs::remove_all(dir, ec);

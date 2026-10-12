@@ -87,9 +87,9 @@ jobs:
          (root/'tests/native_temp_fixture.h').write_bytes(helper)
          files=[]
          for p in (root/'tests').rglob('*.cpp'):
-          s=p.read_text(encoding='utf-8');fixed=re.sub(r'\b(?:std::filesystem|fs)::temp_directory_path\b','openads_test::temp_directory_path',s)
+          s=p.read_text(encoding='utf-8-sig');fixed=re.sub(r'\b(?:std::filesystem|fs)::temp_directory_path\b','openads_test::temp_directory_path',s)
           if fixed!=s:
-           p.write_text('#include "native_temp_fixture.h"\n'+fixed,encoding='utf-8');files.append(str(p))
+           p.write_text('#include "native_temp_fixture.h"\n'+fixed,encoding='utf-8-sig');files.append(str(p))
          changed[str(root)]=files
          assert files, "Fixture instrumentation matched no calls"
         pathlib.Path('output/test-fixture-instrumentation.json').write_text(json.dumps(changed,indent=2),encoding='utf-8')

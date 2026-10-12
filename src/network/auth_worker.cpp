@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <stdexcept>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -18,25 +19,35 @@ extern char** environ;
 #endif
 namespace openads::network {
 namespace {
-std::atomic<unsigned> active{0};
 void put(std::string& s,const std::string& v) {
     for(unsigned i=0;i<4;++i)s.push_back(static_cast<char>(v.size()>>(8*i)));
     s+=v;
 }
 struct Wipe { std::string& s;~Wipe(){volatile char* p=s.empty()?nullptr:&s[0];for(std::size_t i=0;i<s.size();++i)p[i]=0;} };
 }
-AuthWorker::AuthWorker(std::string executable,std::string module):executable_(std::move(executable)),module_(std::move(module)){}
+AuthWorker::AuthWorker(std::string executable,std::string module,unsigned concurrency)
+    :concurrency_(concurrency),executable_(std::move(executable)),module_(std::move(module)){
+    if(concurrency==0 || concurrency>kMaxConcurrency)
+        throw std::invalid_argument("auth_worker_concurrency must be 1..256");
+}
 bool AuthWorker::probe(){std::string out;return run("P",out)&&out=="READY";}
-bool AuthWorker::authenticate(const AuthAttempt::Challenge& c,const std::string& blob,const std::string& ctx,AuthResult& result){
+bool AuthWorker::authenticate(const AuthAttempt::Challenge& c,const std::string& blob,const std::string& ctx,AuthResult& result,bool* capacity_busy){
     result.clear();
+    if(capacity_busy)*capacity_busy=false;
     std::string in="A",out;Wipe wi{in},wo{out};
     in.append(reinterpret_cast<const char*>(c.data()),c.size());put(in,blob);put(in,ctx);
-    return run(in,out)&&parse_auth_result(out,result);
+    return run(in,out,capacity_busy)&&parse_auth_result(out,result);
 }
-bool AuthWorker::run(const std::string& in,std::string& out){
+bool AuthWorker::run(const std::string& in,std::string& out,bool* capacity_busy){
+    if(capacity_busy)*capacity_busy=false;
     out.clear();if(in.size()>16384)return false;
-    if(active.fetch_add(1)>=4){--active;return false;}
-    struct Release{~Release(){--active;}} release;
+    // Bounded admission, no queue or reactor-thread sleep. All sessions on
+    // this daemon share this AuthWorker instance. Busy is not a bad password.
+    auto slots=active_.load();
+    do {
+        if(slots>=concurrency_){if(capacity_busy)*capacity_busy=true;return false;}
+    } while(!active_.compare_exchange_weak(slots,slots+1));
+    struct Release{std::atomic<unsigned>& count;~Release(){--count;}} release{active_};
     auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
     bool ok=false;
 #ifdef _WIN32

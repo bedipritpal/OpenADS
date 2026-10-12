@@ -241,6 +241,21 @@ bool parse_ini(const std::string& text, IniConfig& out, std::string& error) {
             }
             out.http_users.emplace_back(val.substr(0, colon),
                                         val.substr(colon + 1));
+        } else if (key == "auth_worker_concurrency") {
+#ifndef OPENADS_AUTH_CAPACITY_TEST_SWITCH
+            error = "line " + std::to_string(lineno) +
+                    ": auth_worker_concurrency is available in test builds only";
+            return false;
+#else
+            unsigned long n = 0;
+            if (!parse_uint(val, 256, n) || n == 0) {
+                error = "line " + std::to_string(lineno) +
+                        ": auth_worker_concurrency must be 1..256";
+                return false;
+            }
+            out.auth_worker_concurrency = static_cast<std::uint32_t>(n);
+            out.has_auth_worker_concurrency = true;
+#endif
         } else if (key == "auth_user") {
             auto colon = val.find(':');
             if (colon == std::string::npos || colon == 0) {

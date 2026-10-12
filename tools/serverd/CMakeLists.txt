@@ -1,4 +1,8 @@
+option(OPENADS_AUTH_CAPACITY_TEST_SWITCH "TEST ONLY: allow bounded auth_worker_concurrency INI override" OFF)
 add_executable(openads_serverd main.cpp config_ini.cpp setup_wizard.cpp)
+if(OPENADS_AUTH_CAPACITY_TEST_SWITCH)
+    target_compile_definitions(openads_serverd PRIVATE OPENADS_AUTH_CAPACITY_TEST_SWITCH=1)
+endif()
 target_link_libraries(openads_serverd PRIVATE openads_core)
 target_include_directories(openads_serverd PRIVATE
     ${CMAKE_SOURCE_DIR}

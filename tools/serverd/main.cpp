@@ -135,6 +135,7 @@ struct Args {
     bool          diagnostics = false;
     bool          allow_anonymous = false;
     std::string auth_module;
+    unsigned auth_worker_concurrency = openads::network::AuthWorker::kDefaultConcurrency;
     std::string tls_cert_file;
     std::string tls_key_file;
     std::uint16_t port        = 6262;
@@ -294,6 +295,8 @@ bool parse_args(int argc, char** argv, Args& out) {
 // file actually set are touched, so this sits cleanly between the built-in
 // defaults (Args ctor) and the command line: defaults < config file < CLI.
 void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
+    if (cfg.has_auth_worker_concurrency)
+        out.auth_worker_concurrency = cfg.auth_worker_concurrency;
     if (cfg.has_diagnostics) out.diagnostics = cfg.diagnostics;
     if (cfg.has_host)      out.host      = cfg.host;
     if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
@@ -527,7 +530,8 @@ int run_server(const Args& args, bool console) {
 #ifdef _WIN32
         worker_path+=".exe";
 #endif
-        auto worker=std::make_shared<openads::network::AuthWorker>(worker_path,args.auth_module);
+        auto worker=std::make_shared<openads::network::AuthWorker>(worker_path,args.auth_module,args.auth_worker_concurrency);
+        std::fprintf(stderr,"Auth worker concurrency: %u (no queue).\n",args.auth_worker_concurrency);
         if(!worker->probe()){std::fprintf(stderr,"Auth worker/module probe failed.\n");return 1;}
         auto tls=openads::network::make_auth_tls_config();
         if(!tls || !srv.set_tls(tls.value())){std::fprintf(stderr,"Auth TLS initialization failed.\n");return 1;}

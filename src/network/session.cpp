@@ -1869,9 +1869,12 @@ DispatchResult Session::dispatch(const Frame& f) {
                 // Server-owned context, not a claimed username/root from the blob.
                 std::string context="v1;session="+std::to_string(sid_)+";tls=1.3;requested_path="+auth_dir_;
                 std::string blob(f.payload.begin(),f.payload.end());
-                bool accepted=srv_->auth_worker_->authenticate(challenge,blob,context,hrb_result);
+                bool capacity_busy=false;
+                bool accepted=srv_->auth_worker_->authenticate(challenge,blob,context,hrb_result,&capacity_busy);
                 volatile char* bp=blob.empty()?nullptr:&blob[0];
                 for(std::size_t i=0;i<blob.size();++i)bp[i]=0;
+                if(capacity_busy)
+                    return {err("Auth busy",openads::AE_LOGIN_FAILED),true};
                 if(!accepted || !hrb_result.allow) {
                     srv_->login_failed(peer_ip_,"<auth:"+peer_ip_+">");
                     return {err("Auth denied",openads::AE_LOGIN_FAILED),true};

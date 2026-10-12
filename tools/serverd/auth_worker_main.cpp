@@ -1,6 +1,8 @@
 #include "engine/hrb_harbour.h"
 #include <iostream>
 #include "hbapigt.h"
+#include "hbapierr.h"
+#include <algorithm>
 #include <iterator>
 #include <string>
 #include <filesystem>
@@ -18,6 +20,32 @@
 #include <fcntl.h>
 #include <io.h>
 #endif
+// Worker-only RTL surface requested by Pritpal Bedi. Referencing these
+// symbols pulls Harbour's coupled hbtoken object from the static RTL.
+HB_FUNC_EXTERN( HB_ATOKENS );
+HB_FUNC_EXTERN( HB_TOKENCOUNT );
+HB_FUNC_EXTERN( HB_TOKENGET );
+HB_FUNC_EXTERN( HB_TOKENPTR );
+
+// Same byte-reverse semantics as the native OpenADS expression builtin.
+// Preserve embedded NULs; this is not Unicode grapheme reversal.
+HB_FUNC( REVERSE ) {
+    if (!HB_ISCHAR(1)) {
+        hb_errRT_BASE_SubstR(EG_ARG, 3012, nullptr, "REVERSE", HB_ERR_ARGS_BASEPARAMS);
+        return;
+    }
+    std::string value(hb_parc(1), static_cast<std::size_t>(hb_parclen(1)));
+    std::reverse(value.begin(), value.end());
+    hb_retclen(value.data(), static_cast<HB_SIZE>(value.size()));
+}
+HB_INIT_SYMBOLS_BEGIN( openads_auth_worker_rtl__InitSymbols )
+{ "HB_ATOKENS",    { HB_FS_PUBLIC }, { HB_FUNCNAME( HB_ATOKENS ) },    nullptr },
+{ "HB_TOKENCOUNT", { HB_FS_PUBLIC }, { HB_FUNCNAME( HB_TOKENCOUNT ) }, nullptr },
+{ "HB_TOKENGET",   { HB_FS_PUBLIC }, { HB_FUNCNAME( HB_TOKENGET ) },   nullptr },
+{ "HB_TOKENPTR",   { HB_FS_PUBLIC }, { HB_FUNCNAME( HB_TOKENPTR ) },   nullptr },
+{ "REVERSE",       { HB_FS_PUBLIC }, { HB_FUNCNAME( REVERSE ) },       nullptr }
+HB_INIT_SYMBOLS_END( openads_auth_worker_rtl__InitSymbols )
+
 namespace {
 #ifdef _WIN32
 bool read_auth_module(const std::string& path, std::string& contents) {

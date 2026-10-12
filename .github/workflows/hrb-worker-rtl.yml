@@ -1,4 +1,4 @@
-name: Unchanged main native baseline diagnosis (Pritpal Bedi)
+name: 1.09.74 reconciliation native baseline comparison TEST (Pritpal Bedi)
 'on':
   push:
     branches:
@@ -8,7 +8,39 @@ name: Unchanged main native baseline diagnosis (Pritpal Bedi)
 permissions:
   contents: read
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.stage.outputs.sha }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: test-reconcile/1.09.74-main42-43
+        fetch-depth: 0
+    - name: Stage exact selective candidate on new TEST branch only
+      id: stage
+      shell: bash
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/spike-unmerged/hrb-challenge-auth
+        test "$(git rev-parse HEAD)" = 0b92b60bba39305489f7bb2c3e6fe69d872f4506
+        python - <<'PYTHON'
+        import base64,gzip,pathlib,hashlib
+        p=gzip.decompress(base64.b64decode('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'))
+        assert hashlib.sha256(p).hexdigest()=='888fb2d8356c7ea4180a6dca904aa0de8e5cc106fe1ebe9ad22050a6884aaa9c'
+        pathlib.Path('fixture.patch').write_bytes(p)
+        PYTHON
+        git apply --check fixture.patch
+        git apply fixture.patch
+        rm fixture.patch
+        git add .
+        git -c user.name='Pritpal Bedi test assistant' -c user.email='bedipritpal@users.noreply.github.com' commit -m '1.09.74 TEST fix diagnostics fixtures for master gate and masked identities'
+        git push origin HEAD:refs/heads/test-reconcile/1.09.74-main42-43
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   build:
+    needs: prepare
     runs-on: windows-2022
     timeout-minutes: 100
     strategy:
@@ -30,7 +62,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: c450a220570e0fe7036a91aee66fe27ae3bee36d
+        ref: ${{ needs.prepare.outputs.sha }}
         persist-credentials: false
     - name: Download and verify Winlibs GCC10.2
       shell: pwsh
@@ -45,34 +77,99 @@ jobs:
         & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         "$env:RUNNER_TEMP/winlibs/${{ matrix.folder }}/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-    - name: Unchanged main baseline exact runtime comparison
+    - name: Compile candidate and exact unchanged-main baseline
       shell: bash
       run: |
         set -euxo pipefail
         mkdir -p output
-        gcc -v 2> output/toolchain.txt
-        test "$(gcc -dumpfullversion)" = 10.2.0
+        cat > native-temp-probe.cpp <<'CPPEOF'
+        #include <filesystem>
+        #include <windows.h>
+        #include <cstdlib>
+        #include <iostream>
+        int main(){for(auto n:{"TMP","TEMP","TMPDIR"})std::cout<<n<<"="<<(std::getenv(n)?std::getenv(n):"NULL")<<"\n";char b[4096]{};GetTempPathA(sizeof(b),b);std::cout<<"GetTempPathA="<<b<<"\n";std::error_code ec;auto p=std::filesystem::temp_directory_path(ec);std::cout<<"temp="<<p<<" err="<<ec.message()<<"\n";for(auto path:{b,"C:/Windows/Temp"}){ec.clear();auto s=std::filesystem::status(path,ec);std::cout<<path<<" type="<<int(s.type())<<" err="<<ec.message()<<"\n";}return ec?1:0;}
+        CPPEOF
+        g++ -std=c++17 native-temp-probe.cpp -o output/native-temp-probe.exe
         cmake -S . -B build-test -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WITH_HARBOUR_UDF=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_VERSION_FORCE=1.09.74-reconcile-test
-        cmake --build build-test --target openads_serverd openads_unit_tests -j2
-        # First reproduce the original candidate harness exactly, then isolate Windows temp environment.
-        set +e
-        build-test/tests/openads_unit_tests.exe --test-case-exclude='*soak*,*bench*,*5000*' > output/baseline-original-proof.txt
-        original=$?
-        set -e
-        mkdir -p "$RUNNER_TEMP/openads-native-tmp"
-        export TMP="$(cygpath -w "$RUNNER_TEMP/openads-native-tmp")"
-        export TEMP="$TMP" TMPDIR="$TMP"
-        export OPENADS_TEST_SERVERD="$(cygpath -w "$PWD/build-test/tools/serverd/openads_serverd.exe")"
-        set +e
-        build-test/tests/openads_unit_tests.exe --test-case-exclude='*soak*,*bench*,*5000*' > output/baseline-valid-temp-proof.txt
-        fixed=$?
-        set -e
-        printf 'original_status=%s valid_temp_status=%s\n' "$original" "$fixed" > output/baseline-status.txt
+        cmake --build build-test --target openads_ace openads_ace_static openads_serverd openads_unit_tests openads_static_archive_smoke -j2
+        git fetch origin c450a220570e0fe7036a91aee66fe27ae3bee36d
+        git worktree add --detach baseline c450a220570e0fe7036a91aee66fe27ae3bee36d
+        cmake -S baseline -B build-baseline -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WITH_HARBOUR_UDF=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_VERSION_FORCE=1.09.74-reconcile-test
+        cmake --build build-baseline --target openads_serverd openads_unit_tests -j2
         git rev-parse HEAD > output/source-commit.txt
+    - name: Run native suites from PowerShell with same temp environment
+      shell: pwsh
+      run: |
+        $tmp=Join-Path $env:RUNNER_TEMP 'openads-native-valid-temp'
+        New-Item -ItemType Directory -Force $tmp | Out-Null
+        $env:TMP=$tmp; $env:TEMP=$tmp; $env:TMPDIR=$tmp
+        & output/native-temp-probe.exe | Tee-Object output/native-temp-proof.txt
+        $env:OPENADS_TEST_SERVERD=(Resolve-Path build-baseline/tools/serverd/openads_serverd.exe).Path
+        & build-baseline/tests/openads_unit_tests.exe '--test-case-exclude=*soak*,*bench*,*5000*' > output/baseline-proof.txt
+        $baselineStatus=$LASTEXITCODE
+        & build-baseline/tests/openads_unit_tests.exe '--test-case=*5000*,*mtfix35*' > output/baseline-count-proof.txt
+        $env:OPENADS_TEST_SERVERD=(Resolve-Path build-test/tools/serverd/openads_serverd.exe).Path
+        & build-test/tests/openads_unit_tests.exe '--test-case-exclude=*soak*,*bench*,*5000*' > output/unit-proof.txt
+        $candidateStatus=$LASTEXITCODE
+        "baseline_status=$baselineStatus candidate_status=$candidateStatus" | Out-File output/unit-status.txt
+        & build-test/tests/openads_unit_tests.exe '--test-case=*5000*,*mtfix35*' > output/count-proof.txt
+        "count_status=$LASTEXITCODE" | Out-File output/count-status.txt
+        & build-test/tools/serverd/openads_serverd.exe --version > output/version.txt
+        & ctest --test-dir build-test -R 'master_diagnostics_integration|static_archive_link_run|serverd_help_default|portal_health' --output-on-failure > output/ctest-proof.txt
+        if($LASTEXITCODE -ne 0){throw 'Focused CTest failed'}
+    - name: Gate on zero new failures and package test candidate
+      shell: bash
+      run: |
+        set -euxo pipefail
+        python - <<'PYTHON'
+        import pathlib,re,json
+        root=pathlib.Path('output')
+        def failed(name):
+         raw=(root/name).read_bytes()
+         s=raw.decode('utf-16') if raw[:2] in (b'\xff\xfe',b'\xfe\xff') else raw.decode('utf-8-sig',errors='replace')
+         (root/(name+'.utf8')).write_text(s)
+         failures={}
+         for c in s.split('==============================================================================='):
+          match=re.search(r'TEST CASE:\s+([^\n]+)',c)
+          if match and (' ERROR:' in c or ' FATAL' in c):
+           # Compare error count too; no new assertions inside a known-failing case.
+           failures[match.group(1)]=c.count(' ERROR:')+c.count(' FATAL')
+         return failures,s
+        b,bs=failed('baseline-proof.txt');a,cs=failed('unit-proof.txt')
+        new={k:v for k,v in a.items() if v>b.get(k,0)}
+        (root/'baseline-comparison.json').write_text(json.dumps({'baseline_failed_cases':len(b),'candidate_failed_cases':len(a),'new_or_increased_failures':new},indent=2))
+        print((root/'baseline-comparison.json').read_text())
+        assert '[doctest] Status:' in bs and '[doctest] Status:' in cs
+        assert not new, 'New or increased candidate failures'
+        assert 'temp_directory_path: No such file or directory' not in cs, 'Native temp environment still unusable'
+        assert len(a)<300, 'Suite is not exercising enough product behavior'
+        bc,_=failed('baseline-count-proof.txt');ac,_=failed('count-proof.txt')
+        assert not {k:v for k,v in ac.items() if v>bc.get(k,0)}, 'New count regression'
+        version=(root/'version.txt').read_text(encoding='utf-8-sig')
+        assert '1.09.74-reconcile-test' in version
+        # The baseline is visibly not a clean suite. Never label this comparison a full pass.
+        PYTHON
+        BITS=${{ matrix.bits }}
+        g++ -std=c++17 -Iinclude tests/smoke/mingw_static_ace.cpp "build-test/src/libopenace$BITS.a" -static -lws2_32 -lpsapi -o output/static-smoke.exe
+        output/static-smoke.exe > output/static-proof.txt
+        mkdir -p output/client-kit/bin output/client-kit/lib output/client-kit/include output/client-kit/contrib
+        cp build-test/src/*ace*.dll build-test/tools/serverd/openads_serverd.exe output/client-kit/bin/
+        cp build-test/src/*openace*.a output/client-kit/lib/
+        cp include/openads/ace.h output/client-kit/include/
+        cp contrib/oads_hb/oads_hb.c output/client-kit/contrib/
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-rdd-matched"
+        git -C "$RUNNER_TEMP/harbour-rdd-matched" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+        for unit in ads1 adsfunc adsmgmnt adsx; do
+         gcc -c "$RUNNER_TEMP/harbour-rdd-matched/contrib/rddads/$unit.c" -I"$RUNNER_TEMP/harbour-rdd-matched/include" -I"$RUNNER_TEMP/harbour-rdd-matched/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
+        done
+        ar rcs output/client-kit/lib/librddads_openads_static.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
+        cp "$RUNNER_TEMP/harbour-rdd-matched/contrib/rddads/ads.ch" output/client-kit/include/
+        cp docs/master-diagnostics.md docs/MAIN_1_09_74_RECONCILE_TEST.md output/
+        (cd output/client-kit; sha256sum bin/* lib/* include/* contrib/* > SHA256.txt)
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: main-baseline-${{ matrix.arch }}
+        name: 1.09.74-reconcile-test-${{ matrix.arch }}
         path: output/
         if-no-files-found: error
         retention-days: 14

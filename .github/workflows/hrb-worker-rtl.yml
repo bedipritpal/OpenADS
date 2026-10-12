@@ -1,0 +1,174 @@
+name: HRB worker RTL owner test (Pritpal Bedi)
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: x86
+          bits: 32
+          checksum: 019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907
+          folder: mingw32
+          url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z
+          checksum_url: https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z.sha256
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 396276605abef40d9528e68e5467b9f70a4259fd
+        persist-credentials: false
+    - name: Download and verify Winlibs GCC10.2
+      shell: pwsh
+      run: 'Invoke-WebRequest ''${{ matrix.url }}'' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+
+        $sum = (Invoke-WebRequest ''${{ matrix.checksum_url }}'').Content
+
+        $expected = ''${{ matrix.checksum }}''
+
+        Write-Host "Expected: $expected"
+
+        $actual = (Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower()
+
+        Write-Host "Actual: $actual"
+
+        if ($actual -ne $expected) { throw ''Toolchain digest mismatch'' }
+
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+        "$env:RUNNER_TEMP/winlibs/${{ matrix.folder }}/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+        '
+    - name: Build matching Harbour and native isolated worker proofs
+      shell: bash
+      run: "set -euxo pipefail\nmkdir -p output\ngcc -v 2> output/toolchain.txt\ntest \"$(gcc -dumpfullversion)\" = 10.2.0\n\
+        git clone https://github.com/harbour/core.git \"$RUNNER_TEMP/harbour-auth\"\ncd \"$RUNNER_TEMP/harbour-auth\"\ngit\
+        \ checkout 6deac9cf3ad977ae829e5bca543d553b92dd4b6d\nexport HB_COMPILER=${{ matrix.bits == 32 && 'mingw' || 'mingw64'\
+        \ }}\nexport HB_BUILD_CONTRIBS=no\nexport HB_BUILD_DYN=no\nmingw32-make -j2\ncd \"$GITHUB_WORKSPACE\"\nHBROOT=\"$RUNNER_TEMP/harbour-auth\"\
+        \nHBINC=\"$HBROOT/include\"\nHBLIB=\"$HBROOT/lib/win/$HB_COMPILER\"\nHBCC=\"$HBROOT/bin/win/$HB_COMPILER/harbour.exe\"\
+        \ncmake -S . -B build-auth -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600\
+        \ -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_BUILD_ACE_STATIC=ON -DOPENADS_WITH_HTTP=OFF\
+        \ -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR=\"$HBINC\"\
+        \ -DHARBOUR_LIB_DIR=\"$HBLIB\" '-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon'\n\
+        cmake --build build-auth --target openads_auth_worker openads_serverd openads_ace openads_ace_static auth_spike_worker_probe\
+        \ auth_spike_integration_probe -j2\n\"$HBCC\" tests/hrb/auth-spike/test_only.prg -gh -ooutput/test_only.hrb\n\ncat\
+        \ > output/rtl_family.prg <<'EOF'\nFUNCTION OADS_AUTH_V1(cChallenge,cBlob,cContext)\n   LOCAL a := hb_ATokens(\"a|b\"\
+        , \"|\"), nPos := 0, cTok\n   cTok := hb_TokenPtr(\"a|b\",@nPos,\"|\")\n   IF Len(a) != 2 .OR. a[2] != \"b\" .OR.\
+        \ hb_TokenCount(\"a|b\",\"|\") != 2 .OR. ;\n      hb_TokenGet(\"a|b\",2,\"|\") != \"b\" .OR. cTok != \"a\" .OR. ;\n\
+        \      Reverse(\"A\"+Chr(0)+\"B\") != \"B\"+Chr(0)+\"A\" .OR. Reverse(\"\") != \"\"\n      RETURN \"BAD\"\n   ENDIF\n\
+        \   RETURN \"OAUTH\"+Chr(1)+Chr(0)+Replicate(Chr(0),4)\nEOF\n\"$HBCC\" output/rtl_family.prg -gh -ooutput/rtl_family.hrb\n"
+    - name: Protect test-only module and run worker/DB proofs
+      shell: pwsh
+      run: "$hrb=(Resolve-Path output/test_only.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n\
+        icacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE\
+        \ -ne 0){throw 'ACL failed'}\n$worker=(Resolve-Path build-auth/tools/serverd/openads_auth_worker.exe).Path\n& build-auth/tools/serverd/auth_spike_worker_probe.exe\
+        \ $worker $hrb | Tee-Object output/worker-proof.txt\nif($LASTEXITCODE -ne 0){throw 'worker proof failed'}\n& build-auth/tools/serverd/auth_spike_integration_probe.exe\
+        \ $worker $hrb | Tee-Object output/db-proof.txt\nif($LASTEXITCODE -ne 0){throw 'DB proof failed'}\n$dll=@(Get-ChildItem\
+        \ build-auth/src/*ace*.dll)\nif($dll.Count -ne 1){throw 'Expected one matching ACE DLL'}\n& objdump -p $dll[0].FullName\
+        \ > output/exports.txt\nif($LASTEXITCODE -ne 0){throw 'Export dump failed'}\nforeach($symbol in @('OAdsBeginAuth','OAdsCompleteAuth','OAdsCancelAuth'))\
+        \ {\n if(-not (Select-String -Path output/exports.txt -Pattern $symbol)){throw \"Missing export $symbol\"}\n}\nGet-Item\
+        \ build-auth/src/*ace*.dll,build-auth/tools/serverd/openads_auth_worker.exe,build-auth/tools/serverd/openads_serverd.exe\
+        \ | Select-Object Name,Length | Out-File output/sizes.txt\n"
+    - name: Verify token family and binary REVERSE in native worker
+      shell: pwsh
+      run: "$hrb=(Resolve-Path output/rtl_family.hrb).Path\n$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name\n\
+        icacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r \"${me}:(F)\" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'\nif($LASTEXITCODE\
+        \ -ne 0){throw 'ACL failed'}\n& objdump -t build-auth/tools/serverd/openads_auth_worker.exe > output/worker-symbols.txt\n\
+        if($LASTEXITCODE -ne 0){throw 'symbol dump failed'}\nforeach($symbol in @('HB_ATOKENS','HB_TOKENCOUNT','HB_TOKENGET','HB_TOKENPTR','REVERSE'))\
+        \ {\n if(-not (Select-String -Path output/worker-symbols.txt -Pattern \"HB_FUN_${symbol}$\")){throw \"Missing worker\
+        \ function $symbol\"}\n}\npython -c \"import subprocess,struct; w='build-auth/tools/serverd/openads_auth_worker.exe';\
+        \ m='output/rtl_family.hrb'; p=subprocess.run([w,m],input=b'P',capture_output=True,timeout=5); assert p.returncode==0\
+        \ and p.stdout==b'READY',(p.returncode,p.stdout,p.stderr); print('READY probe PASS'); f=b'A'+bytes(range(32))+struct.pack('<I',1)+b'x'+struct.pack('<I',0);\
+        \ p=subprocess.run([w,m],input=f,capture_output=True,timeout=5); assert p.returncode==0 and p.stdout==b'OAUTH'+bytes([1,0])+bytes(4),(p.returncode,p.stdout,p.stderr);\
+        \ print('token family and NUL-byte REVERSE live call PASS')\" | Tee-Object output/rtl-live-proof.txt\nif($LASTEXITCODE\
+        \ -ne 0){throw 'RTL live proof failed'}\nGet-FileHash build-auth/tools/serverd/openads_auth_worker.exe -Algorithm\
+        \ SHA256 | Format-List | Out-File output/worker-sha256.txt\n"
+    - name: Package UNMERGED owner-test binaries only
+      shell: pwsh
+      run: '$root=''output/hrb-auth-UNMERGED-${{ matrix.arch }}''
+
+        New-Item -ItemType Directory -Force "$root/bin","$root/lib","$root/include","$root/contrib","$root/docs" | Out-Null
+
+        Copy-Item build-auth/src/*ace*.dll "$root/bin/"
+
+        Copy-Item build-auth/src/*openace*.a "$root/lib/"
+
+        Copy-Item build-auth/tools/serverd/openads_serverd.exe,build-auth/tools/serverd/openads_auth_worker.exe "$root/bin/"
+
+        $gccdir=Split-Path (Get-Command gcc.exe).Source
+
+        Get-ChildItem "$gccdir/*.dll" | Where-Object { $_.Name -match ''^lib(gcc_s|stdc\+\+|winpthread)'' } | Copy-Item -Destination
+        "$root/bin/"
+
+        Copy-Item include/openads/ace.h "$root/include/"
+
+        Copy-Item contrib/oads_hb/oads_hb.c "$root/contrib/"
+
+        Copy-Item docs/HRB_CHALLENGE_AUTH_SPIKE.md "$root/docs/"
+
+        @''
+
+        UNMERGED TEST ONLY - Pritpal Bedi owner testing. No release/main/PR.
+
+        Use matching x86/x64 files. Compiler stays Winlibs GCC10.2, Qt unchanged.
+
+        Server: openads_serverd.exe --port 6262 --data <root> --auth_module <absolute own.hrb>
+
+        The .hrb must have OADS_AUTH_V1(cChallenge,cBlob,cContext), exact result contract in docs.
+
+        Protect own.hrb ACL to service identity/SYSTEM/Administrators only; inheritance off.
+
+        Keep worker executable beside server. It loads the .hrb fresh per request.
+
+        Client URL: auth://host:port/path. Add matching oads_hb.c glue, ace.h, import or static archive.
+
+        cChallenge := OAds_BeginAuth(cUrl,@hPending)
+
+        cBlob := VouchBuildCredentials(cChallenge)
+
+        hConn := OAds_CompleteAuth(hPending,cBlob)
+
+        No private crypto included. Do NOT deploy synthetic test_only.hrb from proof artifacts.
+
+        TLS1.3 encrypted but SERVER UNVERIFIED: ACTIVE TERMINATION RELAY SUCCEEDS.
+
+        No pooling of extra authenticated sessions; challenge blob4096 bytes, lifetime30s.
+
+        Worker4 concurrent,2s timeout, trusted native module not a sandbox.
+
+        Native worker/normal DD login/wrong-password/DBFCDX record-lock proof passed.
+
+        Worker token-family and byte-REVERSE update only. Prior native gauntlet is separate evidence; real Vouch owner test
+        remains required.
+
+        Test on copies/backups, not production data. Owner''s tested pass required before any merge.
+
+        ''@ | Set-Content "$root/TEST_ONLY_README.txt"
+
+        $hashes=Get-ChildItem "$root" -File -Recurse | Where-Object { $_.Name -ne ''SHA256.txt'' } | Get-FileHash -Algorithm
+        SHA256
+
+        $hashes | ForEach-Object { $_.Hash.ToLower()+''  ''+$_.Path.Substring((Resolve-Path $root).Path.Length+1) } | Set-Content
+        "$root/SHA256.txt"
+
+        Compress-Archive -Path "$root/*" -DestinationPath "output/hrb-auth-UNMERGED-${{ matrix.arch }}.zip"
+
+        '
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: hrb-worker-rtl-x86
+        path: output/
+        if-no-files-found: error
+        retention-days: 14
+'on':
+  push:
+    branches:
+    - spike-unmerged/hrb-challenge-auth
+    paths:
+    - .github/workflows/hrb-worker-rtl.yml
+  workflow_dispatch: {}

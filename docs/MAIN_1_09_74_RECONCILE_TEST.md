@@ -1,0 +1,5 @@
+# 1.09.74 main reconciliation test, Pritpal Bedi
+
+This candidate starts from fork main c450a220 and selectively restores the achieved 42/43 behavior, retaining main-only hardening, documents, portal tests, secret scan and owner directives. No authentication spike or capacity switch is included. Main is not updated by this build. Owner Vouch pass remains required before main integration. Compiler stays checksum-pinned Winlibs GCC10.2, Qt unchanged. Local focused validation 127 cases/4701 assertions plus separate 6 count cases/134 assertions; this is not full platform proof. Native test run includes broader unit checks and matched static kit smoke. Remote fixture/soak/benchmark skips are not claimed passed. Runtime version explicitly 1.09.74-reconcile-test.
+
+New source imports diagnostics default-OFF writer gates/masking, production bag metadata matching, indexed fixed-C trailing-blank wire compaction and regression/static smoke sources. Preserved main frame-reader validation, daemon-only opt-in security and optional fresh counts. No deleted files. New build requires fresh Vouch validation because selectively integrated trees differ from prior tested tag bytes.

@@ -232,6 +232,7 @@ private:
     struct AbiField {
         std::vector<UNSIGNED8> name;    // NUL-terminated, for AdsGetField
         bool                   is_memo = false;
+        bool                   is_fixed_char = false;
     };
     std::unordered_map<ADSHANDLE, std::vector<AbiField>> abi_schema_;
     const std::vector<AbiField>& abi_schema_for(ADSHANDLE h_abi);
@@ -244,7 +245,7 @@ private:
     bool      pack_one_row_engine(std::vector<std::uint8_t>& dst,
                                   openads::engine::Table* tbl);
     bool      pack_one_row_abi(std::vector<std::uint8_t>& dst,
-                               ADSHANDLE h_abi);
+                               ADSHANDLE h_abi, bool compact_fixed_char);
     void      pack_row_trailer(Frame& reply, std::uint32_t id,
                                std::uint16_t lookahead_n = 0,
                                std::int8_t dir = 1);

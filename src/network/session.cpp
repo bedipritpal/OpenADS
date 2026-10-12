@@ -1,3 +1,5 @@
+#include "util/log.h"
+#include <cstdarg>
 #include "network/session.h"
 #include "engine/pbkdf2.h"
 #include "engine/data_dict.h"
@@ -66,7 +68,16 @@ static bool wire_trace_on() {
     static const bool on = std::getenv("OPENADS_WIRE_TRACE") != nullptr;
     return on;
 }
-#define WTRACE(...) do { if (wire_trace_on()) std::fprintf(stderr, __VA_ARGS__); } while (0)
+static void wire_trace_write(const char* fmt, ...) {
+    openads::util::DiagnosticGuard guard;
+    if (!guard || !wire_trace_on()) return;
+    va_list args;
+    va_start(args, fmt);
+    std::vfprintf(stderr, fmt, args);
+    va_end(args);
+}
+// Evaluate database/context arguments before acquiring the writer lock.
+#define WTRACE(...) do { if (wire_trace_on()) wire_trace_write(__VA_ARGS__); } while (0)
 
 namespace {
 
@@ -797,8 +808,8 @@ ADSHANDLE Session::ensure_abi_handle(std::uint32_t id) {
     }
     ADSHANDLE h = 0;
     WTRACE("[wire] ensure_abi_handle id=%u open_name='%s' mode=%u eng_path='%s' eng_recs=%u\n",
-           id, open_name.c_str(), (unsigned)us_mode,
-           tbl->path().c_str(), (unsigned)tbl->record_count());
+           id, openads::util::diagnostic_label(open_name).c_str(), (unsigned)us_mode,
+           openads::util::diagnostic_label(tbl->path()).c_str(), (unsigned)tbl->record_count());
     auto& oi_st = openads::mgmt::process_mg_stats();
     auto oi_us = [](auto a, auto b) {
         return static_cast<std::uint64_t>(
@@ -966,6 +977,7 @@ Session::abi_schema_for(ADSHANDLE h_abi) {
         std::memcpy(fd.name.data(), nm, cap);
         UNSIGNED16 ftype = 0;
         AdsGetFieldType(h_abi, fd.name.data(), &ftype);
+        fd.is_fixed_char = (ftype == ADS_STRING);
         fd.is_memo = (ftype == ADS_MEMO ||
                       ftype == ADS_BINARY ||
                       ftype == ADS_IMAGE);
@@ -975,7 +987,7 @@ Session::abi_schema_for(ADSHANDLE h_abi) {
 }
 
 bool Session::pack_one_row_abi(std::vector<std::uint8_t>& dst,
-                               ADSHANDLE h_abi) {
+                               ADSHANDLE h_abi, bool compact_fixed_char) {
     UNSIGNED16 atend = 0;
     AdsAtEOF(h_abi, &atend);
     if (atend) return false;
@@ -1030,6 +1042,14 @@ bool Session::pack_one_row_abi(std::vector<std::uint8_t>& dst,
         openads::abi::field_read_raw_end();
         if (grc != 0) {
             vcap = 0;
+        }
+        // mtfix43: only indexed RDD fixed-character values. SQL cursors,
+        // memo/binary/variable data and the raw GetRecord image are unchanged.
+        // Remove ASCII spaces only: client AdsGetField restores the same
+        // declared width, reconstructing the bytes even for opaque ciphertext.
+        if (compact_fixed_char && fd.is_fixed_char) {
+            while (vcap > 0 && vbuf[vcap - 1] == static_cast<UNSIGNED8>(' '))
+                --vcap;
         }
         write_u32_p(vcap);
         if (vcap > 0) {
@@ -1099,6 +1119,8 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         twin_limbo = (lb != 0 && le != 0);
     }
     const bool use_engine = (eng_tbl != nullptr) && (h_abi == 0 || twin_limbo);
+    const bool compact_fixed_char = ordered_tables_.count(id) != 0 &&
+                                    cursor_tbls_.count(id) == 0;
     // Pack the current row.
     bool current_packed = false;
     if (use_engine) {
@@ -1147,7 +1169,7 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         } else {
             reply.payload.push_back(1);
             std::vector<std::uint8_t> tmp;
-            if (pack_one_row_abi(tmp, h_abi)) {
+            if (pack_one_row_abi(tmp, h_abi, compact_fixed_char)) {
                 reply.payload.insert(reply.payload.end(),
                     tmp.begin(), tmp.end());
                 current_packed = true;
@@ -1204,7 +1226,7 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
             if (dir > 0) AdsAtEOF(h_abi, &atend); else AdsAtBOF(h_abi, &atend);
             if (atend) break;
             std::vector<std::uint8_t> row;
-            if (!pack_one_row_abi(row, h_abi)) break;
+            if (!pack_one_row_abi(row, h_abi, compact_fixed_char)) break;
             block_bytes += row.size();
             rows.push_back(std::move(row));
             ++taken;
@@ -1554,7 +1576,7 @@ UNSIGNED32 Session::install_table_order(std::uint32_t tid,
             if (AdsGetIndexHandle(ht, tb.data(), &h_fresh) == 0 &&
                 h_fresh != 0 && h_fresh != iit->second) {
                 WTRACE("[wire] SetOrder iid=%u stale handle, healed via tag '%s'\n",
-                       iid, tag.c_str());
+                       iid, "<index-masked>");
                 rrc = AdsSetIndexOrderByHandle(ht, h_fresh);
                 if (rrc == 0) iit->second = h_fresh;
             }
@@ -2258,9 +2280,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!th) {
                 openads::abi::create_diag::log("server-open-fail", th.error().code,
                                               "table-open", th.error().sub_code);
-                std::fprintf(stderr, "[srv] OpenTable FAILED rel='%s' code=%d msg='%s'\n",
-                             rel.c_str(), th.error().code,
-                             th.error().message.c_str());
+                { openads::util::DiagnosticGuard guard; if (guard) std::fprintf(stderr, "[srv] OpenTable FAILED rel='%s' code=%d msg='%s'\n",
+                             openads::util::diagnostic_label(rel).c_str(), th.error().code,
+                             "<detail-masked>"); }
                 reply = err("OpenTable: open failed",
                             static_cast<UNSIGNED32>(th.error().code));
                 break;
@@ -3343,7 +3365,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                                        f.opcode == Opcode::LockRecord ? "LockRecord" : "UnlockRecord",
                                        id, (unsigned)rn, (unsigned)rrc,
                                        lk.user.c_str(), (unsigned)lk.conn_no,
-                                       lk.table.c_str());
+                                       openads::util::diagnostic_label(lk.table).c_str());
                             }
                         }
                         WTRACE("[wire] %s id=%u recno=%u FAILED rrc=%u (no registered holder)\n",
@@ -3357,7 +3379,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                        id, (unsigned)rn,
                        session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       tbl_open_paths_.count(id) ? openads::util::diagnostic_label(tbl_open_paths_[id]).c_str() : "?");
             } else if (f.opcode == Opcode::LockRecord) {
                 // Fail FAST on contention — a single attempt. Retrying
                 // here blocked the session thread for the whole lock
@@ -3376,7 +3398,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                        id, (unsigned)rn,
                        session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       tbl_open_paths_.count(id) ? openads::util::diagnostic_label(tbl_open_paths_[id]).c_str() : "?");
             } else {
                 auto r = tbl->unlock_record(rn);
                 if (!r) { reply = err("UnlockRecord: failed",

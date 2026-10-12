@@ -2,13 +2,24 @@
 #include "util/log.h"
 
 #include <sstream>
+#include <atomic>
+#include <thread>
+#include <chrono>
 #include <string>
 #include <string_view>
 
 using openads::util::Log;
 using openads::util::LogLevel;
+namespace {
+struct LoggingOptIn {
+    bool old = openads::util::logging_enabled();
+    LoggingOptIn() { openads::util::set_logging_enabled(true); }
+    ~LoggingOptIn() { openads::util::set_logging_enabled(old); }
+};
+}
 
 TEST_CASE("Log respects the configured level threshold") {
+    LoggingOptIn logging;
     std::ostringstream out;
     Log log{LogLevel::Info, &out};
 
@@ -23,6 +34,7 @@ TEST_CASE("Log respects the configured level threshold") {
 }
 
 TEST_CASE("Log emits the level prefix") {
+    LoggingOptIn logging;
     std::ostringstream out;
     Log log{LogLevel::Trace, &out};
     log.write(LogLevel::Trace, "tag");
@@ -56,6 +68,7 @@ using openads::util::AuditKind;
 namespace {
 
 struct AuditGuard {
+    LoggingOptIn logging;
     std::ostringstream console;
     std::ostringstream file;
     AuditGuard() {
@@ -173,8 +186,8 @@ TEST_CASE("write_remote_open_audit is a RESOLVED line in the file") {
     AuditGuard g;
     openads::util::write_remote_open_audit("C:/Creative.RAM/USERS.dbf");
     CHECK(g.console.str().find("RESOLVED=\"(remote)\"") != std::string::npos);
-    CHECK(g.console.str().find("ASKED=\"C:/Creative.RAM/USERS.dbf\"") !=
-          std::string::npos);
+    CHECK(g.console.str().find("ASKED=\"TBL_") != std::string::npos);
+    CHECK(g.console.str().find("USERS.dbf") == std::string::npos);
     CHECK(g.console.str().find("VIA=REMOTE") != std::string::npos);
     CHECK(g.file.str() == g.console.str());
 }
@@ -236,4 +249,45 @@ TEST_CASE("set_logging_enabled(false) silences every audit line") {
         "2026-08-16 22:12:13.826");
     CHECK(g.console.str().find("RESOLVED=") != std::string::npos);
     CHECK(g.file.str().find("RESOLVED=") != std::string::npos);
+}
+
+TEST_CASE("master OFF gates ordinary streams and relabels after re-enable") {
+    const bool old = openads::util::logging_enabled();
+    openads::util::set_logging_enabled(false);
+    std::ostringstream out;
+    Log log{LogLevel::Trace, &out};
+    log.write(LogLevel::Error, "hidden");
+    CHECK(out.str().empty());
+    openads::util::set_logging_enabled(true);
+    log.write(LogLevel::Info, "visible");
+    CHECK(out.str().find("visible") != std::string::npos);
+    const auto a = openads::util::diagnostic_label("C:\\Data\\secret.dbf", "one");
+    CHECK(a == openads::util::diagnostic_label("c:/data/SECRET.DBF", "one"));
+    CHECK(a != openads::util::diagnostic_label("c:/data/other.dbf", "one"));
+    CHECK(a != openads::util::diagnostic_label("c:/data/secret.dbf", "two"));
+    CHECK(a.find("secret") == std::string::npos);
+    for (unsigned i = 0; i < 16400; ++i)
+        (void)openads::util::diagnostic_label("bound-" + std::to_string(i));
+    CHECK(openads::util::diagnostic_label("overflow-secret") == "TBL_OVERFLOW");
+    openads::util::set_logging_enabled(old);
+}
+
+TEST_CASE("master OFF waits for active writer and stops following output") {
+    LoggingOptIn on;
+    std::atomic<bool> entered{false}, release{false}, disabled{false};
+    std::thread writer([&] {
+        openads::util::DiagnosticGuard guard;
+        entered = true;
+        while (!release.load()) std::this_thread::yield();
+    });
+    while (!entered.load()) std::this_thread::yield();
+    std::thread stop([&] { openads::util::set_logging_enabled(false); disabled = true; });
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK_FALSE(disabled.load());
+    release = true;
+    writer.join();
+    stop.join();
+    CHECK(disabled.load());
+    openads::util::DiagnosticGuard after;
+    CHECK_FALSE(static_cast<bool>(after));
 }

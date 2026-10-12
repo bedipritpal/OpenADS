@@ -5,6 +5,7 @@
 // reads prove the locally-served state is what the wire would have
 // returned.
 #include "doctest.h"
+#include "util/log.h"
 #include "network/client.h"
 #include "network/server.h"
 #include "openads/ace.h"
@@ -50,7 +51,16 @@ std::string id_field(ADSHANDLE h) {
 
 } // namespace
 
+namespace {
+struct DiagnosticTestOptIn {
+    bool before = openads::util::logging_enabled();
+    DiagnosticTestOptIn() { openads::util::set_logging_enabled(true); }
+    ~DiagnosticTestOptIn() { openads::util::set_logging_enabled(before); }
+};
+}
+
 TEST_CASE("boundary pair, self-goto, and recno anchor over loopback") {
+    DiagnosticTestOptIn diagnostics;
     auto dir = fs::temp_directory_path() / "openads_bpair";
     std::error_code ec;
     fs::remove_all(dir, ec);
@@ -178,6 +188,7 @@ TEST_CASE("boundary pair, self-goto, and recno anchor over loopback") {
 }
 
 TEST_CASE("boundary pair: scoped ordered bottom counts on demand") {
+    DiagnosticTestOptIn diagnostics;
     auto dir = fs::temp_directory_path() / "openads_bpair_scoped";
     std::error_code ec;
     fs::remove_all(dir, ec);

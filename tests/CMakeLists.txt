@@ -338,6 +338,8 @@ add_executable(openads_unit_tests
     unit/network_setfields_test.cpp
     unit/network_open_warm_test.cpp
     unit/network_version_test.cpp
+    unit/network_index_char_padding_test.cpp
+    unit/physical_count_preserved_main_test.cpp
     unit/network_nav_batch_test.cpp
     unit/network_use_budget_test.cpp
     unit/network_local_answers_test.cpp
@@ -598,4 +600,15 @@ endif()
 find_program(OPENADS_NODE_EXECUTABLE node)
 if(OPENADS_NODE_EXECUTABLE)
     add_test(NAME portal_health_js COMMAND ${OPENADS_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_js_test.js)
+endif()
+
+add_test(NAME master_diagnostics_integration
+    COMMAND openads_unit_tests "--test-case=master diagnostics file gating*" --no-skip=true)
+
+if(WIN32 AND MINGW AND TARGET openads_ace_static)
+    add_executable(openads_static_archive_smoke smoke/mingw_static_ace.cpp)
+    target_include_directories(openads_static_archive_smoke PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    add_dependencies(openads_static_archive_smoke openads_ace_static)
+    target_link_libraries(openads_static_archive_smoke PRIVATE "$<TARGET_FILE:openads_ace_static>" ws2_32 psapi)
+    add_test(NAME static_archive_link_run COMMAND openads_static_archive_smoke)
 endif()

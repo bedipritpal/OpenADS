@@ -1,3 +1,4 @@
+#include "util/log.h"
 #include "network/client.h"
 
 #include "abi/lock_retry_policy.h"
@@ -326,8 +327,8 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
             default: break;
         }
     }
-    const FrameTraceHook trace_hook =
-        g_frame_trace_hook.load(std::memory_order_relaxed);
+    const FrameTraceHook trace_hook = openads::util::logging_enabled()
+        ? g_frame_trace_hook.load(std::memory_order_relaxed) : nullptr;
     const auto trace_t0 = trace_hook != nullptr
         ? std::chrono::steady_clock::now()
         : std::chrono::steady_clock::time_point{};
@@ -361,7 +362,7 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
         transport_->close();
         return rep.error();
     }
-    if (trace_hook != nullptr) {
+    if (openads::util::DiagnosticGuard guard; guard && trace_hook != nullptr) {
         const long long us = static_cast<long long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - trace_t0).count());

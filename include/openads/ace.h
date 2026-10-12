@@ -46,6 +46,15 @@ extern "C" {
 #  define OADSAPI
 #endif
 
+// SDK scalar aliases used by stock Harbour rddads. On Windows the
+// platform header already provides them; on other platforms keep ACE's
+// UTF-16 width (not the host wchar_t width).
+#ifndef _WIN32
+typedef double DOUBLE;
+typedef void VOID;
+typedef uint16_t WCHAR;
+#endif
+
 typedef uint8_t  UNSIGNED8;
 typedef uint16_t UNSIGNED16;
 typedef uint32_t UNSIGNED32;

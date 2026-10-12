@@ -115,9 +115,10 @@ an app can prove which server binary it is talking to at startup.
 `OAds_SetLogging( lOn )` enables/disables every log line the ace DLL
 can emit from this process: the audit channel (`OPENADS_LOG_FILE` /
 console RESOLVED lines) and the `ace_calls.log` bring-up traces.
-Logging is ON by default (developer diagnostics); call
-`OAds_SetLogging( .F. )` once at startup before shipping so paths,
-aliases and record data never reach end-user machines.
+Logging is OFF by default. Environment variables and client INI settings
+cannot enable the master. Only the application can call `OAds_SetLogging( .T. )`
+to permit diagnostics. Existing individual trace settings then take effect.
+Real table paths are masked even when diagnostics are enabled.
 
 ```harbour
 OAds_SetLogging( .F. )   // production: silent DLL
@@ -172,8 +173,7 @@ connection and prints no credentials. The 76-column display uses Statistic
 `Unavailable`; configured `max_sessions = 0` says `Unlimited (0)`. All returned
 scalar, usage and semantics fields are included; long labels/text wrap rather
 than being discarded. Compile/run `tests/smoke/harbour/stats_display.prg` with
-the helper for the native sandbox fixture. Added for Pritpal Bedi's stats/log
-review and aligned display request.
+the helper for the native sandbox fixture.
 
 ### Draw stats in a console/window rectangle
 
@@ -187,8 +187,8 @@ current row/column through the current window's maximum row/column. Invalid
 or reversed coordinates return0 without drawing; right/bottom beyond the
 window are clamped. A rectangle narrower than76columns clips the formatter,
 so use at least76columns to see all four columns. It is a display-only helper,
-not a query or scrollable browser. Added following Pritpal Bedi's B_BIG screen
-feedback; `OAds_ServerStatsText` remains available for logs/text output.
+not a query or scrollable browser. `OAds_ServerStatsText` remains available
+for logs/text output.
 
 ```harbour
 nRows := OAds_ServerStatsShow(hStats, nTop+1, nLeft+1, nBottom-1, nRight-1)
@@ -200,3 +200,14 @@ with the helper and `-gtstd -mt`. The existing text fixture remains unchanged.
 For an actual Clipper Tools window test, also compile/link hbct, define
 `STATS_SHOW_CTW` and run the same fixture. It checks a nonzero-origin CT
 window with local1,1coordinates. The helper adds no hbct dependency to apps.
+
+### Aggregate health query helpers
+
+`OAds_ServerStats(hMgmt, @nError)` returns a hash from an AdsMgConnect handle.
+`OAds_ServerStatsRemote(host, port, user, password, @nError)` owns a separate
+management handle and serializes its connect/read/disconnect lifecycle for MT
+callers. Neither uses or changes a default data handle. Failure returns NIL
+and a numeric error. Null JSON values remain NIL; wide counters stay wide.
+Use a literal hostname/IPv4 address, not a URI/path. Management remains plain
+TCP; load credentials from secure settings. See `docs/health-consumers.md` for
+transport, fixed-buffer and deployment limits.

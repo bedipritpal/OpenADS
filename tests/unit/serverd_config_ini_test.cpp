@@ -214,3 +214,16 @@ TEST_CASE("mtfix41 established idle setting strict parse and default never") {
         CHECK_FALSE(openads::serverd::parse_ini(std::string("established_session_idle_seconds = ")+value+"\n",bad,error));
     }
 }
+
+TEST_CASE("serverd diagnostics default OFF and explicit boolean opt-in") {
+    openads::serverd::IniConfig cfg;
+    std::string err;
+    CHECK_FALSE(cfg.has_diagnostics);
+    CHECK_FALSE(cfg.diagnostics);
+    REQUIRE(openads::serverd::parse_ini("diagnostics=on\n", cfg, err));
+    CHECK(cfg.has_diagnostics);
+    CHECK(cfg.diagnostics);
+    REQUIRE(openads::serverd::parse_ini("diagnostics=0\n", cfg, err));
+    CHECK_FALSE(cfg.diagnostics);
+    CHECK_FALSE(openads::serverd::parse_ini("diagnostics=perhaps\n", cfg, err));
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -86,11 +87,25 @@ void set_audit_details_enabled(bool on);
 void reset_audit_config();
 bool audit_details_enabled();
 
+// A writer holds this guard through the final write/close. Disabling waits
+// for current writers; after it returns, no earlier writer can emit output.
+class DiagnosticGuard {
+public:
+    DiagnosticGuard();
+    explicit operator bool() const noexcept { return enabled_; }
+private:
+    std::unique_lock<std::recursive_mutex> lock_;
+    bool enabled_;
+};
+
 // Master kill-switch for every log line the library can emit (audit
 // file/console + the arc bring-up traces in the ABI). Production apps
 // call OAdsSetLogging(0) at startup so paths, aliases and record data
-// never reach end-user machines. Default: enabled.
+// never reach end-user machines. Default: disabled; only the application/server operator enables it.
 void set_logging_enabled(bool on);
 bool logging_enabled();
+std::uint64_t diagnostic_epoch();
+// Diagnostic-only, non-reversible labels. Never use in protocol/data paths.
+std::string diagnostic_label(std::string_view value, std::string_view scope = {});
 
 } // namespace openads::util

@@ -1,3 +1,4 @@
+#include "util/log.h"
 #ifndef _WIN32
 
 #include "platform/lock.h"
@@ -257,7 +258,7 @@ util::Result<ByteLock> ByteLock::acquire(File& f, std::uint64_t offset,
             if (get_rc == 0 && q.l_type != F_UNLCK) {
                 holder = static_cast<long>(q.l_pid);
             }
-            std::fprintf(stderr,
+            { openads::util::DiagnosticGuard guard; if (guard) std::fprintf(stderr,
                 "openads: byte lock wait timed out (offset=%llu len=%llu "
                 "set_errno=%d get_rc=%d get_errno=%d get_type=%d "
                 "holder_pid=%ld self_pid=%ld fd=%d)\n",
@@ -265,7 +266,7 @@ util::Result<ByteLock> ByteLock::acquire(File& f, std::uint64_t offset,
                 static_cast<unsigned long long>(length),
                 r.error().sub_code, get_rc, get_errn,
                 static_cast<int>(q.l_type), holder,
-                static_cast<long>(::getpid()), fd);
+                static_cast<long>(::getpid()), fd); }
             return r;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5));

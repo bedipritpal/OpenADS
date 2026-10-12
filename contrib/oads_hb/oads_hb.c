@@ -203,7 +203,7 @@ HB_FUNC( OADS_GETCONNECTION )
 /*  OADS_SETLOGGING( lOn ) -> lOk                                      */
 /*  Master switch for every log the ace DLL can emit (audit channel +  */
 /*  ace_calls.log traces). Call OAds_SetLogging( .F. ) once at startup */
-/*  in production so no paths/aliases reach end-user machines.         */
+/*  OFF by default; .T. permits the individual env/INI diagnostics.     */
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_SETLOGGING )
 {

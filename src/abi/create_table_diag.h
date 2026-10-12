@@ -1,3 +1,4 @@
+#include "util/log.h"
 #pragma once
 
 // Opt-in CreateTable stages, shared by the client ABI and server ABI twin.
@@ -29,6 +30,7 @@ inline std::string leaf(std::string_view path) {
     return out;
 }
 inline bool enabled(std::string_view path) {
+    if (!openads::util::logging_enabled()) return false;
     const char* dest = std::getenv("OPENADS_CREATE_TABLE_DIAG_FILE");
     if (!dest || !*dest) return false;
     const char* filter = std::getenv("OPENADS_CREATE_TABLE_DIAG_FILTER");
@@ -52,7 +54,7 @@ struct Scope {
     std::string old_target, old_correlation;
     Scope(std::string_view name, std::string id) : old_target(target), old_correlation(correlation) {
         if (enabled(name)) {
-            target = leaf(name);
+            target = openads::util::diagnostic_label(name);
             correlation = id.empty() ? new_id() : std::move(id);
         } else {
             target.clear();
@@ -66,7 +68,8 @@ struct Scope {
 };
 inline void log(std::string_view stage, std::int64_t code = 0,
                 std::string_view detail = {}, int os_error = 0) {
-    if (target.empty()) return;
+    openads::util::DiagnosticGuard guard;
+    if (!guard || target.empty()) return;
     const char* dest = std::getenv("OPENADS_CREATE_TABLE_DIAG_FILE");
     if (!dest || !*dest) return;
     static std::mutex mu;

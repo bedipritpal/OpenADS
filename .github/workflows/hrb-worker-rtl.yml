@@ -87,7 +87,7 @@ jobs:
     - name: Run native suites from PowerShell with same temp environment
       shell: pwsh
       run: |
-        $tmp=Join-Path $env:RUNNER_TEMP 'openads-native-valid-temp'
+        $tmp=Join-Path 'C:\Windows\Temp' ('openads-native-'+$env:GITHUB_RUN_ID+'-${{ matrix.arch }}')
         New-Item -ItemType Directory -Force $tmp | Out-Null
         $env:TMP=$tmp; $env:TEMP=$tmp; $env:TMPDIR=$tmp
         & output/native-temp-probe.exe | Tee-Object output/native-temp-proof.txt
@@ -114,7 +114,7 @@ jobs:
         def failed(name):
          raw=(root/name).read_bytes()
          s=raw.decode('utf-16') if raw[:2] in (b'\xff\xfe',b'\xfe\xff') else raw.decode('utf-8-sig',errors='replace')
-         (root/(name+'.utf8')).write_text(s)
+         (root/(name+'.utf8')).write_text(s,encoding='utf-8')
          failures={}
          for c in s.split('==============================================================================='):
           match=re.search(r'TEST CASE:\s+([^\n]+)',c)

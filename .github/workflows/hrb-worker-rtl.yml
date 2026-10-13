@@ -71,7 +71,7 @@ jobs:
         assert 'ace_exports.cpp.obj' in changed
         PYTHON
         # Include only the missing modern MinGW CRT support, not modern startup objects.
-        for spec in 'libmingw32.a lib32_libmingw32_a-cxa_thread_atexit.o' 'libmingw32.a lib32_libmingw32_a-tls_atexit.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-acrt_iob_func.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-register_tls_atexit.o';do
+        for spec in 'libmingw32.a lib32_libmingw32_a-cxa_thread_atexit.o' 'libmingw32.a lib32_libmingw32_a-tls_atexit.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-acrt_iob_func.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-register_tls_atexit.o' 'libmsvcrt.a dembbs01050.o' 'libmsvcrt.a dembbh.o' 'libmsvcrt.a dembbt.o';do
          read -r lib member <<< "$spec"
          (cd work && "$W/bin/ar.exe" x "$W/i686-w64-mingw32/lib/$lib" "$member")
          "$W/bin/ar.exe" r output/libopenace32.a "work/$member"

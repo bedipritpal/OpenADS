@@ -1,0 +1,38 @@
+name: Matching MinGW one-archive kit proof TEST ONLY
+'on':
+  push:
+    branches: [review/static-one-archive]
+    paths: [.github/workflows/static-kit-proof.yml, tools/scripts/package_static_client.py, tools/scripts/qt492_tls_exit_bridge.c, tools/scripts/test_harbour_static_mingw.sh, tests/smoke/harbour_static_ace.prg]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        bits: [32, 64]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.bits == 32 && 'MINGW32' || 'MINGW64' }}
+          release: false
+          update: false
+          install: >-
+            ${{ matrix.bits == 32 && 'mingw-w64-i686-toolchain mingw-w64-i686-cmake' || 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake' }} python git make
+      - name: Build raw engine with same compiler
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build/kit-proof -G 'MinGW Makefiles' -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build/kit-proof --target openads_ace_static -j2
+      - name: Package and link same-compiler Harbour smoke
+        shell: msys2 {0}
+        run: bash tools/scripts/test_harbour_static_mingw.sh build/kit-proof/src/libopenace${{ matrix.bits }}.a ${{ matrix.bits }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: static-kit-matching-${{ matrix.bits }}
+          path: build/static-kit-${{ matrix.bits }}/

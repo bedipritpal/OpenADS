@@ -182,7 +182,7 @@ jobs:
           release: false
           update: false
           install: >-
-            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake python' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake python' }}
+            ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake' }} python git make
 
       - name: Build static ACE library (MinGW)
         if: always() && runner.os == 'Windows'
@@ -197,6 +197,13 @@ jobs:
           cmake --build build/mingw-${{ matrix.arch }} \
                 --target openads_ace_static -j"$(nproc)"
           ls -la build/mingw-${{ matrix.arch }}/src/libopenace*.a
+
+      - name: Package one-archive static Harbour kit and run smoke
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          bits=32; if [ '${{ matrix.arch }}' = x64 ]; then bits=64; fi
+          bash tools/scripts/test_harbour_static_mingw.sh build/mingw-${{ matrix.arch }}/src/libopenace$bits.a $bits
 
       - name: Regenerate MinGW DLL imports and link health probe
         if: always() && runner.os == 'Windows'
@@ -285,11 +292,14 @@ jobs:
           # Static ACE library (MinGW): link into an hbmk2 -comp=mingw[64]
           # app and no ace<bits>.dll is needed at all. Built in the
           # "Build static ACE library (MinGW)" step above.
-          $staticLib = "build/mingw-${{ matrix.arch }}/src/libopenace$bits.a"
+          $staticLib = "build/static-kit-$bits/libopenace$bits.a"
           if (-not (Test-Path $staticLib)) {
               throw "Static ACE library missing: $staticLib"
           }
           Copy-Item $staticLib "$stage/libopenace$bits.a"
+          Copy-Item "build/static-kit-$bits/libopenace$bits.manifest.json" "$stage/"
+          Copy-Item -Recurse "build/static-kit-$bits/runtime-notices" "$stage/"
+          Copy-Item docs/mingw-static-ace.md,docs/static-runtime-notices.md "$stage/"
           # Server + bench CLIs
           Copy-Item "$build/tools/serverd/Release/openads_serverd.exe" "$stage/"
           Copy-Item "$build/tools/bench/Release/openads_bench.exe"     "$stage/"

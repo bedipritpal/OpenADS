@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import shutil
 import subprocess
 import tempfile
 
@@ -63,7 +64,10 @@ def main():
             raise SystemExit('GNU ar MRI needs space-free packaging paths')
         candidate = tmp / 'libopenace.a'
         mri = 'create ' + str(candidate).replace('\\', '/') + '\n'
-        mri += ''.join('addlib ' + str(f).replace('\\', '/') + '\n' for f in archives)
+        for i, f in enumerate(archives):
+            staged = tmp / ('input%d.a' % i)
+            shutil.copyfile(f, staged)
+            mri += 'addlib ' + str(staged).replace('\\', '/') + '\n'
         run(ar, '-M', input=mri + 'save\nend\n')
         converted = []
         if old:

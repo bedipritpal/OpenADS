@@ -1,10 +1,11 @@
-name: Qt4.9.2 static capacity compatibility proof TEST ONLY
+name: Qt4.9.2 static threads repro TEST ONLY
 'on':
   push:
     branches:
     - spike-unmerged/hrb-challenge-auth
     paths:
     - .github/workflows/hrb-worker-rtl.yml
+  workflow_dispatch: {}
 permissions:
   contents: read
   actions: read
@@ -18,146 +19,92 @@ jobs:
         ref: 98cebae99719c5283b33a06b32903e27ff617720
     - uses: actions/download-artifact@v4
       with:
+        name: qt492-capacity-static-proof
+        path: kit
+        run-id: 38361406991
+        github-token: ${{ github.token }}
+    - uses: actions/download-artifact@v4
+      with:
         name: hrb-auth-capacity-test-x86
         path: input
         run-id: 38274919983
         github-token: ${{ github.token }}
-    - name: Download exact historical Qt compiler and pinned Winlibs runtime
+    - name: Download exact historical Qt compiler
       shell: pwsh
       run: |
         Invoke-WebRequest 'https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z' -OutFile "$env:RUNNER_TEMP/qt492.7z"
         if((Get-FileHash "$env:RUNNER_TEMP/qt492.7z" -Algorithm SHA256).Hash.ToLower() -ne 'f6de32350a28f4b6c30eec26dbfee65f112300d51e37e4d2007b0598bef9bb79'){throw 'Qt compiler hash mismatch'}
         & 7z x "$env:RUNNER_TEMP/qt492.7z" "-o$env:RUNNER_TEMP/qt492" -y
-        Invoke-WebRequest 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
-        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'){throw 'Winlibs hash mismatch'}
-        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
-    - name: Convert only object container and merge matching static runtime
-      shell: bash
-      run: |
-        set -euxo pipefail
-        mkdir -p output work
-        W="$(cygpath -m "$RUNNER_TEMP/winlibs/mingw32")"
-        P="$(cygpath -m "$PWD")"
-        A="$PWD/input/hrb-auth-UNMERGED-x86/lib/libopenace32.a"
-        echo '46c98a073872f81d169189a1d941ffb7ac4ed18078d82e11187d8f7eda5d9ec7  '"$A" | sha256sum -c -
-        cp "$A" output/libopenace32.a
-        cp "$W/lib/libstdc++.a" work/stdcpp.a
-        cat > work/merge.mri <<EOF
-        create $P/output/libopenace32-runtime.a
-        addlib $P/output/libopenace32.a
-        addlib $P/work/stdcpp.a
-        addlib $W/lib/gcc/i686-w64-mingw32/10.2.0/libgcc.a
-        addlib $W/lib/gcc/i686-w64-mingw32/10.2.0/libgcc_eh.a
-        addlib $W/i686-w64-mingw32/lib/libwinpthread.a
-        save
-        end
-        EOF
-        "$W/bin/ar.exe" -M < work/merge.mri
-        mv output/libopenace32-runtime.a output/libopenace32.a
-        "$W/bin/ar.exe" t output/libopenace32.a > output/member-inventory.txt
-        # Preserve duplicate member names and archive ordering: replace only BigObj members.
-        python - <<'PYTHON'
-        import pathlib,subprocess,struct,json,os
-        w=pathlib.Path(os.environ['RUNNER_TEMP'])/'winlibs/mingw32/bin'
-        a=pathlib.Path('output/libopenace32.a').resolve();changed=[]
-        for name in subprocess.check_output([str(w/'ar.exe'),'t',str(a)],text=True).splitlines():
-         subprocess.run([str(w/'ar.exe'),'x',str(a),name],cwd='work',check=True)
-         data=(pathlib.Path('work')/name).read_bytes()
-         if data[:4]==b'\x00\x00\xff\xff' and len(data)>56 and data[4:6]==b'\x02\x00':
-          p=pathlib.Path('work')/name;p.write_bytes(data);out=p.with_suffix('.normal')
-          subprocess.run([str(w/'objcopy.exe'),'-O','pe-i386',str(p),str(out)],check=True);out.replace(p)
-          subprocess.run([str(w/'ar.exe'),'r',str(a),str(p)],check=True);changed.append(name)
-        pathlib.Path('output/converted-members.json').write_text(json.dumps(changed))
-        assert 'ace_exports.cpp.obj' in changed
-        PYTHON
-        # Include only the missing modern MinGW CRT support, not modern startup objects.
-        for spec in 'libmingw32.a lib32_libmingw32_a-cxa_thread_atexit.o' 'libmingw32.a lib32_libmingw32_a-tls_atexit.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-acrt_iob_func.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-register_tls_atexit.o' 'libmsvcrt.a dembbs01050.o' 'libmsvcrt.a dembbh.o' 'libmsvcrt.a dembbt.o';do
-         read -r lib member <<< "$spec"
-         (cd work && "$W/bin/ar.exe" x "$W/i686-w64-mingw32/lib/$lib" "$member")
-         "$W/bin/ar.exe" r output/libopenace32.a "work/$member"
-        done
-        "$W/bin/nm.exe" output/libopenace32.a > output/static-symbols.txt
-        sha256sum output/libopenace32.a > output/SHA256.txt
-    - name: Build Harbour with unchanged Qt4.9.2 and link real RDD plus glue
+    - name: Build Harbour with unchanged Qt4.9.2
       shell: bash
       run: |
         set -euxo pipefail
         export PATH="$RUNNER_TEMP/qt492/mingw32/bin:$PATH"
-        gcc --version > output/old-compiler.txt
-        ld --version > output/old-linker.txt
         test "$(gcc -dumpversion)" = 4.9.2
-        # Prove the original archive fails while converted format resolves on old linker.
-        nm input/hrb-auth-UNMERGED-x86/lib/libopenace32.a > output/original-old-nm.txt 2>&1 || true
-        nm output/libopenace32.a > output/converted-old-nm.txt
         git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-old"
         git -C "$RUNNER_TEMP/harbour-old" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
         export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
         mingw32-make -C "$RUNNER_TEMP/harbour-old" -j2
+    - name: Write fixtures and build static probes
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$RUNNER_TEMP/qt492/mingw32/bin:$PATH"
         HB="$RUNNER_TEMP/harbour-old"
-        for unit in ads1 adsfunc adsmgmnt adsx;do
-         gcc -c "$HB/contrib/rddads/$unit.c" -I"$HB/include" -I"$HB/contrib/rddads" -Iinput/hrb-auth-UNMERGED-x86/include -o "output/$unit.o"
-        done
-        # Old startup lacks this modern CRT flag. This is an executable-only compatibility definition.
-        echo 'int __mingw_module_is_dll = 0;' > output/crt_compat.c
-        gcc -c output/crt_compat.c -o output/crt_compat.o
-        ar rcs output/libopenace32.a output/crt_compat.o
-        ar rcs output/librddads.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
-        gcc -c input/hrb-auth-UNMERGED-x86/contrib/oads_hb.c -I"$HB/include" -Iinput/hrb-auth-UNMERGED-x86/include -o output/oads_hb.o
-        ar rcs output/libopenace32.a output/oads_hb.o
-        nm -u output/oads_hb.o > output/glue-undefined.txt
-        nm --defined-only output/libopenace32.a > output/combined-defined.txt
-        python - <<'PYTHON'
-        import pathlib,json
-        needed={l.split()[-1] for l in pathlib.Path('output/glue-undefined.txt').read_text().splitlines() if l.split() and l.split()[-1].startswith(('_Ads','_OAds'))}
-        defined={l.split()[-1] for l in pathlib.Path('output/combined-defined.txt').read_text().splitlines() if len(l.split())>=3}
-        assert needed and not needed-defined,sorted(needed-defined)
-        pathlib.Path('output/glue-symbol-coverage.json').write_text(json.dumps({'required':sorted(needed),'missing':sorted(needed-defined)},indent=2))
-        PYTHON
-        cat > output/probe.prg <<'PRG'
-        #include "ads.ch"
-        REQUEST ADS, ADSCDX
-        PROCEDURE Main()
-         LOCAL hConn,nErr,cChallenge
-         ErrorBlock( {|e| Break(e)} )
-         OAds_SetLogging(.F.)
-         AdsSetServerType(ADS_LOCAL_SERVER)
-         hConn:=AdsConnect(".")
-         IF Empty(hConn)
-          ErrorLevel(1)
-          RETURN
-         ENDIF
-         AdsSetFileType(ADS_CDX)
-         dbCreate("output/compat.dbf",{{"NAME","C",20,0},{"AGE","N",6,0}},"ADSCDX")
-         USE "output/compat.dbf" VIA "ADSCDX" NEW EXCLUSIVE
-         dbAppend()
-         FIELD->NAME := "verified"
-         FIELD->AGE := 42
-         dbCommit()
-         USE
-         USE "output/compat.dbf" VIA "ADSCDX" NEW EXCLUSIVE
-         dbGoTop()
-         IF AllTrim(FIELD->NAME) != "verified" .OR. FIELD->AGE != 42 .OR. LastRec() != 1
-          ErrorLevel(3)
-          RETURN
-         ENDIF
-         USE
-         AdsDisconnect()
-         cChallenge:=OAds_BeginAuth("ads://127.0.0.1:1",@nErr)
-         IF !Empty(cChallenge)
-          ErrorLevel(2)
-          RETURN
-         ENDIF
-         ? "Qt4.9.2 combined archive glue-autoload, DB create/write/reopen and auth denial OK"
-        RETURN
-        PRG
-        "$HB/bin/win/mingw/hbmk2.exe" output/probe.prg -Loutput -lrddads -lopenace32 -iinput/hrb-auth-UNMERGED-x86/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -trace -ooutput/probe.exe > output/link-trace.txt 2>&1
-        objdump -p output/probe.exe > output/imports.txt
-        ! grep -Ei 'DLL Name:.*(ace32|openace|libstdc|libgcc|libwinpthread)' output/imports.txt
-        output/probe.exe > output/run-proof.txt
-        sha256sum output/libopenace32.a output/librddads.a output/probe.exe > output/SHA256.txt
+        mkdir -p srv mtdata output
+        cp input/bin/openads_serverd.exe input/bin/openads_auth_worker.exe input/bin/libopenace32.dll srv/
+        echo 'wEhSQgIABAAAAFRFU1RfT05MWQAFAU9BRFNfQVVUSF9WMQABAUxFTgAAAlJFUExJQ0FURQAAAgIAAABURVNUX09OTFkAAQAAAAdPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbACAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALADAGoCAABcBAwCSG4H' | base64 -d > srv/test_only.hrb
+        echo 'I2luY2x1ZGUgImFkcy5jaCIKClJFUVVFU1QgQURTLCBBRFNDRFgKClBST0NFRFVSRSBNYWluKCBjRGlyICkKICAgTE9DQUwgaQogICBFcnJvckJsb2NrKCB7fCBlIHwgQnJlYWsoIGUgKSB9ICkKICAgT0Fkc19TZXRMb2dnaW5nKCAuRi4gKQogICBBZHNTZXRTZXJ2ZXJUeXBlKCBBRFNfTE9DQUxfU0VSVkVSICkKICAgQWRzQ29ubmVjdCggIi4iICkKICAgQWRzU2V0RmlsZVR5cGUoIEFEU19DRFggKQogICBSZGRTZXREZWZhdWx0KCAiQURTQ0RYIiApCiAgIEJFR0lOIFNFUVVFTkNFCiAgICAgIGRiQ3JlYXRlKCBjRGlyICsgIi9tdF9iaWcuZGJmIiwgeyB7ICJOQU1FIiwgIkMiLCAyMCwgMCB9LCB7ICJBR0UiLCAiTiIsIDYsIDAgfSB9LCAiQURTQ0RYIiApCiAgICAgIFVTRSAoIGNEaXIgKyAiL210X2JpZy5kYmYiICkgVklBICJBRFNDRFgiIE5FVyBFWENMVVNJVkUgQUxJQVMgbXQKICAgICAgRk9SIGkgOj0gMSBUTyA1MDAwCiAgICAgICAgIGRiQXBwZW5kKCkKICAgICAgICAgRklFTEQtPk5BTUUgOj0gInJvdyIgKyBMVHJpbSggU3RyKCBpICkgKQogICAgICAgICBGSUVMRC0+QUdFIDo9IGkgJSAxMDAKICAgICAgTkVYVAogICAgICBkYkNvbW1pdCgpCiAgICAgIFVTRQogICAgICBPdXRTdGQoICJjcmVhdGVkIDUwMDAgcm93cyIgKyBoYl9lb2woKSApCiAgIFJFQ09WRVIKICAgICAgT3V0U3RkKCAiY3JlYXRlIGZhaWxlZCIgKyBoYl9lb2woKSApCiAgICAgIEVycm9yTGV2ZWwoIDEgKQogICBFTkQgU0VRVUVOQ0UKICAgQkVHSU4gU0VRVUVOQ0UKICAgICAgVVNFICggY0RpciArICIvbXRfYmlnLmRiZiIgKSBWSUEgIkFEU0NEWCIgTkVXIEVYQ0xVU0lWRSBBTElBUyBtdAogICAgICBJTkRFWCBPTiBGSUVMRC0+TkFNRSBUQUcgIk5BTUUiIFRPICggY0RpciArICIvbXRfYmlnLmNkeCIgKQogICAgICBVU0UKICAgICAgT3V0U3RkKCAiaW5kZXggb2siICsgaGJfZW9sKCkgKQogICBSRUNPVkVSCiAgICAgIE91dFN0ZCggImluZGV4IHNraXBwZWQiICsgaGJfZW9sKCkgKQogICBFTkQgU0VRVUVOQ0UKUkVUVVJOCg==' | base64 -d > output/local_create.prg
+        echo 'I2luY2x1ZGUgImFkcy5jaCIKClJFUVVFU1QgQURTLCBBRFNDRFgKClNUQVRJQyBzX2hDb25uIDo9IDAKU1RBVElDIHNfbEVyciA6PSAuRi4KClBST0NFRFVSRSBNYWluKCBjVXJsICkKICAgTE9DQUwgY0NoYWxsZW5nZSwgblBlbmQgOj0gMCwgaSwgeCwgYVQgOj0ge30sIG5MYXN0CiAgIEVycm9yQmxvY2soIHt8IGUgfCBCcmVhayggZSApIH0gKQogICBCRUdJTiBTRVFVRU5DRQogICAgICBPQWRzX1NldExvZ2dpbmcoIC5GLiApCiAgICAgIEFkc1NldEZpbGVUeXBlKCBBRFNfQ0RYICkKICAgICAgUmRkU2V0RGVmYXVsdCggIkFEU0NEWCIgKQogICAgICBTRVQgREVMRVRFRCBPRkYKICAgICAgY0NoYWxsZW5nZSA6PSBPQWRzX0JlZ2luQXV0aCggY1VybCwgQG5QZW5kICkKICAgICAgSUYgTGVuKCBjQ2hhbGxlbmdlICkgIT0gMzIKICAgICAgICAgT3V0U3RkKCAiRkFJTCBiZWdpbmF1dGggbGVuPSIgKyBMVHJpbSggU3RyKCBMZW4oIGNDaGFsbGVuZ2UgKSApICkgKyBoYl9lb2woKSApCiAgICAgICAgIEVycm9yTGV2ZWwoIDIgKSA7IFFVSVQKICAgICAgRU5ESUYKICAgICAgc19oQ29ubiA6PSBPQWRzX0NvbXBsZXRlQXV0aCggblBlbmQsIGNDaGFsbGVuZ2UgKyAidGVzdC1vbmx5IiApCiAgICAgIElGIHNfaENvbm4gPT0gMAogICAgICAgICBPdXRTdGQoICJGQUlMIGNvbXBsZXRlYXV0aCIgKyBoYl9lb2woKSApCiAgICAgICAgIEVycm9yTGV2ZWwoIDMgKSA7IFFVSVQKICAgICAgRU5ESUYKICAgICAgT3V0U3RkKCAiQVVUSC1PSyBjb25uPSIgKyBMVHJpbSggU3RyKCBzX2hDb25uICkgKSArIGhiX2VvbCgpICkKCiAgICAgIElGIGRiVXNlQXJlYSggLlQuLCAiQURTQ0RYIiwgIm10X2JpZy5kYmYiLCAiczEiLCAuVC4sIC5GLiwgLCBzX2hDb25uICkKICAgICAgICAgczEtPiggZGJHb1RvcCgpICkKICAgICAgICAgbkxhc3QgOj0gczEtPiggTGFzdFJlYygpICkKICAgICAgICAgT3V0U3RkKCAiU0lOR0xFLVBBU1MgTGFzdFJlYz0iICsgTFRyaW0oIFN0ciggbkxhc3QgKSApICsgaGJfZW9sKCkgKQogICAgICAgICBzMS0+KCBkYkNsb3NlQXJlYSgpICkKICAgICAgRUxTRQogICAgICAgICBPdXRTdGQoICJTSU5HTEUtRkFJTCBvcGVuIiArIGhiX2VvbCgpICkKICAgICAgICAgRXJyb3JMZXZlbCggNCApIDsgUVVJVAogICAgICBFTkRJRgoKICAgICAgc19sRXJyIDo9IC5GLgogICAgICBBQWRkKCBhVCwgaGJfdGhyZWFkU3RhcnQoIEBUbFByb2JlKCkgKSApCiAgICAgIGhiX3RocmVhZEpvaW4oIGFUWyAxIF0gKQogICAgICBPdXRTdGQoIGlpZiggc19sRXJyLCAiVEwtRkFJTCIsICJUTC1QQVNTIiApICsgaGJfZW9sKCkgKQoKICAgICAgc19sRXJyIDo9IC5GLgogICAgICBhVCA6PSB7fQogICAgICBGT1IgaSA6PSAxIFRPIDMKICAgICAgICAgQUFkZCggYVQsIGhiX3RocmVhZFN0YXJ0KCBAVGhyZWFkUmVhZGVyKCksIGkgKSApCiAgICAgIE5FWFQKICAgICAgRk9SIEVBQ0ggeCBJTiBhVAogICAgICAgICBoYl90aHJlYWRKb2luKCB4ICkKICAgICAgTkVYVAogICAgICBPdXRTdGQoIGlpZiggc19sRXJyLCAiVEhSRUFEUy1GQUlMIiwgIlRIUkVBRFMtUEFTUyIgKSArIGhiX2VvbCgpICkKCiAgICAgIHNfbEVyciA6PSAuRi4KICAgICAgYVQgOj0ge30KICAgICAgRk9SIGkgOj0gNCBUTyA2CiAgICAgICAgIEFBZGQoIGFULCBoYl90aHJlYWRTdGFydCggQFRocmVhZFJlYWRlck5vQ29ubigpLCBpICkgKQogICAgICBORVhUCiAgICAgIEZPUiBFQUNIIHggSU4gYVQKICAgICAgICAgaGJfdGhyZWFkSm9pbiggeCApCiAgICAgIE5FWFQKICAgICAgT3V0U3RkKCBpaWYoIHNfbEVyciwgIk5PQ09OTi1GQUlMIiwgIk5PQ09OTi1QQVNTIiApICsgaGJfZW9sKCkgKQogICBSRUNPVkVSCiAgICAgIE91dFN0ZCggIlJFQ09WRVIgbWFpbiIgKyBoYl9lb2woKSApCiAgICAgIEVycm9yTGV2ZWwoIDUgKQogICBFTkQgU0VRVUVOQ0UKUkVUVVJOCgpQUk9DRURVUkUgVGxQcm9iZSgpCiAgIExPQ0FMIG5FcnIsIGNFcnIgOj0gU3BhY2UoIDEyOCApCiAgIEJFR0lOIFNFUVVFTkNFCiAgICAgIG5FcnIgOj0gQWRzR2V0TGFzdEVycm9yKCBAY0VyciApCiAgICAgIE91dFN0ZCggInRscHJvYmUgZXJyPSIgKyBMVHJpbSggU3RyKCBuRXJyICkgKSArIGhiX2VvbCgpICkKICAgUkVDT1ZFUgogICAgICBzX2xFcnIgOj0gLlQuCiAgIEVORCBTRVFVRU5DRQpSRVRVUk4KClBST0NFRFVSRSBUaHJlYWRSZWFkZXIoIG5JZCApCiAgIExPQ0FMIGksIGNBbGlhcyA6PSAidyIgKyBMVHJpbSggU3RyKCBuSWQgKSApCiAgIEJFR0lOIFNFUVVFTkNFCiAgICAgIElGIGRiVXNlQXJlYSggLlQuLCAiQURTQ0RYIiwgIm10X2JpZy5kYmYiLCBjQWxpYXMsIC5ULiwgLkYuLCAsIHNfaENvbm4gKQogICAgICAgICAoIGNBbGlhcyApLT4oIGRiR29Ub3AoKSApCiAgICAgICAgIEZPUiBpIDo9IDEgVE8gMjAwCiAgICAgICAgICAgICggY0FsaWFzICktPiggZGJTa2lwKCkgKQogICAgICAgICAgICBJRiAoIGNBbGlhcyApLT4oIEVvZigpICkKICAgICAgICAgICAgICAgKCBjQWxpYXMgKS0+KCBkYkdvVG9wKCkgKQogICAgICAgICAgICBFTkRJRgogICAgICAgICBORVhUCiAgICAgICAgIE91dFN0ZCggInRocmVhZCAiICsgTFRyaW0oIFN0ciggbklkICkgKSArICIgbGFzdHJlYz0iICsgTFRyaW0oIFN0ciggKCBjQWxpYXMgKS0+KCBMYXN0UmVjKCkgKSApICkgKyBoYl9lb2woKSApCiAgICAgICAgICggY0FsaWFzICktPiggZGJDbG9zZUFyZWEoKSApCiAgICAgIEVMU0UKICAgICAgICAgT3V0U3RkKCAidGhyZWFkICIgKyBMVHJpbSggU3RyKCBuSWQgKSApICsgIiBvcGVuIEZBSUxFRCIgKyBoYl9lb2woKSApCiAgICAgICAgIHNfbEVyciA6PSAuVC4KICAgICAgRU5ESUYKICAgUkVDT1ZFUgogICAgICBPdXRTdGQoICJ0aHJlYWQgIiArIExUcmltKCBTdHIoIG5JZCApICkgKyAiIFJFQ09WRVIiICsgaGJfZW9sKCkgKQogICAgICBzX2xFcnIgOj0gLlQuCiAgIEVORCBTRVFVRU5DRQpSRVRVUk4KClBST0NFRFVSRSBUaHJlYWRSZWFkZXJOb0Nvbm4oIG5JZCApCiAgIExPQ0FMIGksIGNBbGlhcyA6PSAibiIgKyBMVHJpbSggU3RyKCBuSWQgKSApCiAgIEJFR0lOIFNFUVVFTkNFCiAgICAgIElGIGRiVXNlQXJlYSggLlQuLCAiQURTQ0RYIiwgIm10X2JpZy5kYmYiLCBjQWxpYXMsIC5ULiwgLkYuICkKICAgICAgICAgKCBjQWxpYXMgKS0+KCBkYkdvVG9wKCkgKQogICAgICAgICBGT1IgaSA6PSAxIFRPIDUwCiAgICAgICAgICAgICggY0FsaWFzICktPiggZGJTa2lwKCkgKQogICAgICAgICAgICBJRiAoIGNBbGlhcyApLT4oIEVvZigpICkKICAgICAgICAgICAgICAgKCBjQWxpYXMgKS0+KCBkYkdvVG9wKCkgKQogICAgICAgICAgICBFTkRJRgogICAgICAgICBORVhUCiAgICAgICAgIE91dFN0ZCggInRocmVhZCAiICsgTFRyaW0oIFN0ciggbklkICkgKSArICIgbGFzdHJlYz0iICsgTFRyaW0oIFN0ciggKCBjQWxpYXMgKS0+KCBMYXN0UmVjKCkgKSApICkgKyBoYl9lb2woKSApCiAgICAgICAgICggY0FsaWFzICktPiggZGJDbG9zZUFyZWEoKSApCiAgICAgIEVMU0UKICAgICAgICAgT3V0U3RkKCAidGhyZWFkICIgKyBMVHJpbSggU3RyKCBuSWQgKSApICsgIiBvcGVuIEZBSUxFRCIgKyBoYl9lb2woKSApCiAgICAgICAgIHNfbEVyciA6PSAuVC4KICAgICAgRU5ESUYKICAgUkVDT1ZFUgogICAgICBPdXRTdGQoICJ0aHJlYWQgIiArIExUcmltKCBTdHIoIG5JZCApICkgKyAiIFJFQ09WRVIiICsgaGJfZW9sKCkgKQogICAgICBzX2xFcnIgOj0gLlQuCiAgIEVORCBTRVFVRU5DRQpSRVRVUk4K' | base64 -d > output/probe_mt.prg
+        sha256sum kit/libopenace32.a kit/librddads.a > output/kit-hashes.txt
+        "$HB/bin/win/mingw/hbmk2.exe" output/local_create.prg -Lkit -lrddads -lopenace32 -iinput/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -ooutput/local_create.exe > output/local-create-build.txt 2>&1
+        "$HB/bin/win/mingw/hbmk2.exe" output/probe_mt.prg -Lkit -lrddads -lopenace32 -iinput/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -ooutput/probe_mt.exe > output/probe-static-build.txt 2>&1
+        mkdir -p lrdd && cp kit/librddads.a lrdd/
+        "$HB/bin/win/mingw/hbmk2.exe" output/probe_mt.prg input/contrib/oads_hb.c -Llrdd -Lsrv -lrddads -lopenace32 -iinput/include -i"$HB/contrib/rddads" -mt -gtstd -lws2_32 -lbcrypt -lpsapi -ooutput/probe_mt_dll.exe > output/probe-dll-build.txt 2>&1
+        D="$(cygpath -m "$PWD/mtdata")"
+        output/local_create.exe "$D" > output/local-create-run.txt 2>&1
+        ls -la mtdata > output/mtdata-listing.txt
+    - name: Protect module and start auth server
+      shell: pwsh
+      run: |
+        $hrb=(Resolve-Path srv/test_only.hrb).Path
+        $me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        icacls $hrb /inheritance:r /remove:g '*S-1-3-4' /grant:r "${me}:(F)" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'
+        if($LASTEXITCODE -ne 0){throw 'ACL failed'}
+        $data=(Resolve-Path mtdata).Path
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        $p=Start-Process -FilePath $srv -ArgumentList @('--port','6262','--data',$data,'--auth_module',$hrb) -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput srv/stdout.log -RedirectStandardError srv/stderr.log -PassThru
+        $ok=$false
+        for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 6262 -WarningAction SilentlyContinue; if($c.TcpTestSucceeded){$ok=$true;break}; Start-Sleep -Milliseconds 500 }
+        if(-not $ok){ Get-Content srv/stdout.log,srv/stderr.log -ErrorAction SilentlyContinue; throw 'server did not listen' }
+        "server pid $($p.Id) listening" | Out-File srv/server-started.txt
+    - name: Run static probe with timeout
+      shell: pwsh
+      run: |
+        $data=(Resolve-Path mtdata).Path -replace '\\','/'
+        $url="auth://127.0.0.1:6262/$data"
+        $exe=(Resolve-Path output/probe_mt.exe).Path
+        $p=Start-Process -FilePath $exe -ArgumentList @($url) -RedirectStandardOutput output/static-stdout.txt -RedirectStandardError output/static-stderr.txt -PassThru
+        if(-not $p.WaitForExit(240000)){ $p.Kill(); "STATIC-HUNG after 240s url=$url" | Out-File output/static-result.txt } else { "STATIC-EXIT $($p.ExitCode) url=$url" | Out-File output/static-result.txt }
+        Get-Content output/static-result.txt
+    - name: Run DLL probe with timeout
+      shell: pwsh
+      run: |
+        $env:Path = (Resolve-Path srv).Path + ';' + $env:Path
+        $data=(Resolve-Path mtdata).Path -replace '\\','/'
+        $url="auth://127.0.0.1:6262/$data"
+        $exe=(Resolve-Path output/probe_mt_dll.exe).Path
+        $p=Start-Process -FilePath $exe -ArgumentList @($url) -RedirectStandardOutput output/dll-stdout.txt -RedirectStandardError output/dll-stderr.txt -PassThru
+        if(-not $p.WaitForExit(240000)){ $p.Kill(); "DLL-HUNG after 240s url=$url" | Out-File output/dll-result.txt } else { "DLL-EXIT $($p.ExitCode) url=$url" | Out-File output/dll-result.txt }
+        Get-Content output/dll-result.txt
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: qt492-capacity-static-proof
-        path: output
+        name: qt492-static-threads-repro
+        path: |
+          output/
+          srv/stdout.log
+          srv/stderr.log
+          srv/server-started.txt
+        if-no-files-found: warn
         retention-days: 14

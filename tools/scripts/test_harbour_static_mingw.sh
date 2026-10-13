@@ -25,12 +25,26 @@ for unit in ads1 adsfunc adsmgmnt adsx; do
   gcc -c "$HB/src/contrib/rddads/$unit.c" -I"$HB/src/include" \
     -I"$HB/src/contrib/rddads" -I"$root/include/openads" -o "$work/$unit.o"
 done
-"$hbmk" "$root/tests/smoke/harbour_static_ace.prg" "$root/contrib/oads_hb/oads_hb.c" \
-  "$work/ads1.o" "$work/adsfunc.o" "$work/adsmgmnt.o" "$work/adsx.o" "$archive" \
+# Package runtime and Harbour wrappers once, using this exact compiler.
+# Keep the raw CMake archive for native C++ smoke tests; publish the kit archive.
+runtime_root="$(dirname "$(dirname "$(command -v gcc)")")"
+kit="$root/build/static-kit-$bits"
+mkdir -p "$kit"
+python tools/scripts/package_static_client.py --profile matching \
+  --engine "$(cygpath -m "$archive")" \
+  --runtime-root "$(cygpath -m "$runtime_root")" \
+  --link-root "$(cygpath -m "$runtime_root")" \
+  --harbour-include "$(cygpath -m "$HB/src/include")" \
+  --ace-include "$(cygpath -m "$root/include/openads")" \
+  --glue "$(cygpath -m "$root/contrib/oads_hb/oads_hb.c")" \
+  --output "$(cygpath -m "$kit/libopenace$bits.a")"
+"$hbmk" "$root/tests/smoke/harbour_static_ace.prg" \
+  "$work/ads1.o" "$work/adsfunc.o" "$work/adsmgmnt.o" "$work/adsx.o" \
+  "$kit/libopenace$bits.a" \
   -comp="$comp" -I"$root/include/openads" -I"$HB/src/contrib/rddads" \
-  -lstdc++ -lws2_32 -lpsapi -ldflag=-static -o"$work/harbour-static-smoke.exe"
+  -lws2_32 -lpsapi -ldflag=-static -o"$work/harbour-static-smoke.exe"
 objdump -p "$work/harbour-static-smoke.exe" > "$work/imports.txt"
-if grep -Ei 'DLL Name:.*(openace|ace32|ace64)\.dll' "$work/imports.txt"; then
+if grep -Ei 'DLL Name:.*(openace[0-9]*|ace32|ace64|libstdc\+\+.*|libgcc.*|libwinpthread.*)\.dll' "$work/imports.txt"; then
   echo 'Harbour static smoke unexpectedly imports an ACE DLL' >&2
   exit 1
 fi

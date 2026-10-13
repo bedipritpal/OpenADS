@@ -286,11 +286,12 @@ jobs:
           # Static ACE library (MinGW): link into an hbmk2 -comp=mingw[64]
           # app and no ace<bits>.dll is needed at all. Built in the
           # "Build static ACE library (MinGW)" step above.
-          $staticLib = "build/mingw-${{ matrix.arch }}/src/libopenace$bits.a"
+          $staticLib = "build/static-kit-$bits/libopenace$bits.a"
           if (-not (Test-Path $staticLib)) {
               throw "Static ACE library missing: $staticLib"
           }
           Copy-Item $staticLib "$stage/libopenace$bits.a"
+          Copy-Item "build/static-kit-$bits/libopenace$bits.manifest.json" "$stage/"
           Copy-Item docs/master-diagnostics.md,docs/mingw-static-ace.md "$stage/"
           New-Item -ItemType Directory "$stage/static-smoke" -Force | Out-Null
           Copy-Item tests/smoke/mingw_static_ace.cpp,tests/smoke/harbour_static_ace.prg,tools/scripts/test_harbour_static_mingw.sh "$stage/static-smoke/"

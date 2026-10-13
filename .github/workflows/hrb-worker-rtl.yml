@@ -36,13 +36,14 @@ jobs:
       run: |
         set -euxo pipefail
         mkdir -p output work
-        W="$RUNNER_TEMP/winlibs/mingw32"
+        W="$(cygpath -m "$RUNNER_TEMP/winlibs/mingw32")"
+        P="$(cygpath -m "$PWD")"
         A="$PWD/input/hrb-auth-UNMERGED-x86/lib/libopenace32.a"
         echo '46c98a073872f81d169189a1d941ffb7ac4ed18078d82e11187d8f7eda5d9ec7  '"$A" | sha256sum -c -
         cp "$A" output/libopenace32.a
         cat > work/merge.mri <<EOF
-        create $PWD/output/libopenace32-runtime.a
-        addlib $PWD/output/libopenace32.a
+        create $P/output/libopenace32-runtime.a
+        addlib $P/output/libopenace32.a
         addlib $W/lib/libstdc++.a
         addlib $W/lib/gcc/i686-w64-mingw32/10.2.0/libgcc.a
         addlib $W/lib/gcc/i686-w64-mingw32/10.2.0/libgcc_eh.a

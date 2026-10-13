@@ -101,12 +101,24 @@ jobs:
         echo 'int __mingw_module_is_dll = 0;' > output/crt_compat.c
         gcc -c output/crt_compat.c -o output/crt_compat.o
         ar rcs output/libopenace32.a output/crt_compat.o
-        ar rcs output/librddads_openads_static.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
+        ar rcs output/librddads.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
+        gcc -c input/hrb-auth-UNMERGED-x86/contrib/oads_hb.c -I"$HB/include" -Iinput/hrb-auth-UNMERGED-x86/include -o output/oads_hb.o
+        ar rcs output/libopenace32.a output/oads_hb.o
+        nm -u output/oads_hb.o > output/glue-undefined.txt
+        nm --defined-only output/libopenace32.a > output/combined-defined.txt
+        python - <<'PYTHON'
+        import pathlib,json
+        needed={l.split()[-1] for l in pathlib.Path('output/glue-undefined.txt').read_text().splitlines() if l.split() and l.split()[-1].startswith(('_Ads','_OAds'))}
+        defined={l.split()[-1] for l in pathlib.Path('output/combined-defined.txt').read_text().splitlines() if len(l.split())>=3}
+        assert needed and not needed-defined,sorted(needed-defined)
+        pathlib.Path('output/glue-symbol-coverage.json').write_text(json.dumps({'required':sorted(needed),'missing':sorted(needed-defined)},indent=2))
+        PYTHON
         cat > output/probe.prg <<'PRG'
         #include "ads.ch"
-        REQUEST ADS
+        REQUEST ADS, ADSCDX
         PROCEDURE Main()
          LOCAL hConn,nErr,cChallenge
+         ErrorBlock( {|e| Break(e)} )
          OAds_SetLogging(.F.)
          AdsSetServerType(ADS_LOCAL_SERVER)
          hConn:=AdsConnect(".")
@@ -114,19 +126,35 @@ jobs:
           ErrorLevel(1)
           RETURN
          ENDIF
+         AdsSetFileType(ADS_CDX)
+         dbCreate("output/compat.dbf",{{"NAME","C",20,0},{"AGE","N",6,0}},"ADSCDX")
+         USE "output/compat.dbf" VIA "ADSCDX" NEW EXCLUSIVE
+         dbAppend()
+         FIELD->NAME := "verified"
+         FIELD->AGE := 42
+         dbCommit()
+         USE
+         USE "output/compat.dbf" VIA "ADSCDX" NEW EXCLUSIVE
+         dbGoTop()
+         IF AllTrim(FIELD->NAME) != "verified" .OR. FIELD->AGE != 42 .OR. LastRec() != 1
+          ErrorLevel(3)
+          RETURN
+         ENDIF
+         USE
          AdsDisconnect()
          cChallenge:=OAds_BeginAuth("ads://127.0.0.1:1",@nErr)
          IF !Empty(cChallenge)
           ErrorLevel(2)
           RETURN
          ENDIF
-         ? "Qt4.9.2 Harbour RDD static connect/disconnect and auth denial OK"
+         ? "Qt4.9.2 combined archive glue-autoload, DB create/write/reopen and auth denial OK"
         RETURN
         PRG
-        "$HB/bin/win/mingw/hbmk2.exe" output/probe.prg input/hrb-auth-UNMERGED-x86/contrib/oads_hb.c -Loutput -lrddads_openads_static -lopenace32 -iinput/hrb-auth-UNMERGED-x86/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -trace -ooutput/probe.exe > output/link-trace.txt 2>&1
+        "$HB/bin/win/mingw/hbmk2.exe" output/probe.prg -Loutput -lrddads -lopenace32 -iinput/hrb-auth-UNMERGED-x86/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -trace -ooutput/probe.exe > output/link-trace.txt 2>&1
         objdump -p output/probe.exe > output/imports.txt
         ! grep -Ei 'DLL Name:.*(ace32|openace|libstdc|libgcc|libwinpthread)' output/imports.txt
         output/probe.exe > output/run-proof.txt
+        sha256sum output/libopenace32.a output/librddads.a output/probe.exe > output/SHA256.txt
     - uses: actions/upload-artifact@v4
       if: always()
       with:

@@ -61,7 +61,8 @@ jobs:
         w=pathlib.Path(os.environ['RUNNER_TEMP'])/'winlibs/mingw32/bin'
         a=pathlib.Path('output/libopenace32.a').resolve();changed=[]
         for name in subprocess.check_output([str(w/'ar.exe'),'t',str(a)],text=True).splitlines():
-         data=subprocess.check_output([str(w/'ar.exe'),'p',str(a),name])
+         subprocess.run([str(w/'ar.exe'),'x',str(a),name],cwd='work',check=True)
+         data=(pathlib.Path('work')/name).read_bytes()
          if data[:4]==b'\x00\x00\xff\xff' and len(data)>56 and data[4:6]==b'\x02\x00':
           p=pathlib.Path('work')/name;p.write_bytes(data);out=p.with_suffix('.normal')
           subprocess.run([str(w/'objcopy.exe'),'-O','pe-i386',str(p),str(out)],check=True);out.replace(p)

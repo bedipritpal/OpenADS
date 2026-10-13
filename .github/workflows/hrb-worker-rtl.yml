@@ -70,6 +70,12 @@ jobs:
         pathlib.Path('output/converted-members.json').write_text(json.dumps(changed))
         assert 'ace_exports.cpp.obj' in changed
         PYTHON
+        # Include only the missing modern MinGW CRT support, not modern startup objects.
+        for spec in 'libmingw32.a lib32_libmingw32_a-cxa_thread_atexit.o' 'libmingw32.a lib32_libmingw32_a-tls_atexit.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-acrt_iob_func.o' 'libmsvcrt.a lib32_libmsvcrt_os_a-register_tls_atexit.o';do
+         read -r lib member <<< "$spec"
+         (cd work && "$W/bin/ar.exe" x "$W/i686-w64-mingw32/lib/$lib" "$member")
+         "$W/bin/ar.exe" r output/libopenace32.a "work/$member"
+        done
         "$W/bin/nm.exe" output/libopenace32.a > output/static-symbols.txt
         sha256sum output/libopenace32.a > output/SHA256.txt
     - name: Build Harbour with unchanged Qt4.9.2 and link real RDD plus glue
@@ -91,6 +97,10 @@ jobs:
         for unit in ads1 adsfunc adsmgmnt adsx;do
          gcc -c "$HB/contrib/rddads/$unit.c" -I"$HB/include" -I"$HB/contrib/rddads" -Iinput/hrb-auth-UNMERGED-x86/include -o "output/$unit.o"
         done
+        # Old startup lacks this modern CRT flag. This is an executable-only compatibility definition.
+        echo 'int __mingw_module_is_dll = 0;' > output/crt_compat.c
+        gcc -c output/crt_compat.c -o output/crt_compat.o
+        ar rcs output/libopenace32.a output/crt_compat.o
         ar rcs output/librddads_openads_static.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o
         cat > output/probe.prg <<'PRG'
         #include "ads.ch"
@@ -113,7 +123,7 @@ jobs:
          ? "Qt4.9.2 Harbour RDD static connect/disconnect and auth denial OK"
         RETURN
         PRG
-        "$HB/bin/win/mingw/hbmk2.exe" output/probe.prg input/hrb-auth-UNMERGED-x86/contrib/oads_hb.c output/librddads_openads_static.a output/libopenace32.a -iinput/hrb-auth-UNMERGED-x86/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -trace -ooutput/probe.exe > output/link-trace.txt 2>&1
+        "$HB/bin/win/mingw/hbmk2.exe" output/probe.prg input/hrb-auth-UNMERGED-x86/contrib/oads_hb.c -Loutput -lrddads_openads_static -lopenace32 -iinput/hrb-auth-UNMERGED-x86/include -i"$HB/contrib/rddads" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -trace -ooutput/probe.exe > output/link-trace.txt 2>&1
         objdump -p output/probe.exe > output/imports.txt
         ! grep -Ei 'DLL Name:.*(ace32|openace|libstdc|libgcc|libwinpthread)' output/imports.txt
         output/probe.exe > output/run-proof.txt

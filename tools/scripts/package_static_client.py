@@ -56,8 +56,8 @@ def main():
     # Copy notices from the exact installed runtime, not a newer web version.
     notice_root = pathlib.Path(a.runtime_root) / 'share' / 'licenses'
     notice_files = {
-        'gcc-libs/COPYING3': 'gcc-COPYING3.txt',
-        'gcc-libs/COPYING.RUNTIME': 'gcc-COPYING.RUNTIME.txt',
+        'gcc/COPYING3': 'gcc-COPYING3.txt',
+        'gcc/COPYING.RUNTIME': 'gcc-COPYING.RUNTIME.txt',
         'crt/COPYING.MinGW-w64-runtime.txt': 'MinGW-w64-runtime.txt',
         'winpthreads/COPYING': 'winpthreads-COPYING.txt',
     }

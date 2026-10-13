@@ -37,6 +37,7 @@ def main():
     out = pathlib.Path(a.output).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     engine = pathlib.Path(a.engine).resolve()
+    engine_digest = hashlib.sha256(engine.read_bytes()).hexdigest()
     ar, objcopy, nm = [tool(a.runtime_root, n) for n in ('ar', 'objcopy', 'nm')]
     gcc = tool(a.runtime_root, 'gcc')
     link_gcc = tool(a.link_root, 'gcc')
@@ -114,7 +115,7 @@ def main():
         run(ar, 's', candidate)
         candidate.replace(out)
     manifest = {'profile': a.profile, 'runtime_target': triple, 'runtime_version': version,
-                'link_version': link_version, 'engine_sha256': hashlib.sha256(engine.read_bytes()).hexdigest(),
+                'link_version': link_version, 'engine_sha256': engine_digest,
                 'archive_sha256': hashlib.sha256(out.read_bytes()).hexdigest(),
                 'bytes': out.stat().st_size, 'converted_bigobj': converted,
                 'glue_exports_verified': sorted(required)}

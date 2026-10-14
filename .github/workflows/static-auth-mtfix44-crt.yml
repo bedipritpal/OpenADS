@@ -1,0 +1,303 @@
+name: mtfix44 Windows CRT compatibility repair
+'on':
+  push:
+    branches:
+    - test/static-auth-oct12-mtfix44
+    paths:
+    - .github/workflows/static-auth-mtfix44-crt.yml
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  proof:
+    runs-on: windows-2022
+    timeout-minutes: 100
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: test/static-auth-oct12-mtfix44
+    - name: Apply narrow fallback CRT symbol fix on test branch only
+      shell: bash
+      run: 'set -euxo pipefail
+
+        test "$GITHUB_REPOSITORY" = bedipritpal/OpenADS
+
+        test "$GITHUB_REF" = refs/heads/test/static-auth-oct12-mtfix44
+
+        git merge-base --is-ancestor f22ff068b2e2735b384afaf576f7141a9cffbb63 HEAD
+
+        python - <<''PYFIX''
+
+        from pathlib import Path
+
+        p=Path(''tools/scripts/qt492_tls_exit_bridge.c'')
+
+        s=p.read_text()
+
+        assert s.count(''int __mingw_module_is_dll = 0;'') == 1
+
+        s=s.replace(''int __mingw_module_is_dll = 0;'', ''/* Common fallback for the old CRT. A newer CRT strong definition wins. */\nint __mingw_module_is_dll
+        __attribute__((common));'')
+
+        p.write_text(s)
+
+        PYFIX
+
+        git diff --check
+
+        git add tools/scripts/qt492_tls_exit_bridge.c
+
+        git -c user.name=''Pritpal Bedi test assistant'' -c user.email=''bedipritpal@users.noreply.github.com'' commit -m ''Fix static kit CRT
+        flag collision without changing TLS exit bridge''
+
+        git push origin HEAD:refs/heads/test/static-auth-oct12-mtfix44
+
+        '
+    - name: Download exact historical Qt compiler
+      shell: pwsh
+      run: 'Invoke-WebRequest ''https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z'' -OutFile
+        "$env:RUNNER_TEMP/qt492.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/qt492.7z" -Algorithm SHA256).Hash.ToLower() -ne ''f6de32350a28f4b6c30eec26dbfee65f112300d51e37e4d2007b0598bef9bb79''){throw
+        ''Qt compiler hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/qt492.7z" "-o$env:RUNNER_TEMP/qt492" -y
+
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne ''019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907''){throw
+        ''Winlibs hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+        '
+    - name: Build TLS auth daemon and raw static kit with pinned GCC10.2
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+
+        test "$(gcc -dumpversion)" = 10.2.0
+
+        find "$RUNNER_TEMP/winlibs" -iname ''*copying*'' -o -iname ''*license*'' | sort
+
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-server"
+
+        git -C "$RUNNER_TEMP/harbour-server" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+
+        mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
+
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
+
+        cmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600
+        -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.74-mtfix44-static-auth-test
+        -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw"
+        -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+
+        cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe
+        auth_spike_abi_probe -j2
+
+        '
+    - name: Build Harbour with unchanged Qt4.9.2
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+
+        test "$(gcc -dumpversion)" = 4.9.2
+
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-old"
+
+        git -C "$RUNNER_TEMP/harbour-old" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+
+        mingw32-make -C "$RUNNER_TEMP/harbour-old" -j2
+
+        '
+    - name: Exact GCC10.2 and mingw-w64 8 runtime notices (Winlibs omits them)
+      shell: bash
+      run: 'set -euxo pipefail
+
+        W="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32")"
+
+        mkdir -p "$W/share/licenses/gcc" "$W/share/licenses/crt" "$W/share/licenses/winpthreads"
+
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING3 -o "$W/share/licenses/gcc/COPYING3"
+
+        echo ''8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  ''"$W/share/licenses/gcc/COPYING3" | sha256sum -c -
+
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING.RUNTIME -o "$W/share/licenses/gcc/COPYING.RUNTIME"
+
+        echo ''9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74  ''"$W/share/licenses/gcc/COPYING.RUNTIME" | sha256sum -c -
+
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt
+        -o "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt"
+
+        echo ''e9b2dc02451ea29092a1f25fa0f3c07207ed421f1807dffb0c4e6dce69dee7bd  ''"$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt" | sha256sum
+        -c -
+
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/mingw-w64-libraries/winpthreads/COPYING
+        -o "$W/share/licenses/winpthreads/COPYING"
+
+        echo ''63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177  ''"$W/share/licenses/winpthreads/COPYING" | sha256sum -c -
+
+        '
+    - name: Package exact source and build threaded B_BIG probes
+      shell: bash
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/qt492/mingw32/bin\"):$PATH\"\nHB=\"$(cygpath -u \"$RUNNER_TEMP/harbour-old\"\
+        )\"\nmkdir -p srv mtdata output kit\ncp build-legacy/src/*.dll build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/openads_auth_worker.exe\
+        \ srv/\ncat > output/local_create.prg <<'PRG'\n#include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main( cDir )\n   LOCAL cDbf := cDir\
+        \ + \"/TestIndex.dbf\", cIdx := cDir + \"/TestIndex.cdx\"\n   FIELD NAME,CITY,INS\n   OAds_SetLogging( .F. )\n   AdsSetServerType( ADS_LOCAL_SERVER\
+        \ )\n   AdsConnect( \".\" )\n   AdsSetFileType( ADS_CDX )\n   RddSetDefault( \"ADSCDX\" )\n   DbCreate( cDbf, { { \"NAME\", \"C\", 19,\
+        \ 0 }, { \"CITY\", \"C\", 15, 0 }, { \"AGE\", \"N\", 3, 0 }, { \"TS\", \"C\", 23, 0 }, { \"THD\", \"N\", 3, 0 }, { \"INS\", \"N\", 4,\
+        \ 0 }, { \"RDD\", \"C\", 3, 0 } }, \"ADSCDX\" )\n   dbCloseArea()\n   USE ( cDbf ) VIA \"ADSCDX\" ALIAS _STG SHARED NEW\n   INDEX ON NAME\
+        \ TAG \"IDX01\" TO ( cIdx )\n   INDEX ON CITY TAG \"IDX02\" TO ( cIdx )\n   INDEX ON INS TAG \"IDX03\" TO ( cIdx )\n   dbCloseArea()\n\
+        \   OutStd( \"exact fixture ready\" + hb_eol() )\nRETURN\n\nPRG\ncat > output/probe_mt.prg <<'PRG'\n#include \"ads.ch\"\n#define __HLP__(s)\
+        \ .T.\nREQUEST ADS, ADSCDX\nSTATIC s_hConn := 0\nSTATIC s_cRdd := \"ADSCDX\"\nSTATIC s_nRandom := 1\nPROCEDURE Main( cUri, cDir )\n  \
+        \ LOCAL cChallenge, hPending := 0, i, x, aThreads := {}, cErr := Space(512)\n   ErrorBlock( {| e | OutStd( \"ERROR \" + hb_ValToExp(e)\
+        \ + hb_eol() ), Break(e) } )\n   AdsSetFileType( ADS_CDX )\n   AdsSetServerType( ADS_REMOTE_SERVER )\n   RddSetDefault( s_cRdd )\n   s_hConn\
+        \ := AdsConnect( cUri )\n   IF Empty( s_hConn )\n      OutStd( \"CONNECT-FAIL\" + hb_eol() )\n      ErrorLevel(3) ; QUIT\n   ENDIF\n \
+        \  FOR i := 1 TO 9\n      AAdd(aThreads,hb_threadStart({|| StageExact(cDir)}))\n   NEXT\n   StageExact(cDir)\n   OutStd( \"MAIN-STAGE-PASS\"\
+        \ + hb_eol() )\n   dbGoTop()\n   OutStd( \"MAIN-GOTOP-PASS lastrec=\" + hb_ntos(LastRec()) + hb_eol() )\n   FOR EACH x IN aThreads\n \
+        \     hb_threadJoin(x)\n   NEXT\n   OutStd( \"EXACT-THREADS-JOINED lastrec=\" + hb_ntos(LastRec()) + hb_eol() )\n   dbCloseArea()\nRETURN\n\
+        PROCEDURE StageExact(cDir)\n   BEGIN SEQUENCE\n      IF HeyAddRecords(cDir+\"/TestIndex.dbf\",cDir+\"/TestIndex.cdx\")\n         dbGoTop()\n\
+        \      ENDIF\n      Mark(\"stage done\")\n   RECOVER\n      Mark(\"RECOVER\")\n      ErrorLevel(4)\n   END SEQUENCE\nRETURN\nPROCEDURE\
+        \ Mark(c)\n   OutStd(\"t\"+hb_ntos(hb_threadId())+\" \"+c+hb_eol())\nRETURN\nPROCEDURE LogEvents(c)\n   Mark(c)\nRETURN\nFUNCTION HeyAddRecords(\
+        \ cDbf, cIdx )\n   LOCAL aRec, aData, lAppended\n   LOCAL lAdded := .T.\n\n   IF .T.\n      Mark( \"before USE\" )\n      USE ( cDbf )\
+        \ VIA ( s_cRdd ) ALIAS _STG SHARED NEW\n   ENDIF\n   Mark( \"after USE\" )\n   IF ! Alias() == \"_STG\"\n      lAdded := .F.\n      ?\
+        \ \"Could not Open: \", cDbf\n   ELSE\n      IF __HLP__( \"__Switching it ON do not display records in the browser as well as referencing\
+        \ them__\" )\n         Mark( \"before dbSetIndex\" )\n         dbSetIndex( cIdx )\n         Mark( \"after dbSetIndex\" )\n         dbSetOrder(\
+        \ 0 )\n      ENDIF\n      aData := { { \"Alice\"  , \"Madrid\"    }, ;\n                 { \"Bob\"    , \"Barcelona\" }, ;\n         \
+        \        { \"Phillip\", \"Panipat\"   }, ;\n                 { \"Charlie\", \"Valencia\"  }, ;\n                 { \"Linda\"  , \"Iris\"\
+        \      }, ;\n                 { \"Finland\", \"Dallas\"    }, ;\n                 { \"Diana\"  , \"Sevilla\"   }, ;\n                \
+        \ { \"Lucy\"   , \"Sevilla\"   }, ;\n                 { \"Jony\"   , \"Walker\"    }, ;\n                 { \"Edward\" , \"Bilbao\"  \
+        \  } }\n      FOR EACH aRec IN aData\n         Mark( \"before append \" + hb_ntos( aRec:__enumIndex() ) )\n#if 0\n         IF aRec:__enumIndex()\
+        \ > 1\n            EXIT\n         ENDIF\n#endif\n         IF ! lAppended := _STG->( DbAppend() )\n            hb_idleSleep()\n       \
+        \     lAppended := _STG->( DbAppend() )\n         ENDIF\n         Mark( \"after append ok=\" + hb_ValToExp(lAppended) + \" neterr=\" +\
+        \ hb_ValToExp(NetErr()) + \" recno=\" + hb_ntos(RecNo()) )\n         IF lAppended\n            REPLACE _STG->NAME WITH aRec[ 1 ]\n   \
+        \         REPLACE _STG->CITY WITH aRec[ 2 ]\n            REPLACE _STG->AGE  WITH hb_randInt( 20, 120 )\n            REPLACE _STG->TS \
+        \  WITH hb_TSToStr( hb_DateTime() )\n            REPLACE _STG->THD  WITH hb_threadId()\n            REPLACE _STG->INS  WITH s_nRandom\n\
+        \            REPLACE _STG->RDD  WITH s_cRdd\n            //\n            Mark( \"before commit\" )\n            _STG->( DbCommit() ) ;\
+        \ _STG->( dbUnlock() )\n            Mark( \"after commit/unlock\" )  /* a must for networked applications */\n         ELSE\n        \
+        \    LogEvents( \"Could not APPEND \" + aRec[ 1 ] )\n         ENDIF\n      NEXT\n   ENDIF\n   RETURN lAdded\n\n\nPRG\nW=\"$(cygpath -m\
+        \ \"$RUNNER_TEMP/winlibs/mingw32\")\"\nQ=\"$(cygpath -m \"$RUNNER_TEMP/qt492/mingw32\")\"\npython tools/scripts/package_static_client.py\
+        \ --profile qt492-x86 --engine build-legacy/src/libopenace32.a --runtime-root \"$W\" --link-root \"$Q\" --harbour-include \"$(cygpath\
+        \ -m \"$HB/include\")\" --ace-include \"$(cygpath -m \"$PWD/include/openads\")\" --glue \"$(cygpath -m \"$PWD/contrib/oads_hb/oads_hb.c\"\
+        )\" --output kit/libopenace32.a | tee output/package-manifest.txt\ncp kit/libopenace32.a kit/libopenace32.manifest.json output/\ncp -r\
+        \ kit/runtime-notices output/\nfor unit in ads1 adsfunc adsmgmnt adsx;do\n gcc -c \"$HB/contrib/rddads/$unit.c\" -I\"$HB/include\" -I\"\
+        $HB/contrib/rddads\" -Iinclude/openads -o \"output/$unit.o\"\ndone\nar rcs kit/librddads.a output/ads1.o output/adsfunc.o output/adsmgmnt.o\
+        \ output/adsx.o\nfor name in local_create probe_mt;do\n \"$HB/bin/win/mingw/hbmk2.exe\" \"output/$name.prg\" -Lkit -lrddads -lopenace32\
+        \ -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -o\"output/$name.exe\"\ndone\nmkdir -p lrdd\
+        \ && cp kit/librddads.a lrdd/\n\"$HB/bin/win/mingw/hbmk2.exe\" output/probe_mt.prg contrib/oads_hb/oads_hb.c -Llrdd -Lbuild-legacy/src\
+        \ -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd -lws2_32 -lbcrypt -lpsapi -ooutput/probe_mt_dll.exe\nobjdump\
+        \ -p output/probe_mt.exe > output/static-pe.txt\nif grep -Ei 'DLL Name:.*(openace|ace32|libstdc|libgcc|libwinpthread).*\\.dll' output/static-pe.txt;then\
+        \ exit 1;fi\ncat > output/tls-proof.c <<'TLSPROOF'\n#include <windows.h>\n#include <process.h>\n#include <stdio.h>\nextern int __cxa_thread_atexit(void\
+        \ (__attribute__((thiscall)) *)(void*), void*, void*);\nstatic volatile LONG count;\nstatic void __attribute__((thiscall)) cleanup(void*\
+        \ p) {\n    LONG n=InterlockedIncrement(&count);\n    printf(\"TLS-DTOR %ld\\n\",n); fflush(stdout);\n}\nstatic unsigned __stdcall worker(void*\
+        \ p) {\n    if(__cxa_thread_atexit(cleanup,p,0)) return 2;\n    return 0;\n}\nint main(void) {\n    HANDLE t[9]; int i; DWORD result;\n\
+        \    if(__cxa_thread_atexit(cleanup,(void*)1,0)) return 3;\n    for(i=0;i<9;i++) t[i]=(HANDLE)_beginthreadex(0,0,worker,(void*)2,0,0);\n\
+        \    WaitForMultipleObjects(9,t,TRUE,INFINITE);\n    for(i=0;i<9;i++){GetExitCodeThread(t[i],&result);if(result)return 4;CloseHandle(t[i]);}\n\
+        \    printf(\"WORKER-DTORS %ld\\n\",count);fflush(stdout);\n    return count==9 ? 0 : 5;\n}\nTLSPROOF\ngcc output/tls-proof.c -Lkit -lopenace32\
+        \ -static -lws2_32 -lbcrypt -lpsapi -o output/tls-proof.exe\noutput/tls-proof.exe > output/tls-proof.txt\ncat output/tls-proof.txt\ngrep\
+        \ -q \"WORKER-DTORS 9\" output/tls-proof.txt\ngrep -q \"TLS-DTOR 10\" output/tls-proof.txt\n\ncat > output/check_rows.prg <<'CHECKROWS'\n\
+        #include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main(cDir)\n LOCAL nRows:=0, nEmpty:=0\n FIELD NAME,CITY\n AdsSetServerType(ADS_LOCAL_SERVER)\n\
+        \ AdsSetFileType(ADS_CDX)\n RddSetDefault(\"ADSCDX\")\n USE (cDir+\"/TestIndex.dbf\") VIA \"ADSCDX\" SHARED NEW\n dbGoTop()\n DO WHILE\
+        \ !Eof()\n   nRows++\n   IF Empty(NAME) .OR. Empty(CITY)\n      nEmpty++\n   ENDIF\n   dbSkip()\n ENDDO\n OutStd(\"STORED rows=\"+hb_ntos(nRows)+\"\
+        \ lastrec=\"+hb_ntos(LastRec())+\" empty=\"+hb_ntos(nEmpty)+hb_eol())\n dbCloseAll()\nRETURN\nCHECKROWS\n\"$HB/bin/win/mingw/hbmk2.exe\"\
+        \ output/check_rows.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd -fullstatic -lws2_32 -lbcrypt\
+        \ -lpsapi -ooutput/check_rows.exe\n\ngit rev-parse HEAD > output/source-commit.txt\nsha256sum output/libopenace32.a > output/archive-sha256.txt\n\
+        \ncat > output/auth_static.prg <<'PRG'\n#include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main(cUrl)\n LOCAL cChallenge,hPending:=0,hConn:=0,cBlob\n\
+        \ cChallenge:=OAds_BeginAuth(cUrl,@hPending)\n IF Len(cChallenge)!=32\n  OutStd(\"AUTH-BEGIN-FAIL\"+hb_eol())\n  ErrorLevel(3);QUIT\n\
+        \ ENDIF\n cBlob:=cChallenge+\"test-only\"\n hConn:=OAds_CompleteAuth(hPending,cBlob)\n IF Empty(hConn)\n  OutStd(\"AUTH-COMPLETE-FAIL\"\
+        +hb_eol())\n  ErrorLevel(4);QUIT\n ENDIF\n AdsDisconnect(hConn)\n OutStd(\"STATIC-AUTH-PASS\"+hb_eol())\nRETURN\nPRG\n\"$HB/bin/win/mingw/hbmk2.exe\"\
+        \ output/auth_static.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd -fullstatic -lws2_32 -lbcrypt\
+        \ -lpsapi -ooutput/auth_static.exe\nobjdump -p output/auth_static.exe > output/static-auth-pe.txt\nif grep -Ei 'DLL Name:.*(openace|ace32|libstdc|libgcc|libwinpthread).*\\\
+        .dll' output/static-auth-pe.txt;then exit 1;fi\n\n# Both CRT startup versions must link and run the SAME combined kit.\nW=\"$(cygpath\
+        \ -u \"$RUNNER_TEMP/winlibs/mingw32\")\"\n# Reproduce the original strong-symbol collision with a startup-owned flag.\ncat > output/crt-owner.c\
+        \ <<'CRTOWNER'\nint __mingw_module_is_dll = 0;\nint main(void) { return __mingw_module_is_dll; }\nCRTOWNER\ncat > output/crt-strong-old.c\
+        \ <<'CRTOLD'\nint __mingw_module_is_dll = 0;\nCRTOLD\ngcc -c output/crt-strong-old.c -o output/crt-strong-old.o\nif gcc output/crt-owner.c\
+        \ output/crt-strong-old.o -o output/should-not-link.exe > output/crt-negative.txt 2>&1; then exit 1; fi\ngrep -q 'multiple definition'\
+        \ output/crt-negative.txt\ngcc -c tools/scripts/qt492_tls_exit_bridge.c -o output/crt-fixed.o\ngcc output/crt-owner.c output/crt-fixed.o\
+        \ -o output/crt-fixed.exe\noutput/crt-fixed.exe\nnm output/crt-fixed.o | grep -E ' C .*mingw_module_is_dll' > output/crt-common.txt\n\
+        # Qt4.9.2 path already ran tls-proof.exe, now actual MinGW10.2 startup.\n\"$W/bin/gcc.exe\" output/tls-proof.c -Lkit -lopenace32 -static\
+        \ -lws2_32 -lbcrypt -lpsapi -Wl,-Map,output/tls-proof-gcc102.map -o output/tls-proof-gcc102.exe\noutput/tls-proof-gcc102.exe > output/tls-proof-gcc102.txt\n\
+        cat output/tls-proof-gcc102.txt\ngrep -q 'WORKER-DTORS 9' output/tls-proof-gcc102.txt\ngrep -q 'TLS-DTOR 10' output/tls-proof-gcc102.txt\n\
+        objdump -p output/tls-proof-gcc102.exe > output/tls-proof-gcc102-pe.txt\nif grep -Ei 'DLL Name:.*(openace|ace32|libstdc|libgcc|libwinpthread).*\\\
+        .dll' output/tls-proof-gcc102-pe.txt; then exit 1; fi\n"
+    - name: Run twenty static and DLL integrity fixtures
+      shell: pwsh
+      run: "$data=(Resolve-Path mtdata).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n& $srv --help | Out-File srv/help.txt\n& $srv\
+        \ --version | Out-File srv/version.txt\n$p=Start-Process -FilePath $srv -ArgumentList ('--port 16262 --data '+$data) -WorkingDirectory\
+        \ (Split-Path $srv) -RedirectStandardOutput srv/stdout.log -RedirectStandardError srv/stderr.log -PassThru\n$ok=$false\nfor($i=0;$i -lt\
+        \ 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 16262 -WarningAction SilentlyContinue; if($c.TcpTestSucceeded){$ok=$true;break};\
+        \ Start-Sleep -Milliseconds 500 }\nif(-not $ok){throw 'server did not listen'}\n$env:Path = (Resolve-Path srv).Path + ';' + $env:Path\n\
+        for($trial=1;$trial -le 20;$trial++) {\n foreach($mode in @('static','dll')) {\n  $trialDir=Join-Path (Get-Location) \"mtdata/$mode$trial\"\
+        \n  New-Item -ItemType Directory -Path $trialDir -Force | Out-Null\n  $trialDir=$trialDir.Replace('\\','/')\n  & output/local_create.exe\
+        \ $trialDir | Out-File \"output/$mode$trial-fixture.txt\"\n  $trialUrl=\"tcp://127.0.0.1:16262/$trialDir\"\n  $exe='output/probe_mt.exe';if($mode\
+        \ -eq 'dll'){$exe='output/probe_mt_dll.exe'}\n  $clock=[System.Diagnostics.Stopwatch]::StartNew()\n  $p=Start-Process -FilePath (Resolve-Path\
+        \ $exe).Path -ArgumentList @($trialUrl,$trialDir) -RedirectStandardOutput \"output/$mode$trial-stdout.txt\" -RedirectStandardError \"\
+        output/$mode$trial-stderr.txt\" -PassThru\n  if(-not $p.WaitForExit(45000)){$p.Kill();throw \"$mode trial $trial hung\"}\n  if($p.ExitCode\
+        \ -ne 0){throw \"$mode trial $trial failed exit $($p.ExitCode)\"}\n  $clock.Stop()\n  $elapsed=$clock.Elapsed.TotalMilliseconds\n  $end=Select-String\
+        \ -Path \"output/$mode$trial-stdout.txt\" -Pattern 'EXACT-THREADS-JOINED'\n  $fails=@(Select-String -Path \"output/$mode$trial-stdout.txt\"\
+        \ -Pattern 'Could not APPEND').Count\n  $stored=& output/check_rows.exe $trialDir\n  $bytes=[System.IO.File]::ReadAllBytes(\"$trialDir/TestIndex.dbf\"\
+        )\n  $disk=[BitConverter]::ToUInt32($bytes,4)\n  \"$mode TRIAL $trial PASS $end elapsed_ms=$elapsed failed_appends=$fails disk_header=$disk\
+        \ $stored\" | Tee-Object -FilePath output/repeat-summary.txt -Append\n  if(-not $end){throw \"$mode trial $trial incomplete\"}\n  if($fails\
+        \ -ne 0 -or $disk -ne 100 -or $stored -notmatch 'rows=100 lastrec=100 empty=0'){throw \"$mode integrity mismatch\"}\n }\n}\nGet-Content\
+        \ output/tls-proof.txt\n\n"
+    - name: Native worker and encrypted auth regression
+      shell: bash
+      run: "set -euxo pipefail\nHB=\"$(cygpath -u \"$RUNNER_TEMP/harbour-server\")\"\n\"$HB/bin/win/mingw/harbour.exe\" tests/hrb/auth-spike/test_only.prg\
+        \ -gh -oauth-probe.hrb\nMSYS_NO_PATHCONV=1 icacls.exe auth-probe.hrb /inheritance:r /grant \"$USERNAME:R\" /grant 'SYSTEM:R' /grant 'Administrators:R'\n\
+        for p in worker_probe integration_probe;do\n build-legacy/tools/serverd/auth_spike_$p.exe \"$(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_auth_worker.exe\"\
+        )\" \"$(cygpath -m \"$PWD/auth-probe.hrb\")\" | tee \"output/auth-$p.txt\"\ndone\nbuild-legacy/tools/serverd/openads_serverd.exe --version\
+        \ | tee output/auth-version.txt\nmkdir -p delivery/mtfix44-static-auth/{bin,lib,include,docs}\ncp kit/libopenace32.a kit/librddads.a kit/libopenace32.manifest.json\
+        \ delivery/mtfix44-static-auth/lib/\ncp -r kit/runtime-notices delivery/mtfix44-static-auth/\ncp srv/openads_serverd.exe srv/openads_auth_worker.exe\
+        \ delivery/mtfix44-static-auth/bin/\ncp include/openads/ace.h delivery/mtfix44-static-auth/include/\ncp \"$RUNNER_TEMP/harbour-old/contrib/rddads/ads.ch\"\
+        \ delivery/mtfix44-static-auth/include/\ncp docs/STATIC_AUTH_MTFIX44_TEST.md delivery/mtfix44-static-auth/docs/\ncp output/source-commit.txt\
+        \ delivery/mtfix44-static-auth/\nfind delivery/mtfix44-static-auth -type f -exec sha256sum {} \\; > delivery/SHA256.txt\n7z a -tzip mtfix44-static-auth-qt492-x86.zip\
+        \ ./delivery/*\n"
+    - name: Static Harbour BeginAuth CompleteAuth native smoke
+      shell: pwsh
+      run: "$data=(Resolve-Path mtdata).Path\n$mod=(Resolve-Path auth-probe.hrb).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n$args='--port\
+        \ 17262 --data \"'+$data+'\" --auth_user usr:pw --auth_module \"'+$mod+'\"'\n$p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory\
+        \ (Split-Path $srv) -RedirectStandardOutput output/auth-server-stdout.txt -RedirectStandardError output/auth-server-stderr.txt -PassThru\n\
+        try {\n $ok=$false\n for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 17262 -WarningAction SilentlyContinue;if($c.TcpTestSucceeded){$ok=$true;break};Start-Sleep\
+        \ -Milliseconds 500 }\n if(-not $ok){throw 'auth server did not listen'}\n $uri='auth://127.0.0.1:17262/'+$data.Replace('\\','/')\n $q=Start-Process\
+        \ -FilePath (Resolve-Path output/auth_static.exe).Path -ArgumentList $uri -RedirectStandardOutput output/static-auth-stdout.txt -RedirectStandardError\
+        \ output/static-auth-stderr.txt -PassThru\n if(-not $q.WaitForExit(45000)){$q.Kill();throw 'static auth hung'}\n if($q.ExitCode -ne 0){throw\
+        \ \"static auth failed $($q.ExitCode)\"}\n if(-not (Select-String output/static-auth-stdout.txt -Pattern STATIC-AUTH-PASS)){throw 'static\
+        \ auth proof missing'}\n} finally {if(-not $p.HasExited){$p.Kill()}}\n"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix44-windows-crt-repair-proof
+        path: 'output/
+
+          delivery/
+
+          mtfix44-static-auth-qt492-x86.zip
+
+          srv/*.log
+
+          srv/*.txt
+
+          '
+        if-no-files-found: warn
+        retention-days: 14
+    - name: Replace Windows kit only after native proofs
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euxo pipefail
+
+        test "$GITHUB_REPOSITORY" = bedipritpal/OpenADS
+
+        gh release upload v1.09.74-mtfix44-static-auth-test mtfix44-static-auth-qt492-x86.zip --clobber
+
+        '

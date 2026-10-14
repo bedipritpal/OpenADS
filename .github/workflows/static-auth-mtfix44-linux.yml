@@ -1,0 +1,110 @@
+name: mtfix44 add Linux standard auth kit
+'on':
+  push:
+    branches:
+    - test/static-auth-oct12-mtfix44
+    paths:
+    - .github/workflows/static-auth-mtfix44-linux.yml
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: f22ff068b2e2735b384afaf576f7141a9cffbb63
+        fetch-depth: 0
+    - name: Dependencies and Harbour
+      run: 'sudo apt-get update -qq
+
+        sudo apt-get install -y libncurses-dev libpcre3-dev
+
+        git clone https://github.com/harbour/core.git /tmp/hb
+
+        git -C /tmp/hb checkout 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+
+        HB_WITH_PCRE=local HB_WITH_ZLIB=local HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no make -C /tmp/hb -j2
+
+        '
+    - name: Build and test current main plus auth
+      run: 'cmake -S . -B build -DOPENADS_VERSION_FORCE=1.09.74-mtfix44-static-auth-test -DOPENADS_WITH_TLS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF
+        -DOPENADS_WITH_HARBOUR_UDF=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DHARBOUR_INCLUDE_DIR=/tmp/hb/include -DHARBOUR_LIB_DIR=/tmp/hb/lib/linux/gcc
+        -DHARBOUR_COMPILER=/tmp/hb/bin/linux/gcc/harbour ''-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hbzlib;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon''
+
+        cmake --build build --target openads_ace openads_unit_tests openads_serverd openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe
+        -j2
+
+        ctest --test-dir build --timeout 600 --output-on-failure -R openads_unit_tests
+
+        /tmp/hb/bin/linux/gcc/harbour tests/hrb/auth-spike/test_only.prg -gh -o/tmp/test_only.hrb
+
+        chmod 600 /tmp/test_only.hrb
+
+        build/tools/serverd/auth_spike_worker_probe "$PWD/build/tools/serverd/openads_auth_worker" /tmp/test_only.hrb
+
+        build/tools/serverd/auth_spike_integration_probe "$PWD/build/tools/serverd/openads_auth_worker" /tmp/test_only.hrb
+
+        '
+    - name: Stage standard Linux launcher kit
+      run: 'set -euxo pipefail
+
+        test "$(git rev-parse HEAD)" = f22ff068b2e2735b384afaf576f7141a9cffbb63
+
+        V=1.09.74-mtfix44-static-auth-test
+
+        D="openads-$V-linux-x64"
+
+        mkdir -p "$D"
+
+        cp build/tools/serverd/openads_serverd build/tools/serverd/openads_auth_worker "$D/"
+
+        cp build/src/libopenace64.so "$D/"
+
+        cp "$D/libopenace64.so" "$D/libace64.so"
+
+        cp LICENSE NOTICE README.md openads.ini.sample "$D/"
+
+        cp -r include "$D/"
+
+        cp docs/STATIC_AUTH_MTFIX44_TEST.md "$D/"
+
+        git rev-parse HEAD > "$D/source-commit.txt"
+
+        chmod 755 "$D/openads_serverd" "$D/openads_auth_worker"
+
+        "$D/openads_serverd" --version | grep -F "$V"
+
+        ldd "$D/openads_serverd" | tee "$D/ldd-server.txt"
+
+        ldd "$D/openads_auth_worker" | tee "$D/ldd-worker.txt"
+
+        ! grep -q ''not found'' "$D/ldd-"*.txt
+
+        (cd "$D" && find . -type f ! -name SHA256SUMS -exec sha256sum {} \; > SHA256SUMS && sha256sum -c SHA256SUMS)
+
+        tar -czf "$D.tar.gz" "$D"
+
+        sha256sum "$D.tar.gz" > "$D.tar.gz.sha256"
+
+        '
+    - uses: actions/upload-artifact@v4
+      with:
+        name: mtfix44-linux-standard
+        path: openads-1.09.74-mtfix44-static-auth-test-linux-x64.tar.gz*
+    - name: Add Linux asset to existing pre-release only after green proofs
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euxo pipefail
+
+        test "$GITHUB_REPOSITORY" = bedipritpal/OpenADS
+
+        V=1.09.74-mtfix44-static-auth-test
+
+        test "$(gh release view v$V --json targetCommitish --jq .targetCommitish)" = f22ff068b2e2735b384afaf576f7141a9cffbb63
+
+        gh release upload v$V "openads-$V-linux-x64.tar.gz" "openads-$V-linux-x64.tar.gz.sha256"
+
+        '
+    timeout-minutes: 30

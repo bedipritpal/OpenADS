@@ -231,10 +231,11 @@ jobs:
       shell: bash
     - name: Static Harbour BeginAuth CompleteAuth native smoke
       run: "$env:OPENADS_WIRE_TRACE=\"1\"\n$env:OPENADS_WIRE_TRACE_FILE=(Join-Path $PWD \"output/auth-wire-trace.txt\")\n$data=(Resolve-Path mtdata).Path\n\
-        $mod=(Resolve-Path auth-probe.hrb).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n$args='--port 17262 --data \"'+$data+'\" --auth_user\
-        \ usr:pw --auth_module \"'+$mod+'\"'\n$p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput\
-        \ output/auth-server-stdout.txt -RedirectStandardError output/auth-server-stderr.txt -PassThru\ntry {\n $ok=$false\n for($i=0;$i -lt 60;$i++){\
-        \ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 17262 -WarningAction SilentlyContinue;if($c.TcpTestSucceeded){$ok=$true;break};Start-Sleep\
+        & output/local_create.exe $data | Out-File output/auth-trace-fixture.txt\nif($LASTEXITCODE -ne 0){throw \"auth trace fixture create failed\"\
+        }\n$mod=(Resolve-Path auth-probe.hrb).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n$args='--port 17262 --data \"'+$data+'\"\
+        \ --auth_user usr:pw --auth_module \"'+$mod+'\"'\n$p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path $srv)\
+        \ -RedirectStandardOutput output/auth-server-stdout.txt -RedirectStandardError output/auth-server-stderr.txt -PassThru\ntry {\n $ok=$false\n\
+        \ for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 17262 -WarningAction SilentlyContinue;if($c.TcpTestSucceeded){$ok=$true;break};Start-Sleep\
         \ -Milliseconds 500 }\n if(-not $ok){throw 'auth server did not listen'}\n $uri='auth://127.0.0.1:17262/'+$data.Replace('\\','/')\n $q=Start-Process\
         \ -FilePath (Resolve-Path output/auth_static.exe).Path -ArgumentList $uri -RedirectStandardOutput output/static-auth-stdout.txt -RedirectStandardError\
         \ output/static-auth-stderr.txt -PassThru\n if(-not $q.WaitForExit(45000)){$q.Kill();throw 'static auth hung'}\n if($q.ExitCode -ne 0){throw\

@@ -3,7 +3,8 @@
  * its adapter only from the old CRT's constructor phase. */
 #include <windows.h>
 #include <stdlib.h>
-int __mingw_module_is_dll = 0;
+/* Common fallback for the old CRT. A newer CRT strong definition wins. */
+int __mingw_module_is_dll __attribute__((common));
 static void (WINAPI *tls_exit_callback)(void *, DWORD, void *);
 static void run_tls_exit(void) {
     if (tls_exit_callback) tls_exit_callback(NULL, DLL_PROCESS_DETACH, NULL);

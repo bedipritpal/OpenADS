@@ -7266,6 +7266,7 @@ void expire_auth_pending() {
 }
 }
 UNSIGNED32 ENTRYPOINT OAdsBeginAuth(const char* url,ADSHANDLE* pending,UNSIGNED8* challenge32) {
+    if (cli_trace_on()) openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
     if(pending)*pending=0;
     if(challenge32)std::fill(challenge32,challenge32+32,0);
     if(!url || !pending || !challenge32)return fail(openads::AE_LOGIN_FAILED,"Auth arguments invalid");

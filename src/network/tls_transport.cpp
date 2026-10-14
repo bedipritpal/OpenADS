@@ -19,8 +19,11 @@
 #include <utility>
 #ifdef _WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>
 #else
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #endif
 
 namespace openads::network {
@@ -115,6 +118,20 @@ public:
                                  MBEDTLS_NET_PROTO_TCP);
         if (rc != 0) return util::Error{openads::AE_REMOTE_ERROR, rc,
             "net_connect: " + mbed_msg(rc), host + ":" + portstr};
+
+        // Same small-frame latency policy as connect_tcp. mbedTLS creates
+        // this socket directly, bypassing our ordinary socket setup.
+        int no_delay = 1;
+#ifdef _WIN32
+        int socket_rc = setsockopt(net_.fd, IPPROTO_TCP, TCP_NODELAY,
+            reinterpret_cast<const char*>(&no_delay), sizeof(no_delay));
+#else
+        int socket_rc = setsockopt(net_.fd, IPPROTO_TCP, TCP_NODELAY,
+            &no_delay, sizeof(no_delay));
+#endif
+        if (socket_rc != 0)
+            return util::Error{openads::AE_REMOTE_ERROR, 0,
+                "TLS client TCP_NODELAY setup failed", ""};
 
         if(cfg.auth_tls13_only) {
 #ifdef _WIN32

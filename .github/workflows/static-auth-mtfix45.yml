@@ -6,41 +6,16 @@ jobs:
       with:
         fetch-depth: 0
         ref: test/static-auth-oct12-mtfix44
-    - name: Stage only measured TLS client experiment on fork test branch
+    - name: Verify staged narrow experiment source
       run: 'set -euxo pipefail
 
         test "$GITHUB_REPOSITORY" = bedipritpal/OpenADS
 
         test "$GITHUB_REF" = refs/heads/test/static-auth-oct12-mtfix44
 
-        test "$(git rev-parse HEAD~1)" = 01a983f0f0a9854f17240ca408fc973df8899715
+        git merge-base --is-ancestor b04b25850faed2085221b6b96e3386cf96f754d8 HEAD
 
-        python - <<''PYPATCH''
-
-        import base64,gzip,pathlib,hashlib
-
-        p=gzip.decompress(base64.b64decode(''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''))
-
-        assert hashlib.sha256(p).hexdigest()==''74db922de3cfb0919182ad53f9aeffea2c721386ecd3979d8b3090885a6c7d61''
-
-        pathlib.Path(''experiment.patch'').write_bytes(p)
-
-        PYPATCH
-
-        git apply --check experiment.patch
-
-        git apply experiment.patch
-
-        rm experiment.patch
-
-        git diff --check
-
-        git add src tools tests docs
-
-        git -c user.name=''Pritpal Bedi test assistant'' -c user.email=''bedipritpal@users.noreply.github.com'' commit -m ''TEST mtfix45 TLS client
-        no-delay parity and opt-in auth request tracing''
-
-        git push origin HEAD:refs/heads/test/static-auth-oct12-mtfix44
+        git diff --exit-code b04b25850faed2085221b6b96e3386cf96f754d8 HEAD -- src tools tests docs
 
         '
       shell: bash
@@ -204,11 +179,11 @@ jobs:
         \ncat > output/auth_static.prg <<'PRG'\n#include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main(cUrl)\n LOCAL cChallenge,hPending:=0,hConn:=0,cBlob\n\
         \ cChallenge:=OAds_BeginAuth(cUrl,@hPending)\n IF Len(cChallenge)!=32\n  OutStd(\"AUTH-BEGIN-FAIL\"+hb_eol())\n  ErrorLevel(3);QUIT\n\
         \ ENDIF\n cBlob:=cChallenge+\"test-only\"\n hConn:=OAds_CompleteAuth(hPending,cBlob)\n IF Empty(hConn)\n  OutStd(\"AUTH-COMPLETE-FAIL\"\
-        +hb_eol())\n  ErrorLevel(4);QUIT\n ENDIF\n AdsSetDefaultConnection(hConn)\n dbUseArea(.T.,\"ADSCDX\",\"TestIndex.dbf\",\"TRACEPROBE\"\
-        ,.T.,.F.)\n IF !Used()\n  ErrorLevel(5);QUIT\n ENDIF\n dbCloseAll()\n AdsDisconnect(hConn)\n OutStd(\"STATIC-AUTH-PASS\"+hb_eol())\nRETURN\n\
-        PRG\n\"$HB/bin/win/mingw/hbmk2.exe\" output/auth_static.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt\
-        \ -gtstd -fullstatic -lws2_32 -lbcrypt -lpsapi -ooutput/auth_static.exe\nobjdump -p output/auth_static.exe > output/static-auth-pe.txt\n\
-        if grep -Ei 'DLL Name:.*(openace|ace32|libstdc|libgcc|libwinpthread).*\\.dll' output/static-auth-pe.txt;then exit 1;fi\n\n# Both CRT startup\
+        +hb_eol())\n  ErrorLevel(4);QUIT\n ENDIF\n OAds_SetConnection(hConn)\n dbUseArea(.T.,\"ADSCDX\",\"TestIndex.dbf\",\"TRACEPROBE\",.T.,.F.)\n\
+        \ IF !Used()\n  ErrorLevel(5);QUIT\n ENDIF\n dbCloseAll()\n AdsDisconnect(hConn)\n OutStd(\"STATIC-AUTH-PASS\"+hb_eol())\nRETURN\nPRG\n\
+        \"$HB/bin/win/mingw/hbmk2.exe\" output/auth_static.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd\
+        \ -fullstatic -lws2_32 -lbcrypt -lpsapi -ooutput/auth_static.exe\nobjdump -p output/auth_static.exe > output/static-auth-pe.txt\nif grep\
+        \ -Ei 'DLL Name:.*(openace|ace32|libstdc|libgcc|libwinpthread).*\\.dll' output/static-auth-pe.txt;then exit 1;fi\n\n# Both CRT startup\
         \ versions must link and run the SAME combined kit.\nW=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32\")\"\n# Reproduce the original strong-symbol\
         \ collision with a startup-owned flag.\ncat > output/crt-owner.c <<'CRTOWNER'\nint __mingw_module_is_dll = 0;\nint main(void) { return\
         \ __mingw_module_is_dll; }\nCRTOWNER\ncat > output/crt-strong-old.c <<'CRTOLD'\nint __mingw_module_is_dll = 0;\nCRTOLD\ngcc -c output/crt-strong-old.c\

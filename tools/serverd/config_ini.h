@@ -33,6 +33,8 @@ struct PortEntry {
 // overrides the built-in defaults, and the command line in turn overrides
 // the file. `http_users` is additive (every `http_user` line appends).
 struct IniConfig {
+    bool          has_auth_worker_concurrency = false;
+    std::uint32_t auth_worker_concurrency = 4;
     bool          has_allow_anonymous = false;
     bool          allow_anonymous = false;
     bool          has_host      = false;
@@ -86,6 +88,7 @@ struct IniConfig {
 // Parse INI *text* (already loaded into memory). Returns true on success.
 // On failure returns false and sets `error` to a one-line, line-numbered
 // message (e.g. "line 4: unknown key 'foo'"). Recognised keys:
+//   auth_worker_concurrency (1..256; default 4),
 //   host, port, backlog, max_sessions, established_session_idle_seconds, http_port, data (alias: data_dir; may
 //   list several roots separated by ';', e.g. "C:\data;D:\more-data" — see
 //   Server::set_data_dir / platform::split_data_roots),

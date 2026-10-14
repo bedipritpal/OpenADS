@@ -7251,6 +7251,62 @@ static void arc2_log(const char* fmt, ...) {
     }
 }
 
+namespace {
+struct PendingAuthConnection {
+    std::unique_ptr<openads::network::RemoteConnection> connection;
+    std::chrono::steady_clock::time_point deadline;
+};
+std::unordered_map<Handle,PendingAuthConnection> auth_pending_connections;
+std::unordered_map<Handle,std::unique_ptr<openads::network::RemoteConnection>> auth_connections;
+void expire_auth_pending() {
+    auto& s=state();auto now=std::chrono::steady_clock::now();
+    for(auto it=auth_pending_connections.begin();it!=auth_pending_connections.end();) {
+        if(now>=it->second.deadline){s.registry.release(it->first);it=auth_pending_connections.erase(it);}else ++it;
+    }
+}
+}
+UNSIGNED32 ENTRYPOINT OAdsBeginAuth(const char* url,ADSHANDLE* pending,UNSIGNED8* challenge32) {
+    if(pending)*pending=0;
+    if(challenge32)std::fill(challenge32,challenge32+32,0);
+    if(!url || !pending || !challenge32)return fail(openads::AE_LOGIN_FAILED,"Auth arguments invalid");
+#if defined(OPENADS_WITH_TLS)
+    std::string path(url),host,dir;std::uint16_t port=0;
+    // Dedicated scheme never touches AdsConnect60's insecure settings.
+    if(path.rfind("auth://",0)!=0)return fail(openads::AE_LOGIN_FAILED,"auth:// URL required");
+    path.replace(0,7,"tls://");
+    if(!openads::network::parse_tls_uri(path,host,port,dir))return fail(openads::AE_LOGIN_FAILED,"Auth URL invalid");
+    auto& s=state();std::lock_guard<std::recursive_mutex> lk(s.mu);expire_auth_pending();
+    if(auth_pending_connections.size()>=64)return fail(openads::AE_LOGIN_FAILED,"Pending auth limit");
+    openads::network::TlsConfig cfg;cfg.insecure_skip_verify=true;cfg.auth_tls13_only=true;cfg.sni_hostname=host;
+    auto t=openads::network::connect_tls(host,port,cfg);if(!t)return fail(t.error());
+    auto conn=std::make_unique<openads::network::RemoteConnection>();
+    auto challenge=conn->begin_auth(std::move(t).value(),dir);if(!challenge)return fail(challenge.error());
+    auto h=s.registry.register_object(HandleKind::PendingAuth,conn.get());
+    auth_pending_connections.emplace(h,PendingAuthConnection{std::move(conn),std::chrono::steady_clock::now()+std::chrono::seconds(30)});
+    std::copy(challenge.value().begin(),challenge.value().end(),challenge32);*pending=to_ads_handle(h);return ok();
+#else
+    return fail(openads::AE_FUNCTION_NOT_AVAILABLE,"Auth requires TLS build");
+#endif
+}
+UNSIGNED32 ENTRYPOINT OAdsCompleteAuth(ADSHANDLE pending,const UNSIGNED8* blob,UNSIGNED32 bytes,ADSHANDLE* connection) {
+    if(connection)*connection=0;
+    auto& s=state();std::lock_guard<std::recursive_mutex> lk(s.mu);expire_auth_pending();
+    auto h=static_cast<Handle>(pending);auto it=auth_pending_connections.find(h);
+    if(it==auth_pending_connections.end())return fail(openads::AE_LOGIN_FAILED,"No pending auth");
+    auto conn=std::move(it->second.connection);auth_pending_connections.erase(it);s.registry.release(h);
+    if(!connection || !blob || !bytes || bytes>4096)return fail(openads::AE_LOGIN_FAILED,"Auth blob invalid");
+    std::string opaque(reinterpret_cast<const char*>(blob),bytes);
+    auto result=conn->complete_auth(opaque);volatile char* p=&opaque[0];for(std::size_t i=0;i<opaque.size();++i)p[i]=0;
+    if(!result)return fail(result.error());
+    auto ch=s.registry.register_object(HandleKind::RemoteConnection,conn.get());auth_connections.emplace(ch,std::move(conn));
+    *connection=to_ads_handle(ch);rddads_default_connection()=*connection;return ok();
+}
+UNSIGNED32 ENTRYPOINT OAdsCancelAuth(ADSHANDLE pending) {
+    auto& s=state();std::lock_guard<std::recursive_mutex> lk(s.mu);auto h=static_cast<Handle>(pending);
+    auto it=auth_pending_connections.find(h);if(it==auth_pending_connections.end())return fail(openads::AE_LOGIN_FAILED,"No pending auth");
+    s.registry.release(h);auth_pending_connections.erase(it);return ok();
+}
+
 UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType,
                         UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {

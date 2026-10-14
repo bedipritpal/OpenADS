@@ -27,6 +27,7 @@ public:
         recv(std::uint8_t* buf, std::size_t n) = 0;
     virtual void close() noexcept            = 0;
     virtual bool valid() const noexcept      = 0;
+    virtual bool encrypted_ready() const noexcept { return false; }
     virtual bool wants_write() const noexcept { return false; }
     virtual bool buffered_read() const noexcept { return false; }
 };

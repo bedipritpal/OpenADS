@@ -214,3 +214,33 @@ TEST_CASE("mtfix41 established idle setting strict parse and default never") {
         CHECK_FALSE(openads::serverd::parse_ini(std::string("established_session_idle_seconds = ")+value+"\n",bad,error));
     }
 }
+#ifdef OPENADS_AUTH_CAPACITY_TEST_SWITCH
+TEST_CASE("auth worker concurrency is bounded and defaults to four") {
+    auto absent = parse_ok("port=6262\n");
+    CHECK_FALSE(absent.has_auth_worker_concurrency);
+    CHECK(absent.auth_worker_concurrency == 4);
+    for (auto n : {1, 4, 100, 256}) {
+        auto cfg = parse_ok("auth_worker_concurrency=" + std::to_string(n));
+        CHECK(cfg.has_auth_worker_concurrency);
+        CHECK(cfg.auth_worker_concurrency == n);
+    }
+    auto alias = parse_ok("[server]\nAUTH-WORKER-CONCURRENCY=16\r\n");
+    CHECK(alias.auth_worker_concurrency == 16);
+    for (const auto* value : {"0", "257", "-1", "", "+4", "1.5", "four", "999999999999999999999999"}) {
+        IniConfig cfg; std::string error;
+        CHECK_FALSE(parse_ini(std::string("auth_worker_concurrency=") + value, cfg, error));
+        CHECK(error.find("auth_worker_concurrency must be 1..256") != std::string::npos);
+    }
+}
+
+#else
+TEST_CASE("production shaped parser rejects auth concurrency switch") {
+    auto absent = parse_ok("port=6262\n");
+    CHECK(absent.auth_worker_concurrency == 4);
+    for (const auto* value : {"4", "100", "0"}) {
+        IniConfig cfg; std::string error;
+        CHECK_FALSE(parse_ini(std::string("auth_worker_concurrency=") + value, cfg, error));
+        CHECK(error.find("available in test builds only") != std::string::npos);
+    }
+}
+#endif

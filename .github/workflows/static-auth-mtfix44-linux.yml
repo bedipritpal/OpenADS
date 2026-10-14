@@ -33,8 +33,8 @@ jobs:
         -DOPENADS_WITH_HARBOUR_UDF=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF -DHARBOUR_INCLUDE_DIR=/tmp/hb/include -DHARBOUR_LIB_DIR=/tmp/hb/lib/linux/gcc
         -DHARBOUR_COMPILER=/tmp/hb/bin/linux/gcc/harbour ''-DOPENADS_HARBOUR_LIBS=hbvmmt;hbrtl;hbmacro;hbpcre;hbzlib;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon''
 
-        cmake --build build --target openads_ace openads_unit_tests openads_serverd openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe
-        -j2
+        cmake --build build --target openads_bench openads_ace openads_unit_tests openads_serverd openads_auth_worker auth_spike_worker_probe
+        auth_spike_integration_probe -j2
 
         ctest --test-dir build --timeout 600 --output-on-failure -R openads_unit_tests
 
@@ -64,15 +64,25 @@ jobs:
 
         cp "$D/libopenace64.so" "$D/libace64.so"
 
+        cp build/tools/bench/openads_bench "$D/"
+
+        cp -r contrib "$D/"
+
+        cp include/openads/ace.h "$D/include-ace-temp.h"
+
         cp LICENSE NOTICE README.md openads.ini.sample "$D/"
 
         cp -r include "$D/"
+
+        mv "$D/include-ace-temp.h" "$D/include/ace.h"
 
         cp docs/STATIC_AUTH_MTFIX44_TEST.md "$D/"
 
         git rev-parse HEAD > "$D/source-commit.txt"
 
-        chmod 755 "$D/openads_serverd" "$D/openads_auth_worker"
+        chmod 755 "$D/openads_serverd" "$D/openads_auth_worker" "$D/openads_bench"
+
+        for f in openads_serverd openads_auth_worker openads_bench libace64.so libopenace64.so; do test -s "$D/$f"; done
 
         "$D/openads_serverd" --version | grep -F "$V"
 
@@ -104,7 +114,7 @@ jobs:
 
         test "$(gh release view v$V --json targetCommitish --jq .targetCommitish)" = f22ff068b2e2735b384afaf576f7141a9cffbb63
 
-        gh release upload v$V "openads-$V-linux-x64.tar.gz" "openads-$V-linux-x64.tar.gz.sha256"
+        gh release upload v$V --clobber "openads-$V-linux-x64.tar.gz" "openads-$V-linux-x64.tar.gz.sha256"
 
         '
     timeout-minutes: 30

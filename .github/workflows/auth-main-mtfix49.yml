@@ -363,10 +363,21 @@ jobs:
         )\" | tee output/hrb-resource-proof.txt\n"
     - name: Full repository default unit regression in bounded batches
       shell: bash
-      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$PWD/build-legacy/src\"):$PATH\"\nexport OPENADS_TEST_SERVERD=\"\
-        $(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_serverd.exe\")\"\npython - <<'PYUNIT'\nimport pathlib,subprocess,re,os\n\
-        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\ntmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\n\
-        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\nprint('Native test temporary folder:',tmp)\n\
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$(cygpath -u \"\
+        $PWD/build-legacy/src\"):$PATH\"\nobjdump -p build-legacy/tests/openads_unit_tests.exe > output/unit-pe-imports.txt\n\
+        gcc --version | tee output/unit-runtime-compiler.txt\n\nexport OPENADS_TEST_SERVERD=\"$(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_serverd.exe\"\
+        )\"\ncat > output/fs-probe.cpp <<'CPPFS'\n#include <filesystem>\n#include <windows.h>\n#include <cstdlib>\n\
+        #include <iostream>\nint main(){\n namespace fs=std::filesystem;\n wchar_t buf[32768]{};DWORD n=GetTempPathW(32768,buf);fs::path\
+        \ p(buf);\n std::cout<<\"GetTempPathW len=\"<<n<<\" value=\"<<p.string()<<\" winerr=\"<<GetLastError()<<\"\
+        \\n\";\n for(auto v:{\"TMPDIR\",\"TMP\",\"TEMP\"})std::cout<<v<<\"=\"<<(getenv(v)?getenv(v):\"<unset>\"\
+        )<<\"\\n\";\n for(const auto& x:{p,p.parent_path(),fs::current_path(),fs::path(\"C:/\"),fs::path(\"D:/\"\
+        )}){\n  std::error_code ec;auto st=fs::status(x,ec);std::cout<<\"status \"<<x.string()<<\" type=\"<<int(st.type())<<\"\
+        \ ec=\"<<ec.value()<<\":\"<<ec.message()<<\" attrs=\"<<GetFileAttributesW(x.c_str())<<\" winerr=\"<<GetLastError()<<\"\
+        \\n\";\n }\n std::error_code ec;auto t=fs::temp_directory_path(ec);std::cout<<\"stdtemp=\"<<t.string()<<\"\
+        \ ec=\"<<ec.value()<<\":\"<<ec.message()<<\"\\n\";\n return ec?1:0;\n}\nCPPFS\ng++ -std=c++17 -static output/fs-probe.cpp\
+        \ -o output/fs-probe.exe\npython - <<'PYUNIT' \nimport pathlib,subprocess,re,os\nexe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n\
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\n\
+        print('Native test temporary folder:',tmp)\nsubprocess.run([str(pathlib.Path('output/fs-probe.exe').resolve())],check=True)\n\
         \n# Complete repository default suite: slow/flaky excluded exactly as CTest.\nlisting=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n\
         pathlib.Path('output/unit-count.txt').write_text(listing)\nprint(listing)\nmatch=re.search(r'test cases\
         \ passing the current filters: (\\d+)',listing)\nif not match: raise SystemExit('Could not parse doctest\
@@ -439,6 +450,42 @@ jobs:
           '
         retention-days: 14
     timeout-minutes: 140
+    needs: fscheck
+  fscheck:
+    runs-on: windows-2022
+    steps:
+    - name: Download pinned compiler
+      shell: pwsh
+      run: 'Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne ''019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907''){throw
+        ''Winlibs hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+        '
+    - name: Pinned filesystem diagnostic before full build
+      shell: bash
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\nmkdir\
+        \ -p output\ncat > output/fs-probe.cpp <<'CPPFS'\n#include <filesystem>\n#include <windows.h>\n#include\
+        \ <cstdlib>\n#include <iostream>\nint main(){\n namespace fs=std::filesystem;\n wchar_t buf[32768]{};DWORD\
+        \ n=GetTempPathW(32768,buf);fs::path p(buf);\n std::cout<<\"GetTempPathW len=\"<<n<<\" value=\"<<p.string()<<\"\
+        \ winerr=\"<<GetLastError()<<\"\\n\";\n for(auto v:{\"TMPDIR\",\"TMP\",\"TEMP\"})std::cout<<v<<\"=\"<<(getenv(v)?getenv(v):\"\
+        <unset>\")<<\"\\n\";\n for(const auto& x:{p,p.parent_path(),fs::current_path(),fs::path(\"C:/\"),fs::path(\"\
+        D:/\")}){\n  std::error_code ec;auto st=fs::status(x,ec);std::cout<<\"status \"<<x.string()<<\" type=\"\
+        <<int(st.type())<<\" ec=\"<<ec.value()<<\":\"<<ec.message()<<\" attrs=\"<<GetFileAttributesW(x.c_str())<<\"\
+        \ winerr=\"<<GetLastError()<<\"\\n\";\n }\n std::error_code ec;auto t=fs::temp_directory_path(ec);std::cout<<\"\
+        stdtemp=\"<<t.string()<<\" ec=\"<<ec.value()<<\":\"<<ec.message()<<\"\\n\";\n return ec?1:0;\n}\nCPPFS\n\
+        g++ -std=c++17 -static output/fs-probe.cpp -o output/fs-probe.exe\npython - <<'PYCHECK'\nimport subprocess,pathlib,os\n\
+        p=pathlib.Path('native-temp').resolve();p.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(p)\n\
+        r=subprocess.run([str(pathlib.Path('output/fs-probe.exe').resolve())])\nraise SystemExit(r.returncode)\n\
+        PYCHECK\n"
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: filesystem-diagnostic
+        path: output/
 name: mtfix49 clean main auth HRB crypto test
 'on':
   push:

@@ -354,14 +354,14 @@ jobs:
     - name: Full repository default unit regression in bounded batches
       shell: bash
       run: "set -euxo pipefail\npython - <<'PYBATCH'\nimport pathlib,subprocess,os,re,json,xml.etree.ElementTree\
-        \ as ET\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\ntmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\n\
-        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\nexe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n\
-        os.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
+        \ as ET\nimport sys\nsys.stdout.reconfigure(encoding=\"utf-8\")\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\n\
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\n\
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\nos.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
         listing=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n(out/'unit-count.txt').write_text(listing);print(listing,flush=True)\n\
         match=re.search(r'test cases passing the current filters: (\\d+)',listing);assert match,listing\ncount=int(match.group(1));assert\
         \ count>1000\nseen={};errors=[]\nfor first in range(1,count+1,25):\n xml=out/('unit-'+str(first)+'.xml');log=out/('unit-'+str(first)+'.txt')\n\
         \ args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24),'--reporters=xml','--out='+str(xml.resolve())]\n\
-        \ try:\n  with log.open('w') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
+        \ try:\n  with log.open('w',encoding='utf-8') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
         \  doc=ET.parse(xml)\n  cases=[c for c in doc.iter('TestCase') if c.get('skipped')!='true']\n  assert cases,(first,'No\
         \ executed cases')\n  for c in cases:\n   result=c.find('OverallResultsAsserts');ok=result is not None and\
         \ result.get('test_case_success')=='true'\n   name=c.get('name');assert name not in seen,(first,'duplicate',name)\n\
@@ -372,7 +372,7 @@ jobs:
         \ for n,v in seen.items() if not v['passed']),'errors':errors,'cases':seen}\nif len(seen)!=count:summary['errors'].append('Coverage\
         \ mismatch')\n(out/'unit-summary.json').write_text(json.dumps(summary,indent=2))\n(out/'unit-batch-summary.txt').write_text('registered='+str(count)+'\
         \ executed='+str(len(seen))+' failed='+str(len(summary['failed']))+' harness_errors='+str(len(summary['errors']))+'\\\
-        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']))\nprint((out/'unit-batch-summary.txt').read_text(),flush=True)\n\
+        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']),encoding='utf-8')\nprint((out/'unit-batch-summary.txt').read_text(encoding='utf-8'),flush=True)\n\
         \nPYBATCH\n"
     - uses: actions/download-artifact@v4
       with:
@@ -384,7 +384,9 @@ jobs:
 
         python - <<''PYCOMPARE''
 
-        import pathlib,json
+        import pathlib,json,sys
+
+        sys.stdout.reconfigure(encoding="utf-8")
 
         c=json.load(open(''output/unit-summary.json''));b=json.load(open(''baseline-results/output/unit-summary.json''))
 
@@ -403,7 +405,7 @@ jobs:
         report+=''Baseline failures:\n''+''\n''.join(b[''failed''])+''\nCandidate failures:\n''+''\n''.join(c[''failed''])+''\nNew
         failures:\n''+''\n''.join(new)+''\n''
 
-        pathlib.Path(''output/baseline-comparison.txt'').write_text(report);print(report)
+        pathlib.Path(''output/baseline-comparison.txt'').write_text(report,encoding=''utf-8'');print(report)
 
         assert not new,(''New regression failures'',new)
 
@@ -586,14 +588,14 @@ jobs:
     - name: Baseline full default unit batches
       shell: bash
       run: "set -euxo pipefail\npython - <<'PYBATCH'\nimport pathlib,subprocess,os,re,json,xml.etree.ElementTree\
-        \ as ET\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\ntmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\n\
-        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\nexe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n\
-        os.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
+        \ as ET\nimport sys\nsys.stdout.reconfigure(encoding=\"utf-8\")\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\n\
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\n\
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\nos.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
         listing=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n(out/'unit-count.txt').write_text(listing);print(listing,flush=True)\n\
         match=re.search(r'test cases passing the current filters: (\\d+)',listing);assert match,listing\ncount=int(match.group(1));assert\
         \ count>1000\nseen={};errors=[]\nfor first in range(1,count+1,25):\n xml=out/('unit-'+str(first)+'.xml');log=out/('unit-'+str(first)+'.txt')\n\
         \ args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24),'--reporters=xml','--out='+str(xml.resolve())]\n\
-        \ try:\n  with log.open('w') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
+        \ try:\n  with log.open('w',encoding='utf-8') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
         \  doc=ET.parse(xml)\n  cases=[c for c in doc.iter('TestCase') if c.get('skipped')!='true']\n  assert cases,(first,'No\
         \ executed cases')\n  for c in cases:\n   result=c.find('OverallResultsAsserts');ok=result is not None and\
         \ result.get('test_case_success')=='true'\n   name=c.get('name');assert name not in seen,(first,'duplicate',name)\n\
@@ -604,7 +606,7 @@ jobs:
         \ for n,v in seen.items() if not v['passed']),'errors':errors,'cases':seen}\nif len(seen)!=count:summary['errors'].append('Coverage\
         \ mismatch')\n(out/'unit-summary.json').write_text(json.dumps(summary,indent=2))\n(out/'unit-batch-summary.txt').write_text('registered='+str(count)+'\
         \ executed='+str(len(seen))+' failed='+str(len(summary['failed']))+' harness_errors='+str(len(summary['errors']))+'\\\
-        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']))\nprint((out/'unit-batch-summary.txt').read_text(),flush=True)\n\
+        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']),encoding='utf-8')\nprint((out/'unit-batch-summary.txt').read_text(encoding='utf-8'),flush=True)\n\
         \nPYBATCH\n"
     - if: always()
       uses: actions/upload-artifact@v4

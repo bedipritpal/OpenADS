@@ -364,9 +364,10 @@ jobs:
     - name: Full repository default unit regression in bounded batches
       shell: bash
       run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$PWD/build-legacy/src\"):$PATH\"\nexport OPENADS_TEST_SERVERD=\"\
-        $(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_serverd.exe\")\"\npython - <<'PYUNIT'\nimport pathlib,subprocess,re\n\
-        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n# Complete repository default\
-        \ suite: slow/flaky excluded exactly as CTest.\nlisting=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n\
+        $(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_serverd.exe\")\"\npython - <<'PYUNIT'\nimport pathlib,subprocess,re,os\n\
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\ntmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\n\
+        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\nprint('Native test temporary folder:',tmp)\n\
+        \n# Complete repository default suite: slow/flaky excluded exactly as CTest.\nlisting=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n\
         pathlib.Path('output/unit-count.txt').write_text(listing)\nprint(listing)\nmatch=re.search(r'test cases\
         \ passing the current filters: (\\d+)',listing)\nif not match: raise SystemExit('Could not parse doctest\
         \ count: '+listing)\ncount=int(match.group(1));assert count>1000\nfor first in range(1,count+1,25):\n args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24)]\n\

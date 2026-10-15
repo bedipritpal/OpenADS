@@ -53,39 +53,29 @@ jobs:
         '
       shell: pwsh
     - name: Build TLS auth daemon and raw static kit with pinned GCC10.2
-      run: 'set -euxo pipefail
-
-        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
-
-        test "$(gcc -dumpversion)" = 10.2.0
-
-        find "$RUNNER_TEMP/winlibs" -iname ''*copying*'' -o -iname ''*license*'' | sort
-
-        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-server"
-
-        git -C "$RUNNER_TEMP/harbour-server" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
-
-        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
-
-        mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
-
-        HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
-
-        printf ''\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n'' >>
-        src/CMakeLists.txt
-
-        cmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static
-        -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON
-        -DOPENADS_VERSION_FORCE=1.09.74-mtfix49-mutual-auth-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON
-        -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw"
-        -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
-
-        cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker auth_spike_worker_probe
-        auth_spike_integration_probe auth_spike_abi_probe auth_spike_transport_probe auth_mutual_probe auth_resource_probe
-        openads_unit_tests -j2
-
-        '
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ntest \"\
+        $(gcc -dumpversion)\" = 10.2.0\nfind \"$RUNNER_TEMP/winlibs\" -iname '*copying*' -o -iname '*license*' |\
+        \ sort\ngit clone https://github.com/harbour/core.git \"$RUNNER_TEMP/harbour-server\"\ngit -C \"$RUNNER_TEMP/harbour-server\"\
+        \ checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d\nexport HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no\
+        \ HB_BUILD_DYN=no\nmingw32-make -C \"$RUNNER_TEMP/harbour-server\" -j2\nHB=\"$(cygpath -m \"$RUNNER_TEMP/harbour-server\"\
+        )\"\nprintf '\\nif(WIN32 AND MINGW)\\n set_target_properties(openads_ace PROPERTIES PREFIX \"\")\\nendif()\\\
+        n' >> src/CMakeLists.txt\npython - <<'PYHARNESS'\nimport pathlib,re,base64\nroot=pathlib.Path('.')\nheader=root/'tests/legacy-native-temp.h'\n\
+        header.write_bytes(base64.b64decode('I3ByYWdtYSBvbmNlCiNpbmNsdWRlIDxmaWxlc3lzdGVtPgojaW5jbHVkZSA8c3lzdGVtX2Vycm9yPgojaW5jbHVkZSA8d2luZG93cy5oPgojaW5jbHVkZSA8dmVjdG9yPgpuYW1lc3BhY2Ugb3BlbmFkc190ZXN0IHsKaW5saW5lIHN0ZDo6ZmlsZXN5c3RlbTo6cGF0aCB0ZW1wX2RpcmVjdG9yeV9wYXRoKHN0ZDo6ZXJyb3JfY29kZSYgZWMpIHsKIHN0ZDo6dmVjdG9yPHdjaGFyX3Q+IGIoMzI3NjgpO0RXT1JEIG49R2V0VGVtcFBhdGhXKHN0YXRpY19jYXN0PERXT1JEPihiLnNpemUoKSksYi5kYXRhKCkpOwogaWYoIW4gfHwgbj49Yi5zaXplKCkpe2VjPXN0ZDo6ZXJyb3JfY29kZShHZXRMYXN0RXJyb3IoKSxzdGQ6OnN5c3RlbV9jYXRlZ29yeSgpKTtyZXR1cm4ge307fQogc3RkOjpmaWxlc3lzdGVtOjpwYXRoIHAoc3RkOjp3c3RyaW5nKGIuZGF0YSgpLG4pKTsKIC8vIFBpbm5lZCBNaW5HVzggc3RhdCByZWplY3RzIGRpcmVjdG9yeVxcIGJ1dCBhY2NlcHRzIGRpcmVjdG9yeS4gS2VlcCBkcml2ZSByb290Lgogd2hpbGUocCE9cC5yb290X3BhdGgoKSAmJiAhcC5oYXNfZmlsZW5hbWUoKSkgcD1wLnBhcmVudF9wYXRoKCk7CiBhdXRvIHN0PXN0ZDo6ZmlsZXN5c3RlbTo6c3RhdHVzKHAsZWMpOwogaWYoIWVjJiYhc3RkOjpmaWxlc3lzdGVtOjppc19kaXJlY3Rvcnkoc3QpKWVjPXN0ZDo6bWFrZV9lcnJvcl9jb2RlKHN0ZDo6ZXJyYzo6bm90X2FfZGlyZWN0b3J5KTsKIHJldHVybiBlYz9zdGQ6OmZpbGVzeXN0ZW06OnBhdGh7fTpwOwp9CmlubGluZSBzdGQ6OmZpbGVzeXN0ZW06OnBhdGggdGVtcF9kaXJlY3RvcnlfcGF0aCgpe3N0ZDo6ZXJyb3JfY29kZSBlYzthdXRvIHA9dGVtcF9kaXJlY3RvcnlfcGF0aChlYyk7CiBpZihlYyl0aHJvdyBzdGQ6OmZpbGVzeXN0ZW06OmZpbGVzeXN0ZW1fZXJyb3IoInRlc3QgbmF0aXZlIHRlbXBfZGlyZWN0b3J5X3BhdGgiLGVjKTtyZXR1cm4gcDt9Cn0K'))\n\
+        changes=[]\nfor p in (root/'tests').rglob('*.cpp'):\n s=p.read_text(encoding='utf-8',errors='strict')\n\
+        \ n=re.sub(r'\\b(?:std::filesystem|fs)::temp_directory_path\\b','openads_test::temp_directory_path',s)\n\
+        \ if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))\nwith open(root/'tests/CMakeLists.txt','a')\
+        \ as f:f.write('\\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\\ntarget_compile_options(openads_unit_tests\
+        \ PRIVATE -include \"${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h\")\\n')\nprint('Test-only native temp\
+        \ helper applied:',len(changes),'test files')\npathlib.Path('unit-harness-changes.txt').write_text('\\n'.join(changes))\n\
+        \nPYHARNESS\n\ncmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release\
+        \ -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS=\"\
+        -static -static-libgcc -static-libstdc++\" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON\
+        \ -DOPENADS_VERSION_FORCE=1.09.74-mtfix49-mutual-auth-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON\
+        \ -DHARBOUR_COMPILER=\"$HB/bin/win/mingw/harbour.exe\" -DHARBOUR_INCLUDE_DIR=\"$HB/include\" -DHARBOUR_LIB_DIR=\"\
+        $HB/lib/win/mingw\" -DOPENADS_HARBOUR_LIBS=\"hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon\"\
+        \ -DOPENADS_WARNINGS_AS_ERRORS=OFF\ncmake --build build-legacy --target openads_ace_static openads_ace openads_serverd\
+        \ openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe auth_spike_abi_probe auth_spike_transport_probe\
+        \ auth_mutual_probe auth_resource_probe openads_unit_tests -j2\n"
       shell: bash
     - name: Build Harbour with unchanged Qt4.9.2
       run: 'set -euxo pipefail
@@ -363,29 +353,63 @@ jobs:
         )\" | tee output/hrb-resource-proof.txt\n"
     - name: Full repository default unit regression in bounded batches
       shell: bash
-      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$(cygpath -u \"\
-        $PWD/build-legacy/src\"):$PATH\"\nobjdump -p build-legacy/tests/openads_unit_tests.exe > output/unit-pe-imports.txt\n\
-        gcc --version | tee output/unit-runtime-compiler.txt\n\nexport OPENADS_TEST_SERVERD=\"$(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_serverd.exe\"\
-        )\"\ncat > output/fs-probe.cpp <<'CPPFS'\n#include <filesystem>\n#include <windows.h>\n#include <cstdlib>\n\
-        #include <iostream>\nint main(){\n namespace fs=std::filesystem;\n wchar_t buf[32768]{};DWORD n=GetTempPathW(32768,buf);fs::path\
-        \ p(buf);\n std::cout<<\"GetTempPathW len=\"<<n<<\" value=\"<<p.string()<<\" winerr=\"<<GetLastError()<<\"\
-        \\n\";\n for(auto v:{\"TMPDIR\",\"TMP\",\"TEMP\"})std::cout<<v<<\"=\"<<(getenv(v)?getenv(v):\"<unset>\"\
-        )<<\"\\n\";\n for(const auto& x:{p,p.parent_path(),fs::current_path(),fs::path(\"C:/\"),fs::path(\"D:/\"\
-        )}){\n  std::error_code ec;auto st=fs::status(x,ec);std::cout<<\"status \"<<x.string()<<\" type=\"<<int(st.type())<<\"\
-        \ ec=\"<<ec.value()<<\":\"<<ec.message()<<\" attrs=\"<<GetFileAttributesW(x.c_str())<<\" winerr=\"<<GetLastError()<<\"\
-        \\n\";\n }\n std::error_code ec;auto t=fs::temp_directory_path(ec);std::cout<<\"stdtemp=\"<<t.string()<<\"\
-        \ ec=\"<<ec.value()<<\":\"<<ec.message()<<\"\\n\";\n return ec?1:0;\n}\nCPPFS\ng++ -std=c++17 -static output/fs-probe.cpp\
-        \ -o output/fs-probe.exe\npython - <<'PYUNIT' \nimport pathlib,subprocess,re,os\nexe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n\
-        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\n\
-        print('Native test temporary folder:',tmp)\nsubprocess.run([str(pathlib.Path('output/fs-probe.exe').resolve())],check=True)\n\
-        \n# Complete repository default suite: slow/flaky excluded exactly as CTest.\nlisting=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n\
-        pathlib.Path('output/unit-count.txt').write_text(listing)\nprint(listing)\nmatch=re.search(r'test cases\
-        \ passing the current filters: (\\d+)',listing)\nif not match: raise SystemExit('Could not parse doctest\
-        \ count: '+listing)\ncount=int(match.group(1));assert count>1000\nfor first in range(1,count+1,25):\n args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24)]\n\
-        \ path=pathlib.Path('output/unit-'+str(first)+'.txt')\n with path.open('w') as out:\n  result=subprocess.run(args,stdout=out,stderr=subprocess.STDOUT,timeout=180)\n\
-        \ if result.returncode:\n  print(path.read_text(errors='replace'));raise SystemExit('Failed unit batch '+str(first))\n\
-        \ with open('output/unit-batch-summary.txt','a') as out:out.write(str(first)+'..'+str(first+24)+' PASS\\\
-        n')\nPYUNIT\n"
+      run: "set -euxo pipefail\npython - <<'PYBATCH'\nimport pathlib,subprocess,os,re,json,xml.etree.ElementTree\
+        \ as ET\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\ntmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\n\
+        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\nexe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n\
+        os.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
+        listing=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n(out/'unit-count.txt').write_text(listing);print(listing,flush=True)\n\
+        match=re.search(r'test cases passing the current filters: (\\d+)',listing);assert match,listing\ncount=int(match.group(1));assert\
+        \ count>1000\nseen={};errors=[]\nfor first in range(1,count+1,25):\n xml=out/('unit-'+str(first)+'.xml');log=out/('unit-'+str(first)+'.txt')\n\
+        \ args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24),'--reporters=xml','--out='+str(xml.resolve())]\n\
+        \ try:\n  with log.open('w') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
+        \  doc=ET.parse(xml)\n  cases=[c for c in doc.iter('TestCase') if c.get('skipped')!='true']\n  assert cases,(first,'No\
+        \ executed cases')\n  for c in cases:\n   result=c.find('OverallResultsAsserts');ok=result is not None and\
+        \ result.get('test_case_success')=='true'\n   name=c.get('name');assert name not in seen,(first,'duplicate',name)\n\
+        \   seen[name]={'passed':ok,'assertions':dict(result.attrib) if result is not None else {},'file':pathlib.Path(c.get('filename')).name}\n\
+        \  if r.returncode and all(v['passed'] for c in cases for v in [seen[c.get('name')]]):errors.append('Nonzero\
+        \ batch exit '+str(first))\n except Exception as e:errors.append(str(first)+': '+repr(e))\n print('Batch',first,'complete;\
+        \ cases',len(seen),'errors',len(errors),flush=True)\nsummary={'count':count,'executed':len(seen),'failed':sorted(n\
+        \ for n,v in seen.items() if not v['passed']),'errors':errors,'cases':seen}\nif len(seen)!=count:summary['errors'].append('Coverage\
+        \ mismatch')\n(out/'unit-summary.json').write_text(json.dumps(summary,indent=2))\n(out/'unit-batch-summary.txt').write_text('registered='+str(count)+'\
+        \ executed='+str(len(seen))+' failed='+str(len(summary['failed']))+' harness_errors='+str(len(summary['errors']))+'\\\
+        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']))\nprint((out/'unit-batch-summary.txt').read_text(),flush=True)\n\
+        \nPYBATCH\n"
+    - uses: actions/download-artifact@v4
+      with:
+        name: baseline-unit-results
+        path: baseline-results
+    - name: Zero-new-failures comparison versus plain fork main
+      shell: bash
+      run: 'set -euxo pipefail
+
+        python - <<''PYCOMPARE''
+
+        import pathlib,json
+
+        c=json.load(open(''output/unit-summary.json''));b=json.load(open(''baseline-results/output/unit-summary.json''))
+
+        assert not c[''errors''] and not b[''errors''],(''Harness/coverage failure'',c[''errors''],b[''errors''])
+
+        missing=set(b[''cases''])-set(c[''cases'']);assert not missing,(''Missing baseline tests'',missing)
+
+        new=sorted(set(c[''failed''])-set(b[''failed'']))
+
+        report=''Baseline ''+str(b[''executed''])+'' cases, ''+str(len(b[''failed'']))+'' failed. Candidate ''+str(c[''executed''])+''
+        cases, ''+str(len(c[''failed'']))+'' failed. New failures ''+str(len(new))+''.\n''
+
+        report+=''Same test-only native temporary-folder helper on both; compiler unchanged. Slow/flaky excluded
+        as repository default.\n''
+
+        report+=''Baseline failures:\n''+''\n''.join(b[''failed''])+''\nCandidate failures:\n''+''\n''.join(c[''failed''])+''\nNew
+        failures:\n''+''\n''.join(new)+''\n''
+
+        pathlib.Path(''output/baseline-comparison.txt'').write_text(report);print(report)
+
+        assert not new,(''New regression failures'',new)
+
+        PYCOMPARE
+
+        '
     - name: Package DLL-only Vouch test kit
       run: "set -euxo pipefail\nmkdir -p delivery/mtfix49-mutual-auth/{bin,lib,include,docs}\ncp output/openace32.dll\
         \ delivery/mtfix49-mutual-auth/bin/\ncp kit/libopenace32.dll.a kit/librddads.a delivery/mtfix49-mutual-auth/lib/\n\
@@ -409,11 +433,12 @@ jobs:
         cp -r kit/runtime-notices delivery/mtfix49-mutual-auth/\ncp build-legacy/tools/serverd/openads_serverd.exe\
         \ build-legacy/tools/serverd/openads_auth_worker.exe delivery/mtfix49-mutual-auth/bin/\ncp mutual-test-only.hrb\
         \ delivery/mtfix49-mutual-auth/bin/\ncp tests/hrb/mutual/README.txt delivery/mtfix49-mutual-auth/docs/MUTUAL-V2.txt\n\
-        cp tests/hrb/mutual/ACL-SETUP.txt delivery/mtfix49-mutual-auth/docs/\ncp output/hrb-crypto-proof.txt output/hrb-resource-proof.txt\
-        \ output/unit-batch-summary.txt docs/auth-hrb-pure-functions.txt delivery/mtfix49-mutual-auth/docs/\n\n\
-        \ cp output/hrb-time-proof.txt delivery/mtfix49-mutual-auth/docs/\ncp tests/hrb/mutual/time_probe.py delivery/mtfix49-mutual-auth/docs/\n\
-        cp tests/hrb/mutual/*.prg delivery/mtfix49-mutual-auth/docs/\ncp output/mutual-harbour-proof.txt delivery/mtfix49-mutual-auth/docs/\n\
-        cp output/mutual-native-proof.txt delivery/mtfix49-mutual-auth/docs/\ncp mutual47.patch delivery/mtfix49-mutual-auth/docs/source.patch\n\
+        cp tests/hrb/mutual/ACL-SETUP.txt delivery/mtfix49-mutual-auth/docs/\ncp output/baseline-comparison.txt\
+        \ output/unit-summary.json output/hrb-crypto-proof.txt output/hrb-resource-proof.txt output/unit-batch-summary.txt\
+        \ docs/auth-hrb-pure-functions.txt delivery/mtfix49-mutual-auth/docs/\n\n cp output/hrb-time-proof.txt delivery/mtfix49-mutual-auth/docs/\n\
+        cp tests/hrb/mutual/time_probe.py delivery/mtfix49-mutual-auth/docs/\ncp tests/hrb/mutual/*.prg delivery/mtfix49-mutual-auth/docs/\n\
+        cp output/mutual-harbour-proof.txt delivery/mtfix49-mutual-auth/docs/\ncp output/mutual-native-proof.txt\
+        \ delivery/mtfix49-mutual-auth/docs/\ncp mutual47.patch delivery/mtfix49-mutual-auth/docs/source.patch\n\
         find delivery/mtfix49-mutual-auth -type f -exec sha256sum {} \\; > delivery/SHA256.txt\n7z a -tzip mtfix49-mutual-auth-qt492-x86.zip\
         \ ./delivery/*\n"
       shell: bash
@@ -450,7 +475,9 @@ jobs:
           '
         retention-days: 14
     timeout-minutes: 140
-    needs: fscheck
+    needs:
+    - fscheck
+    - baseline
   fscheck:
     runs-on: windows-2022
     steps:
@@ -468,24 +495,125 @@ jobs:
     - name: Pinned filesystem diagnostic before full build
       shell: bash
       run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\nmkdir\
-        \ -p output\ncat > output/fs-probe.cpp <<'CPPFS'\n#include <filesystem>\n#include <windows.h>\n#include\
-        \ <cstdlib>\n#include <iostream>\nint main(){\n namespace fs=std::filesystem;\n wchar_t buf[32768]{};DWORD\
+        \ -p output\ncat > output/legacy-native-temp.h <<'CPPHDR'\n#pragma once\n#include <filesystem>\n#include\
+        \ <system_error>\n#include <windows.h>\n#include <vector>\nnamespace openads_test {\ninline std::filesystem::path\
+        \ temp_directory_path(std::error_code& ec) {\n std::vector<wchar_t> b(32768);DWORD n=GetTempPathW(static_cast<DWORD>(b.size()),b.data());\n\
+        \ if(!n || n>=b.size()){ec=std::error_code(GetLastError(),std::system_category());return {};}\n std::filesystem::path\
+        \ p(std::wstring(b.data(),n));\n // Pinned MinGW8 stat rejects directory\\\\ but accepts directory. Keep\
+        \ drive root.\n while(p!=p.root_path() && !p.has_filename()) p=p.parent_path();\n auto st=std::filesystem::status(p,ec);\n\
+        \ if(!ec&&!std::filesystem::is_directory(st))ec=std::make_error_code(std::errc::not_a_directory);\n return\
+        \ ec?std::filesystem::path{}:p;\n}\ninline std::filesystem::path temp_directory_path(){std::error_code ec;auto\
+        \ p=temp_directory_path(ec);\n if(ec)throw std::filesystem::filesystem_error(\"test native temp_directory_path\"\
+        ,ec);return p;}\n}\n\nCPPHDR\ncat > output/fs-probe.cpp <<'CPPFS'\n#include <filesystem>\n#include <windows.h>\n\
+        #include <cstdlib>\n#include <iostream>\nint main(){\n namespace fs=std::filesystem;\n wchar_t buf[32768]{};DWORD\
         \ n=GetTempPathW(32768,buf);fs::path p(buf);\n std::cout<<\"GetTempPathW len=\"<<n<<\" value=\"<<p.string()<<\"\
         \ winerr=\"<<GetLastError()<<\"\\n\";\n for(auto v:{\"TMPDIR\",\"TMP\",\"TEMP\"})std::cout<<v<<\"=\"<<(getenv(v)?getenv(v):\"\
         <unset>\")<<\"\\n\";\n for(const auto& x:{p,p.parent_path(),fs::current_path(),fs::path(\"C:/\"),fs::path(\"\
         D:/\")}){\n  std::error_code ec;auto st=fs::status(x,ec);std::cout<<\"status \"<<x.string()<<\" type=\"\
         <<int(st.type())<<\" ec=\"<<ec.value()<<\":\"<<ec.message()<<\" attrs=\"<<GetFileAttributesW(x.c_str())<<\"\
-        \ winerr=\"<<GetLastError()<<\"\\n\";\n }\n std::error_code ec;auto t=fs::temp_directory_path(ec);std::cout<<\"\
+        \ winerr=\"<<GetLastError()<<\"\\n\";\n }\n std::error_code ec;auto t=openads_test::temp_directory_path(ec);std::cout<<\"\
         stdtemp=\"<<t.string()<<\" ec=\"<<ec.value()<<\":\"<<ec.message()<<\"\\n\";\n return ec?1:0;\n}\nCPPFS\n\
-        g++ -std=c++17 -static output/fs-probe.cpp -o output/fs-probe.exe\npython - <<'PYCHECK'\nimport subprocess,pathlib,os\n\
-        p=pathlib.Path('native-temp').resolve();p.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(p)\n\
-        r=subprocess.run([str(pathlib.Path('output/fs-probe.exe').resolve())])\nraise SystemExit(r.returncode)\n\
-        PYCHECK\n"
+        g++ -std=c++17 -static -include output/legacy-native-temp.h output/fs-probe.cpp -o output/fs-probe.exe\n\
+        python - <<'PYCHECK'\nimport subprocess,pathlib,os\np=pathlib.Path('native-temp').resolve();p.mkdir(exist_ok=True)\n\
+        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(p)\nr=subprocess.run([str(pathlib.Path('output/fs-probe.exe').resolve())])\n\
+        raise SystemExit(r.returncode)\nPYCHECK\n"
     - if: always()
       uses: actions/upload-artifact@v4
       with:
         name: filesystem-diagnostic
         path: output/
+  baseline:
+    runs-on: windows-2022
+    needs: fscheck
+    timeout-minutes: 140
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 6d5c59f4f91e9603c10231db14691d636f747faf
+    - name: Download exact historical Qt compiler
+      run: 'Invoke-WebRequest ''https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z''
+        -OutFile "$env:RUNNER_TEMP/qt492.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/qt492.7z" -Algorithm SHA256).Hash.ToLower() -ne ''f6de32350a28f4b6c30eec26dbfee65f112300d51e37e4d2007b0598bef9bb79''){throw
+        ''Qt compiler hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/qt492.7z" "-o$env:RUNNER_TEMP/qt492" -y
+
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne ''019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907''){throw
+        ''Winlibs hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r4nvptx/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r4nvptx.7z''
+        -OutFile "$env:RUNNER_TEMP/owner2351.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/owner2351.7z" -Algorithm SHA256).Hash.ToLower() -ne ''5e18f786047c52b40392fe57f966bcb1a8acbc95d61da10796b13df63b9a1d95''){throw
+        ''Owner2351 compiler hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/owner2351.7z" "-o$env:RUNNER_TEMP/owner2351" -y
+
+        '
+      shell: pwsh
+    - name: Build plain fork-main baseline with identical test-only harness
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ntest \"\
+        $(gcc -dumpversion)\" = 10.2.0\nfind \"$RUNNER_TEMP/winlibs\" -iname '*copying*' -o -iname '*license*' |\
+        \ sort\ngit clone https://github.com/harbour/core.git \"$RUNNER_TEMP/harbour-server\"\ngit -C \"$RUNNER_TEMP/harbour-server\"\
+        \ checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d\nexport HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no\
+        \ HB_BUILD_DYN=no\nmingw32-make -C \"$RUNNER_TEMP/harbour-server\" -j2\nHB=\"$(cygpath -m \"$RUNNER_TEMP/harbour-server\"\
+        )\"\nprintf '\\nif(WIN32 AND MINGW)\\n set_target_properties(openads_ace PROPERTIES PREFIX \"\")\\nendif()\\\
+        n' >> src/CMakeLists.txt\npython - <<'PYHARNESS'\nimport pathlib,re,base64\nroot=pathlib.Path('.')\nheader=root/'tests/legacy-native-temp.h'\n\
+        header.write_bytes(base64.b64decode('I3ByYWdtYSBvbmNlCiNpbmNsdWRlIDxmaWxlc3lzdGVtPgojaW5jbHVkZSA8c3lzdGVtX2Vycm9yPgojaW5jbHVkZSA8d2luZG93cy5oPgojaW5jbHVkZSA8dmVjdG9yPgpuYW1lc3BhY2Ugb3BlbmFkc190ZXN0IHsKaW5saW5lIHN0ZDo6ZmlsZXN5c3RlbTo6cGF0aCB0ZW1wX2RpcmVjdG9yeV9wYXRoKHN0ZDo6ZXJyb3JfY29kZSYgZWMpIHsKIHN0ZDo6dmVjdG9yPHdjaGFyX3Q+IGIoMzI3NjgpO0RXT1JEIG49R2V0VGVtcFBhdGhXKHN0YXRpY19jYXN0PERXT1JEPihiLnNpemUoKSksYi5kYXRhKCkpOwogaWYoIW4gfHwgbj49Yi5zaXplKCkpe2VjPXN0ZDo6ZXJyb3JfY29kZShHZXRMYXN0RXJyb3IoKSxzdGQ6OnN5c3RlbV9jYXRlZ29yeSgpKTtyZXR1cm4ge307fQogc3RkOjpmaWxlc3lzdGVtOjpwYXRoIHAoc3RkOjp3c3RyaW5nKGIuZGF0YSgpLG4pKTsKIC8vIFBpbm5lZCBNaW5HVzggc3RhdCByZWplY3RzIGRpcmVjdG9yeVxcIGJ1dCBhY2NlcHRzIGRpcmVjdG9yeS4gS2VlcCBkcml2ZSByb290Lgogd2hpbGUocCE9cC5yb290X3BhdGgoKSAmJiAhcC5oYXNfZmlsZW5hbWUoKSkgcD1wLnBhcmVudF9wYXRoKCk7CiBhdXRvIHN0PXN0ZDo6ZmlsZXN5c3RlbTo6c3RhdHVzKHAsZWMpOwogaWYoIWVjJiYhc3RkOjpmaWxlc3lzdGVtOjppc19kaXJlY3Rvcnkoc3QpKWVjPXN0ZDo6bWFrZV9lcnJvcl9jb2RlKHN0ZDo6ZXJyYzo6bm90X2FfZGlyZWN0b3J5KTsKIHJldHVybiBlYz9zdGQ6OmZpbGVzeXN0ZW06OnBhdGh7fTpwOwp9CmlubGluZSBzdGQ6OmZpbGVzeXN0ZW06OnBhdGggdGVtcF9kaXJlY3RvcnlfcGF0aCgpe3N0ZDo6ZXJyb3JfY29kZSBlYzthdXRvIHA9dGVtcF9kaXJlY3RvcnlfcGF0aChlYyk7CiBpZihlYyl0aHJvdyBzdGQ6OmZpbGVzeXN0ZW06OmZpbGVzeXN0ZW1fZXJyb3IoInRlc3QgbmF0aXZlIHRlbXBfZGlyZWN0b3J5X3BhdGgiLGVjKTtyZXR1cm4gcDt9Cn0K'))\n\
+        changes=[]\nfor p in (root/'tests').rglob('*.cpp'):\n s=p.read_text(encoding='utf-8',errors='strict')\n\
+        \ n=re.sub(r'\\b(?:std::filesystem|fs)::temp_directory_path\\b','openads_test::temp_directory_path',s)\n\
+        \ if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))\nwith open(root/'tests/CMakeLists.txt','a')\
+        \ as f:f.write('\\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\\ntarget_compile_options(openads_unit_tests\
+        \ PRIVATE -include \"${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h\")\\n')\nprint('Test-only native temp\
+        \ helper applied:',len(changes),'test files')\npathlib.Path('unit-harness-changes.txt').write_text('\\n'.join(changes))\n\
+        \nPYHARNESS\n\ncmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release\
+        \ -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS=\"\
+        -static -static-libgcc -static-libstdc++\" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON\
+        \ -DOPENADS_VERSION_FORCE=1.09.74-baseline -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON\
+        \ -DHARBOUR_COMPILER=\"$HB/bin/win/mingw/harbour.exe\" -DHARBOUR_INCLUDE_DIR=\"$HB/include\" -DHARBOUR_LIB_DIR=\"\
+        $HB/lib/win/mingw\" -DOPENADS_HARBOUR_LIBS=\"hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon\"\
+        \ -DOPENADS_WARNINGS_AS_ERRORS=OFF\ncmake --build build-legacy --target openads_unit_tests openads_serverd\
+        \ -j2\n"
+      shell: bash
+    - name: Baseline full default unit batches
+      shell: bash
+      run: "set -euxo pipefail\npython - <<'PYBATCH'\nimport pathlib,subprocess,os,re,json,xml.etree.ElementTree\
+        \ as ET\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\ntmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\n\
+        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\nexe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\n\
+        os.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
+        listing=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n(out/'unit-count.txt').write_text(listing);print(listing,flush=True)\n\
+        match=re.search(r'test cases passing the current filters: (\\d+)',listing);assert match,listing\ncount=int(match.group(1));assert\
+        \ count>1000\nseen={};errors=[]\nfor first in range(1,count+1,25):\n xml=out/('unit-'+str(first)+'.xml');log=out/('unit-'+str(first)+'.txt')\n\
+        \ args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24),'--reporters=xml','--out='+str(xml.resolve())]\n\
+        \ try:\n  with log.open('w') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
+        \  doc=ET.parse(xml)\n  cases=[c for c in doc.iter('TestCase') if c.get('skipped')!='true']\n  assert cases,(first,'No\
+        \ executed cases')\n  for c in cases:\n   result=c.find('OverallResultsAsserts');ok=result is not None and\
+        \ result.get('test_case_success')=='true'\n   name=c.get('name');assert name not in seen,(first,'duplicate',name)\n\
+        \   seen[name]={'passed':ok,'assertions':dict(result.attrib) if result is not None else {},'file':pathlib.Path(c.get('filename')).name}\n\
+        \  if r.returncode and all(v['passed'] for c in cases for v in [seen[c.get('name')]]):errors.append('Nonzero\
+        \ batch exit '+str(first))\n except Exception as e:errors.append(str(first)+': '+repr(e))\n print('Batch',first,'complete;\
+        \ cases',len(seen),'errors',len(errors),flush=True)\nsummary={'count':count,'executed':len(seen),'failed':sorted(n\
+        \ for n,v in seen.items() if not v['passed']),'errors':errors,'cases':seen}\nif len(seen)!=count:summary['errors'].append('Coverage\
+        \ mismatch')\n(out/'unit-summary.json').write_text(json.dumps(summary,indent=2))\n(out/'unit-batch-summary.txt').write_text('registered='+str(count)+'\
+        \ executed='+str(len(seen))+' failed='+str(len(summary['failed']))+' harness_errors='+str(len(summary['errors']))+'\\\
+        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']))\nprint((out/'unit-batch-summary.txt').read_text(),flush=True)\n\
+        \nPYBATCH\n"
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: baseline-unit-results
+        path: 'output/
+
+          unit-harness-changes.txt'
+        if-no-files-found: error
 name: mtfix49 clean main auth HRB crypto test
 'on':
   push:

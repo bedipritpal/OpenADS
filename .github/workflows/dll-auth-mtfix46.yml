@@ -35,6 +35,16 @@ jobs:
 
         & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
 
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r4nvptx/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r4nvptx.7z''
+        -OutFile "$env:RUNNER_TEMP/owner2351.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/owner2351.7z" -Algorithm SHA256).Hash.ToLower()
+        -ne ''5e18f786047c52b40392fe57f966bcb1a8acbc95d61da10796b13df63b9a1d95''){throw
+        ''Owner2351 compiler hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/owner2351.7z" "-o$env:RUNNER_TEMP/owner2351" -y
+
         '
       shell: pwsh
     - name: Build TLS auth daemon and raw static kit with pinned GCC10.2
@@ -235,11 +245,11 @@ jobs:
         \ -lpsapi -ooutput/auth_static.exe\nobjdump -p output/auth_static.exe > output/static-auth-pe.txt\n\
         grep -qi 'DLL Name: openace32.dll' output/static-auth-pe.txt\n\n\n# Same generated\
         \ Harbour objects, link under owner's exact pinned ld2.35.1.\nexport PATH=\"\
-        $(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ntest \"$(gcc -dumpversion)\"\
-        \ = 10.2.0\nld --version | tee output/owner-ld-version.txt\ngrep -q '2.35.1'\
-        \ output/owner-ld-version.txt\n\"$HB/bin/win/mingw/hbmk2.exe\" output/probe_mt.prg\
-        \ -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt\
-        \ -gtstd -ooutput/probe_mt_owner.exe -workdir=output/vouchobjs -inc -trace\
+        $(cygpath -u \"$RUNNER_TEMP/owner2351/mingw32/bin\"):$PATH\"\ntest \"$(gcc\
+        \ -dumpversion)\" = 10.2.0\nld --version | tee output/owner-ld-version.txt\n\
+        grep -q '2.35.1' output/owner-ld-version.txt\n\"$HB/bin/win/mingw/hbmk2.exe\"\
+        \ output/probe_mt.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\"\
+        \ -mt -gtstd -ooutput/probe_mt_owner.exe -workdir=output/vouchobjs -inc -trace\
         \ > output/owner-link.txt 2>&1\nobjdump -p output/probe_mt_owner.exe > output/owner-client-pe.txt\n\
         grep -qi 'DLL Name: openace32.dll' output/owner-client-pe.txt\ngit rev-parse\
         \ HEAD > output/source-commit.txt\n\nobjdump -p output/openace32.dll | sed\

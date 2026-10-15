@@ -115,3 +115,14 @@ TEST_CASE("FrameReader accepts OpenIndexAck paired enum declaration") {
     FrameReader ack_reader;
     CHECK(ack_reader.feed(ack, sizeof(ack)));
 }
+
+TEST_CASE("hardened FrameReader admits auth handshake opcodes") {
+    for (auto op : {Opcode::BeginAuth, Opcode::BeginAuthAck, Opcode::CompleteAuth}) {
+        FrameReader reader; reader.set_validate_opcodes(true);
+        auto bytes = frame_bytes(op, {});
+        auto result = reader.feed(bytes.data(), bytes.size());
+        REQUIRE(result);
+        REQUIRE(result.value().size() == 1);
+        CHECK(result.value()[0].opcode == op);
+    }
+}

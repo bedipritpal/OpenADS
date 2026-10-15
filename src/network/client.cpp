@@ -1,4 +1,5 @@
 #include "network/client.h"
+#include "network/mutual_auth.h"
 
 #include "abi/lock_retry_policy.h"
 #include "engine/table.h"
@@ -326,8 +327,8 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
             default: break;
         }
     }
-    const FrameTraceHook trace_hook =
-        g_frame_trace_hook.load(std::memory_order_relaxed);
+    const FrameTraceHook trace_hook = f.opcode!=Opcode::BeginAuth && f.opcode!=Opcode::CompleteAuth
+        ? g_frame_trace_hook.load(std::memory_order_relaxed) : nullptr;
     const auto trace_t0 = trace_hook != nullptr
         ? std::chrono::steady_clock::now()
         : std::chrono::steady_clock::time_point{};
@@ -507,6 +508,55 @@ RemoteConnection::connect_with_transport(std::unique_ptr<ITransport> transport,
     // found no remote connection to notify. Sync the state now; the
     // server default is "show", so only the hidden state needs pushing.
     if (!openads::engine::show_deleted()) show_deleted(false);
+    return {};
+}
+
+util::Result<std::vector<std::uint8_t>> RemoteConnection::begin_auth(std::unique_ptr<ITransport> t,const std::string& dir) {
+    if(transport_ || !t || !t->encrypted_ready() || dir.size()>4096 || dir.find('\0')!=std::string::npos)
+        return util::Error{5000,0,"Auth transport/path invalid",""};
+    transport_=std::move(t);auth_dir_=dir;
+    Frame f;f.opcode=Opcode::BeginAuth;f.payload.assign(dir.begin(),dir.end());
+    auto rep=request(f);
+    if(!rep || rep.value().opcode!=Opcode::BeginAuthAck || rep.value().payload.size()!=32){
+        transport_->close();return util::Error{5000,0,"BeginAuth failed",""};
+    }
+    auth_pending_=true;return rep.value().payload;
+}
+util::Result<std::string> RemoteConnection::begin_mutual(std::unique_ptr<ITransport> t,const std::string& dir,const std::string& selector,std::array<std::uint8_t,32>& challenge,std::array<std::uint8_t,32>& binding){
+ if(transport_||!t||!t->channel_binding(binding)||dir.size()>4096||selector.empty()||selector.size()>256||dir.find('\0')!=std::string::npos)return util::Error{5000,0,"Mutual arguments/binding invalid",""};
+ transport_=std::move(t);auth_dir_=dir;
+ auto begin=mutual_begin(selector,dir);Frame f;f.opcode=Opcode::BeginAuth;f.payload.assign(begin.begin(),begin.end());auto rep=request(f);
+ if(!rep)return rep.error();
+ if(rep.value().opcode!=Opcode::BeginAuthAck||rep.value().payload.size()<33||rep.value().payload.size()>4128){transport_->close();return util::Error{5000,0,"Mutual proof missing",""};}
+ std::copy_n(rep.value().payload.begin(),32,challenge.begin());auth_pending_=true;
+ return std::string(rep.value().payload.begin()+32,rep.value().payload.end());
+}
+util::Result<void> RemoteConnection::complete_auth(const std::string& blob) {
+    if(!auth_pending_)return util::Error{5000,0,"No pending auth",""};
+    auth_pending_=false;
+    if(blob.empty() || blob.size()>4096){transport_->close();return util::Error{5000,0,"Auth blob size invalid",""};}
+    Frame f;f.opcode=Opcode::CompleteAuth;f.payload.assign(blob.begin(),blob.end());
+    auto rep=request(f);
+    volatile std::uint8_t* p=f.payload.data();for(std::size_t i=0;i<f.payload.size();++i)p[i]=0;
+    if(!rep || rep.value().opcode!=Opcode::ConnectAck){transport_->close();return util::Error{5000,0,"CompleteAuth denied",""};}
+    // Client-only metadata parity with connect_with_transport. The existing
+    // Hello opcode works on old daemons; it does not run licensing again.
+    // Best effort: authentication is already complete. Adds one application RTT.
+    server_version_.clear();
+    {
+        Frame hello;
+        hello.opcode = Opcode::Hello;
+        if (auto hrep = request(hello);
+            hrep && hrep.value().opcode == Opcode::HelloAck) {
+            const auto& version = hrep.value().payload;
+            server_version_.assign(version.begin(), version.end());
+        }
+    }
+    server_caps_=0; // No fallback login or unauthenticated pool lanes.
+    const auto& pl=rep.value().payload;
+    if(pl.size()>=14 && std::equal(pl.begin(),pl.begin()+10,"connected:"))
+        server_caps_=read_u32_le(pl.data()+pl.size()-4);
+    if(!openads::engine::show_deleted())show_deleted(false);
     return {};
 }
 

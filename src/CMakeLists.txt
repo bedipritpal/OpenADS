@@ -79,6 +79,7 @@ add_library(openads_core STATIC
     drivers/memory/memory_driver.cpp
     network/wire.cpp
     network/frame_reader.cpp
+    network/auth_worker.cpp
     network/server.cpp
     network/session.cpp
     network/worker_pool.cpp

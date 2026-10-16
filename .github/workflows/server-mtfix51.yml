@@ -1,4 +1,4 @@
-name: MTFIX51 exact legacy server proof recovery
+name: MTFIX51 legacy proof with explicit test fixture directory
 'on':
   push:
     branches:
@@ -94,22 +94,16 @@ jobs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-      run: 'set -euxo pipefail
-
-        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
-
-        gh run download 38938650173 --repo bedipritpal/OpenADS --name mtfix51-server-candidate --dir recovered51
-
-        mkdir -p build-legacy/tools/serverd
-
-        cp recovered51/build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/
-
-        g++ -std=c++17 -static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600 -Isrc -Ithird_party/doctest
-        tests/unit/doctest_main.cpp tests/unit/platform_path_test.cpp tests/unit/fs_sandbox_test.cpp tests/unit/file_jail_test.cpp
-        src/platform/path.cpp src/platform/fs_sandbox.cpp src/platform/file_win32.cpp src/platform/lock_win32.cpp
-        -o output/mtfix51-path-tests.exe
-
-        '
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ngh run\
+        \ download 38938650173 --repo bedipritpal/OpenADS --name mtfix51-server-candidate --dir recovered51\nmkdir\
+        \ -p build-legacy/tools/serverd\ncp recovered51/build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/\n\
+        # Test-fixture-only replacement: pinned GCC temp_directory_path also fails.\n# Product resolver and server\
+        \ remain byte-identical to the compiled candidate.\npython - <<'PYFIX'\nimport pathlib\nfor n in ['platform_path_test.cpp','fs_sandbox_test.cpp','file_jail_test.cpp']:\n\
+        \ p=pathlib.Path('tests/unit')/n\n p.write_text(p.read_text().replace('fs::temp_directory_path()', 'fs::path(\"\
+        C:/Temp/\")'))\nPYFIX\ng++ -std=c++17 -static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600 -Isrc\
+        \ -Ithird_party/doctest tests/unit/doctest_main.cpp tests/unit/platform_path_test.cpp tests/unit/fs_sandbox_test.cpp\
+        \ tests/unit/file_jail_test.cpp src/platform/path.cpp src/platform/fs_sandbox.cpp src/platform/file_win32.cpp\
+        \ src/platform/lock_win32.cpp -o output/mtfix51-path-tests.exe\n"
     - name: Run focused Windows tests with native Windows temp setup
       shell: pwsh
       run: '$ErrorActionPreference=''Stop''

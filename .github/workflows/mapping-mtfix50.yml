@@ -60,7 +60,7 @@ jobs:
       run: "$ErrorActionPreference='Stop'\n[IO.File]::WriteAllBytes((Join-Path $PWD 'auth-probe.hrb'),[Convert]::FromBase64String('wEhSQgIAAwAAAE9BRFNfQVVUSF9WMQAFAUxFTgAAAlJFUExJQ0FURQAAAgEAAABPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbABAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALACAGoCAABcBAwCSG4H'))\n\
         [IO.File]::WriteAllBytes((Join-Path $PWD 'fix-hrb-acl.cmd'),[Convert]::FromBase64String('QGVjaG8gb2ZmDQpzZXRsb2NhbCBEaXNhYmxlRGVsYXllZEV4cGFuc2lvbg0KcmVtIFRlc3QgZml4dHVyZSBvbmx5LiBOZXZlciBhcHBseSB0aGlzIGhlbHBlciB0byBhIHByb2R1Y3Rpb24gYXV0aCBtb2R1bGUuDQppZiAiJX4xIj09IiIgZ290byB1c2FnZQ0KaWYgbm90ICIlfjIiPT0iIiBnb3RvIHVzYWdlDQppZiAvSSBub3QgIiV+bngxIj09Im11dHVhbC10ZXN0LW9ubHkuaHJiIiAoDQogIGVjaG8gUmVmdXNlZDogb25seSBtdXR1YWwtdGVzdC1vbmx5LmhyYiBpcyBzdXBwb3J0ZWQuIDE+JjINCiAgZXhpdCAvYiAyDQopDQppZiBub3QgZXhpc3QgIiV+ZjEiICgNCiAgZWNobyBUZXN0IEhSQiBub3QgZm91bmQuIDE+JjINCiAgZXhpdCAvYiAyDQopDQppY2FjbHMgIiV+ZjEiIC9pbmhlcml0YW5jZTpyDQppZiBlcnJvcmxldmVsIDEgZXhpdCAvYiAxDQppY2FjbHMgIiV+ZjEiIC9ncmFudDpyICIlVVNFUkRPTUFJTiVcJVVTRVJOQU1FJTpSIg0KaWYgZXJyb3JsZXZlbCAxIGV4aXQgL2IgMQ0KZWNobyBBQ0wgY29tbWFuZHMgY29tcGxldGVkLiBSZS1ydW4gdGhlIHNlcnZlciBwcm9iZTsgcmVtYWluaW5nIGV4cGxpY2l0IGdyYW50cyBtYXkgc3RpbGwgYmUgcmVqZWN0ZWQuDQpleGl0IC9iIDANCjp1c2FnZQ0KZWNobyBVc2FnZTogZml4LWhyYi1hY2wuY21kICJwYXRoXG11dHVhbC10ZXN0LW9ubHkuaHJiIiAxPiYyDQpleGl0IC9iIDINCg=='))\n\
         [IO.File]::WriteAllBytes((Join-Path $PWD 'mtfix50-client.patch'),[Convert]::FromBase64String('ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL2NsaWVudC5jcHAgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCmluZGV4IGQ4ZDkyNGYxLi40YWM0YzI4NyAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvY2xpZW50LmNwcAorKysgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCkBAIC01MTcsOCArNTE3LDExIEBAIHV0aWw6OlJlc3VsdDxzdGQ6OnZlY3RvcjxzdGQ6OnVpbnQ4X3Q+PiBSZW1vdGVDb25uZWN0aW9uOjpiZWdpbl9hdXRoKHN0ZDo6dW5pcXVlCiAgICAgdHJhbnNwb3J0Xz1zdGQ6Om1vdmUodCk7YXV0aF9kaXJfPWRpcjsKICAgICBGcmFtZSBmO2Yub3Bjb2RlPU9wY29kZTo6QmVnaW5BdXRoO2YucGF5bG9hZC5hc3NpZ24oZGlyLmJlZ2luKCksZGlyLmVuZCgpKTsKICAgICBhdXRvIHJlcD1yZXF1ZXN0KGYpOwotICAgIGlmKCFyZXAgfHwgcmVwLnZhbHVlKCkub3Bjb2RlIT1PcGNvZGU6OkJlZ2luQXV0aEFjayB8fCByZXAudmFsdWUoKS5wYXlsb2FkLnNpemUoKSE9MzIpewotICAgICAgICB0cmFuc3BvcnRfLT5jbG9zZSgpO3JldHVybiB1dGlsOjpFcnJvcns1MDAwLDAsIkJlZ2luQXV0aCBmYWlsZWQiLCIifTsKKyAgICBpZighcmVwKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gcmVwLmVycm9yKCk7CisgICAgfQorICAgIGlmKHJlcC52YWx1ZSgpLm9wY29kZSE9T3Bjb2RlOjpCZWdpbkF1dGhBY2sgfHwgcmVwLnZhbHVlKCkucGF5bG9hZC5zaXplKCkhPTMyKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gdXRpbDo6RXJyb3J7NTAwMCwwLCJCZWdpbkF1dGggcmVwbHkgaW52YWxpZCIsIiJ9OwogICAgIH0KICAgICBhdXRoX3BlbmRpbmdfPXRydWU7cmV0dXJuIHJlcC52YWx1ZSgpLnBheWxvYWQ7CiB9Cg=='))\n\
-        [IO.File]::WriteAllBytes((Join-Path $PWD 'root-table-matrix.cpp'),[Convert]::FromBase64String('I2luY2x1ZGUgImFjZS5oIgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxzdHJpbmc+CnZvaWQgZXJyb3IoY29uc3QgY2hhciogc3RhZ2UsVU5TSUdORUQzMiByYyl7VU5TSUdORUQzMiBjb2RlPTA7VU5TSUdORUQ4IG1bMTAyNF17fTtVTlNJR05FRDE2IG49MTAyMztBZHNHZXRMYXN0RXJyb3IoJmNvZGUsbSwmbik7c3RkOjpjb3V0PDxzdGFnZTw8Ij0iPDxyYzw8IiBFUlJPUj0iPDxtPDxzdGQ6OmVuZGw7fQppbnQgbWFpbihpbnQgYXJnYyxjaGFyKiogYXJndil7CiBpZihhcmdjIT00KXJldHVybiAyOwogc3RkOjpzdHJpbmcgdXJpPWFyZ3ZbMV0sZmlsZT1hcmd2WzJdO0FEU0hBTkRMRSBoPTAscD0wLHQ9MDtVTlNJR05FRDMyIHJjPTA7CiBpZih1cmkucmZpbmQoImF1dGg6Ly8iLDApPT0wKXtVTlNJR05FRDggY1szMl17fTtyYz1PQWRzQmVnaW5BdXRoKHVyaS5jX3N0cigpLCZwLGMpO2Vycm9yKCJCRUdJTiIscmMpO2lmKHJjKXJldHVybiAwO3N0ZDo6c3RyaW5nIGJsb2IocmVpbnRlcnByZXRfY2FzdDxjaGFyKj4oYyksMzIpO2Jsb2IrPSJ0ZXN0LW9ubHkiO3JjPU9BZHNDb21wbGV0ZUF1dGgocCxyZWludGVycHJldF9jYXN0PGNvbnN0IFVOU0lHTkVEOCo+KGJsb2IuZGF0YSgpKSxibG9iLnNpemUoKSwmaCk7ZXJyb3IoIkNPTVBMRVRFIixyYyk7fQogZWxzZXtyYz1BZHNDb25uZWN0NjAocmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPih1cmkuZGF0YSgpKSxBRFNfUkVNT1RFX1NFUlZFUixyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGNvbnN0X2Nhc3Q8Y2hhcio+KCJ1c3IiKSkscmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPihjb25zdF9jYXN0PGNoYXIqPigicHciKSksMCwmaCk7ZXJyb3IoIkNPTk5FQ1QiLHJjKTt9CiBpZihyYylyZXR1cm4gMDsKIFVOU0lHTkVEOCBkZWZbXT0iSUQsQyw4OyI7CiByYz1BZHNDcmVhdGVUYWJsZShoLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oZmlsZS5kYXRhKCkpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsZGVmLCZ0KTtlcnJvcigiQ1JFQVRFIixyYyk7CiBpZighcmMpe0Fkc0Nsb3NlVGFibGUodCk7dD0wO3JjPUFkc09wZW5UYWJsZShoLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oZmlsZS5kYXRhKCkpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsJnQpO2Vycm9yKCJPUEVOIixyYyk7aWYoIXJjKXtVTlNJR05FRDggZls0MDk2XXt9O1VOU0lHTkVEMTYgbj00MDk1O3JjPUFkc0dldFRhYmxlRmlsZW5hbWUodCxBRFNfRlVMTFBBVEhOQU1FLGYsJm4pO3N0ZDo6Y291dDw8IlRBQkxFX0ZJTEVOQU1FPSI8PGY8PCIgUkM9Ijw8cmM8PHN0ZDo6ZW5kbDtBZHNDbG9zZVRhYmxlKHQpO319CiBBZHNEaXNjb25uZWN0KGgpO3JldHVybiAwOwp9Cg=='))\n\
+        [IO.File]::WriteAllBytes((Join-Path $PWD 'root-table-matrix.cpp'),[Convert]::FromBase64String('I2luY2x1ZGUgImFjZS5oIgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxzdHJpbmc+CnZvaWQgZXJyb3IoY29uc3QgY2hhciogc3RhZ2UsVU5TSUdORUQzMiByYyl7VU5TSUdORUQzMiBjb2RlPTA7VU5TSUdORUQ4IG1bMTAyNF17fTtVTlNJR05FRDE2IG49MTAyMztBZHNHZXRMYXN0RXJyb3IoJmNvZGUsbSwmbik7c3RkOjpjb3V0PDxzdGFnZTw8Ij0iPDxyYzw8IiBFUlJPUj0iPDxtPDxzdGQ6OmVuZGw7fQppbnQgbWFpbihpbnQgYXJnYyxjaGFyKiogYXJndil7CiBpZihhcmdjIT00KXJldHVybiAyOwogQWRzU2V0U2VydmVyVHlwZShBRFNfUkVNT1RFX1NFUlZFUik7c3RkOjpjb3V0PDwiQVBQX1NFUlZFUl9UWVBFPUFEU19SRU1PVEVfU0VSVkVSICgyKSI8PHN0ZDo6ZW5kbDsKIHN0ZDo6c3RyaW5nIHVyaT1hcmd2WzFdLGZpbGU9YXJndlsyXTtBRFNIQU5ETEUgaD0wLHA9MCx0PTA7VU5TSUdORUQzMiByYz0wOwogaWYodXJpLnJmaW5kKCJhdXRoOi8vIiwwKT09MCl7VU5TSUdORUQ4IGNbMzJde307cmM9T0Fkc0JlZ2luQXV0aCh1cmkuY19zdHIoKSwmcCxjKTtlcnJvcigiQkVHSU4iLHJjKTtpZihyYylyZXR1cm4gMDtzdGQ6OnN0cmluZyBibG9iKHJlaW50ZXJwcmV0X2Nhc3Q8Y2hhcio+KGMpLDMyKTtibG9iKz0idGVzdC1vbmx5IjtyYz1PQWRzQ29tcGxldGVBdXRoKHAscmVpbnRlcnByZXRfY2FzdDxjb25zdCBVTlNJR05FRDgqPihibG9iLmRhdGEoKSksYmxvYi5zaXplKCksJmgpO2Vycm9yKCJDT01QTEVURSIscmMpO30KIGVsc2V7cmM9QWRzQ29ubmVjdDYwKHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4odXJpLmRhdGEoKSksQURTX1JFTU9URV9TRVJWRVIscmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPihjb25zdF9jYXN0PGNoYXIqPigidXNyIikpLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oY29uc3RfY2FzdDxjaGFyKj4oInB3IikpLDAsJmgpO2Vycm9yKCJDT05ORUNUIixyYyk7fQogaWYocmMpcmV0dXJuIDA7CiBVTlNJR05FRDggZGVmW109IklELEMsODsiOwogcmM9QWRzQ3JlYXRlVGFibGUoaCxyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGZpbGUuZGF0YSgpKSxudWxscHRyLEFEU19DRFgsQURTX0FOU0ksQURTX1BST1BSSUVUQVJZX0xPQ0tJTkcsQURTX0lHTk9SRVJJR0hUUywwLGRlZiwmdCk7ZXJyb3IoIkNSRUFURSIscmMpOwogaWYoIXJjKXtBZHNDbG9zZVRhYmxlKHQpO3Q9MDtyYz1BZHNPcGVuVGFibGUoaCxyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGZpbGUuZGF0YSgpKSxudWxscHRyLEFEU19DRFgsQURTX0FOU0ksQURTX1BST1BSSUVUQVJZX0xPQ0tJTkcsQURTX0lHTk9SRVJJR0hUUywwLCZ0KTtlcnJvcigiT1BFTiIscmMpO2lmKCFyYyl7VU5TSUdORUQ4IGZbNDA5Nl17fTtVTlNJR05FRDE2IG49NDA5NTtyYz1BZHNHZXRUYWJsZUZpbGVuYW1lKHQsQURTX0ZVTExQQVRITkFNRSxmLCZuKTtzdGQ6OmNvdXQ8PCJUQUJMRV9GSUxFTkFNRT0iPDxmPDwiIFJDPSI8PHJjPDxzdGQ6OmVuZGw7QWRzQ2xvc2VUYWJsZSh0KTt9fQogQWRzRGlzY29ubmVjdChoKTtyZXR1cm4gMDsKfQo='))\n\
         $path=(Resolve-Path auth-probe.hrb).Path\n$acl=New-Object System.Security.AccessControl.FileSecurity;$acl.SetAccessRuleProtection($true,$false)\n\
         $me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User\nforeach($sid in @($me.Value,'S-1-5-18','S-1-5-32-544')){\n\
         \ $id=New-Object System.Security.Principal.SecurityIdentifier($sid)\n $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'Read','Allow');$acl.AddAccessRule($rule)\n\
@@ -87,12 +87,12 @@ jobs:
       run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n\
         $mod=(Resolve-Path auth-probe.hrb).Path\n$probe=(Resolve-Path output/auth-diagnostic.exe).Path\n$proof=Join-Path\
         \ $PWD 'output/beginauth-diagnostic-proof.txt'\nfunction Run-Probe($url,$code,$message){\n $r=& $probe $url\
-        \ $code $message 2>&1\n $r | Tee-Object -FilePath $proof -Append\n if($LASTEXITCODE -ne 0){throw \"diagnostic\
-        \ client failed: $url\"}\n}\nforeach($legacy in @(0,1)){\n $a='--host 127.0.0.1 --port 17266 --data \"'+$data+'\"\
-        \ --auth_user usr:pw --auth_module \"'+$mod+'\"'\n if($legacy -eq 1){$a+=' --legacy_paths'}\n $p=Start-Process\
-        \ $srv -ArgumentList $a -RedirectStandardOutput \"output/diag-server-$legacy.out\" -RedirectStandardError\
-        \ \"output/diag-server-$legacy.err\" -PassThru\n try{\n  $ready=$false\n  for($i=0;$i -lt 100;$i++){\n \
-        \  if(Select-String \"output/diag-server-$legacy.out\" -Pattern 'listening on' -Quiet){$ready=$true;break}\n\
+        \ $code $message 2>&1\n $r | Tee-Object -FilePath $proof -Append\n if($LASTEXITCODE -ne 0){\"OBSERVED_EXPECTATION_MISMATCH=$url\
+        \ expected=$code\" | Tee-Object -FilePath $proof -Append}\n}\nforeach($legacy in @(0,1)){\n $a='--host 127.0.0.1\
+        \ --port 17266 --data \"'+$data+'\" --auth_user usr:pw --auth_module \"'+$mod+'\"'\n if($legacy -eq 1){$a+='\
+        \ --legacy_paths'}\n $p=Start-Process $srv -ArgumentList $a -RedirectStandardOutput \"output/diag-server-$legacy.out\"\
+        \ -RedirectStandardError \"output/diag-server-$legacy.err\" -PassThru\n try{\n  $ready=$false\n  for($i=0;$i\
+        \ -lt 100;$i++){\n   if(Select-String \"output/diag-server-$legacy.out\" -Pattern 'listening on' -Quiet){$ready=$true;break}\n\
         \   if($p.HasExited){throw 'diagnostic server exited'}\n   Start-Sleep -Milliseconds 200\n  }\n  if(-not\
         \ $ready){throw 'diagnostic server not ready'}\n  Run-Probe ('auth://127.0.0.1:17266/'+$data.Replace('\\\
         ','/')) 0 PASS\n  if($legacy -eq 0){\n   Run-Probe 'auth://127.0.0.1:17266/C:/' 7077 'Auth path denied'\n\
@@ -113,8 +113,8 @@ jobs:
         \ \"'+$test+'\"')\nif($LASTEXITCODE -ne 0){throw 'ACL helper failed'}\n$r=Worker-Probe $test;if($r.code\
         \ -ne 0 -or $r.out -ne 'READY'){throw ('fixed ACL probe failed '+$r.err)}\n$real=Join-Path $aclDir 'vouch_auth.hrb';Copy-Item\
         \ $mod $real\n& cmd /c ('fix-hrb-acl.cmd \"'+$real+'\"')\nif($LASTEXITCODE -ne 2){throw 'helper did not\
-        \ refuse real-HRB name'}\n'Windows diagnostic path/error matrix and test-only ACL helper PASS' | Tee-Object\
-        \ -FilePath $proof -Append\n"
+        \ refuse real-HRB name'}\n'Windows diagnostic path/error observations complete; test-only ACL helper PASS'\
+        \ | Tee-Object -FilePath $proof -Append\n"
     - name: Compare native mtfix44 and mtfix49 V1 both path modes
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$proof=Join-Path $PWD 'output/mtfix44-vs49-v1-proof.txt'\n\
@@ -131,21 +131,24 @@ jobs:
         \ 'listening on' -Quiet){$ready=$true;break}\n    if($p.HasExited){throw \"comparison server $version exited\"\
         }\n    Start-Sleep -Milliseconds 200\n   }\n   if(-not $ready){throw 'comparison server not ready'}\n  \
         \ \"SERVER=$version LEGACY=$legacy\" | Tee-Object -FilePath $proof -Append\n   $url='auth://127.0.0.1:17267/'+$data.Replace('\\\
-        ','/')\n   & $probe $url 0 PASS | Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw\
-        \ 'exact-root BeginAuth parity failed'}\n   # Same Harbour DLL-import V1 flow, complete auth, open/close\
-        \ table.\n   & output/auth_static.exe $url | Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne\
-        \ 0){throw 'V1 CompleteAuth/RDD comparison failed'}\n   $expected=if($legacy -eq 0){7077}else{0}\n   $message=if($legacy\
-        \ -eq 0){'Auth path denied'}else{'PASS'}\n   & $probe 'auth://127.0.0.1:17267/C:/' $expected $message |\
-        \ Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw 'drive-root BeginAuth parity failed'}\n\
-        \  }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n }\n}\n'Native mtfix44 vs mtfix49 V1 BeginAuth/CompleteAuth/RDD\
-        \ parity PASS' | Tee-Object -FilePath $proof -Append\n"
+        ','/')\n   & $probe $url 0 PASS | Tee-Object -FilePath $proof -Append\n   $beginOK=($LASTEXITCODE -eq 0);if(-not\
+        \ $beginOK){'EXACT_ROOT_BEGIN_MISMATCH' | Tee-Object -FilePath $proof -Append}\n   # Same Harbour DLL-import\
+        \ V1 flow, complete auth, open/close table.\n   if($beginOK){ & output/auth_static.exe $url | Tee-Object\
+        \ -FilePath $proof -Append }\n   if($beginOK -and $LASTEXITCODE -ne 0){'COMPLETE_RDD_MISMATCH' | Tee-Object\
+        \ -FilePath $proof -Append}\n   $expected=if($legacy -eq 0){7077}else{0}\n   $message=if($legacy -eq 0){'Auth\
+        \ path denied'}else{'PASS'}\n   & $probe 'auth://127.0.0.1:17267/C:/' $expected $message | Tee-Object -FilePath\
+        \ $proof -Append\n   if($LASTEXITCODE -ne 0){'DRIVE_ROOT_BEGIN_MISMATCH' | Tee-Object -FilePath $proof -Append}\n\
+        \  }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n }\n}\n'Native mtfix44 vs mtfix49 V1 observations\
+        \ COMPLETE; inspect mismatch markers' | Tee-Object -FilePath $proof -Append\n"
     - name: Observe client mapping and server mapping corrected examples
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\nCopy-Item -Recurse comparison44 matrix-kit44\n$rows=@();$log=Join-Path\
         \ $PWD 'matrix-output/root-table-matrix.txt'\nNew-Item -ItemType Directory -Force matrix-output | Out-Null\n\
-        $base='C:/Temp/mtfix50-mapping-matrix'\nforeach($version in @(44,49)){\n foreach($legacy in @(0,1)){\n \
-        \ foreach($scheme in @('tcp','auth')){\n   foreach($clientMapping in @('C:/','D:/','E:/','F:/','C:/MyDataFolder','C:/,E:/MyDataFolder','C:/;E:/MyDataFolder')){\n\
-        \    $case=\"v$version-l$legacy-$scheme-\"+$clientMapping.Replace(':','').Replace('/','_').Replace(';','_semi_').Replace(',','_comma_')\n\
+        $base='C:/Temp/mtfix50-mapping-matrix'\nNew-Item -ItemType Directory -Force 'C:/MyDataFolder/Creative.acd'\
+        \ | Out-Null\nforeach($version in @(44,49)){\n foreach($legacy in @(0,1)){\n  foreach($scheme in @('tcp','auth')){\n\
+        \ foreach($endpoint in @('127.0.0.1','localhost')){\n   foreach($clientMapping in @('C:/','D:/','E:/','F:/','C:/MyDataFolder','SERVER_ROOT_CONTROL','C:/,E:/MyDataFolder','C:/;E:/MyDataFolder')){\n\
+        \    Remove-Item 'C:/MyDataFolder/Creative.acd/00001.*' -Force -ErrorAction SilentlyContinue\n    $case=\"\
+        v$version-l$legacy-$scheme-$endpoint-\"+$clientMapping.Replace(':','').Replace('/','_').Replace(';','_semi_').Replace(',','_comma_')\n\
         \    $serverMapping=$base+'/'+$case\n    New-Item -ItemType Directory -Force ($serverMapping+'/Creative.acd'),($serverMapping+'/MyDataFolder/Creative.acd')\
         \ | Out-Null\n    # Prepare possible current remount destinations too; do not change resolution rules.\n\
         \    New-Item -ItemType Directory -Force ($serverMapping+'/MyDataFolder/MyDataFolder/Creative.acd') | Out-Null\n\
@@ -157,9 +160,10 @@ jobs:
         \ $o -RedirectStandardError $e -PassThru\n    try{\n     $ready=$false\n     for($i=0;$i -lt 100;$i++){\n\
         \      if(Select-String $o -Pattern 'listening on' -Quiet){$ready=$true;break}\n      if($p.HasExited){throw\
         \ \"$case server exited\"}\n      Start-Sleep -Milliseconds 200\n     }\n     if(-not $ready){throw \"$case\
-        \ server not ready\"}\n     $uri=$scheme+'://127.0.0.1:17268/'+$clientMapping\n     # Same client file path\
-        \ in both corrected folder/root examples.\n     $file=if($clientMapping.Contains(',') -or $clientMapping.Contains(';')){'E:/MyDataFolder/Creative.acd/00001.dbf'}elseif($clientMapping\
-        \ -eq 'C:/MyDataFolder'){'C:/MyDataFolder/Creative.acd/00001.dbf'}else{$clientMapping+'MyDataFolder/Creative.acd/00001.dbf'}\n\
+        \ server not ready\"}\n     $effectiveMapping=if($clientMapping -eq 'SERVER_ROOT_CONTROL'){$serverMapping}else{$clientMapping}\n\
+        \     $uri=$scheme+'://'+$endpoint+':17268/'+$effectiveMapping\n     # Same client file path in both corrected\
+        \ folder/root examples.\n     $file=if($clientMapping -eq 'SERVER_ROOT_CONTROL'){'C:/MyDataFolder/Creative.acd/00001.dbf'}elseif($clientMapping.Contains(',')\
+        \ -or $clientMapping.Contains(';')){'E:/MyDataFolder/Creative.acd/00001.dbf'}elseif($clientMapping -eq 'C:/MyDataFolder'){'C:/MyDataFolder/Creative.acd/00001.dbf'}else{$clientMapping+'MyDataFolder/Creative.acd/00001.dbf'}\n\
         \     $expected=if($clientMapping.Contains(',') -or $clientMapping.Contains(';')){$serverMapping+'/Creative.acd/00001.dbf'}elseif($clientMapping\
         \ -eq 'C:/MyDataFolder'){$serverMapping+'/Creative.acd/00001.dbf'}else{$serverMapping+'/MyDataFolder/Creative.acd/00001.dbf'}\n\
         \     \"CASE=$case CLIENT MAPPING=$clientMapping SERVER MAPPING=$serverMapping FILE=$file EXPECTED=$expected\"\
@@ -167,9 +171,12 @@ jobs:
         \ 2>&1\n     $exit=$LASTEXITCODE;$result | Tee-Object -FilePath $log -Append\n     if($exit -ne 0){throw\
         \ 'matrix client crashed'}\n     $actual=@(Get-ChildItem -Recurse $serverMapping -Filter 00001.dbf | ForEach-Object\
         \ {$_.FullName.Replace('\\','/')})\n     $match=($actual.Count -eq 1 -and $actual[0] -ieq $expected)\n \
-        \    \"ACTUAL=$($actual -join ';') INTENDED_MATCH=$match\" | Tee-Object -FilePath $log -Append\n     $rows+=@{server_version=$version;legacy_paths=$legacy;transport=$scheme;client_mapping=$clientMapping;server_mapping=$serverMapping;requested_file=$file;expected=$expected;actual=$actual;intended_match=$match;client_result=($result\
-        \ -join \"`n\")}\n    }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n   }\n  }\n }\n}\n$rows\
-        \ | ConvertTo-Json -Depth 6 | Set-Content matrix-output/root-table-matrix.json -Encoding utf8\n'Completed\
+        \    \"ACTUAL=$($actual -join ';') INTENDED_MATCH=$match\" | Tee-Object -FilePath $log -Append\n     $localExpected=$file.Replace('\\\
+        ','/');$localFiles=@(Get-ChildItem -Recurse 'C:/MyDataFolder/Creative.acd' -Filter 00001.dbf -ErrorAction\
+        \ SilentlyContinue | ForEach-Object {$_.FullName.Replace('\\','/')})\n     $rows+=@{app_server_type='ADS_REMOTE_SERVER';endpoint=$endpoint;local_literal_expected=$localExpected;local_actual=$localFiles;local_literal_match=($localFiles\
+        \ -icontains $localExpected);server_version=$version;legacy_paths=$legacy;transport=$scheme;client_mapping=$clientMapping;server_mapping=$serverMapping;requested_file=$file;expected=$expected;actual=$actual;intended_match=$match;client_result=($result\
+        \ -join \"`n\")}\n    }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n   }\n  }\n }\n}\n}\n\
+        $rows | ConvertTo-Json -Depth 6 | Set-Content matrix-output/root-table-matrix.json -Encoding utf8\n'Completed\
         \ all existing-policy observations. Mismatches are reported, not fixed or waived.' | Tee-Object -FilePath\
         \ $log -Append\n"
     - name: Package diagnostic DLL only
@@ -252,7 +259,9 @@ jobs:
         strict worker check. No ACL bypass switch is included.
 
 
-        Native Windows proofs and same-flow mtfix44/49 comparison are included.
+        Native Windows proofs and same-flow mtfix44/49 observations are included.
+
+        The later comparison records mismatches; it is not an all-pass certification.
 
         Both default strict and optional legacy-path modes are tested; neither is changed. This focused diagnostic
         kit does not
@@ -291,6 +300,31 @@ jobs:
         Intended drive example: client mapping C:/ and that same requested file
 
         should store at --data/MyDataFolder/Creative.acd/00001.dbf.
+
+        LOCAL-SERVER CONTRACT: the application''s AdsSetServerType call controls the
+
+        server mode, not hostname spelling. User''s local-server example explicitly
+
+        uses AdsSetServerType(ADS_REMOTE_SERVER). The matrix calls this exact API
+
+        with ADS_REMOTE_SERVER (2), also passing that value to AdsConnect60. Literal
+
+        file paths are intended in that local-server case, without --data remapping.
+
+        Current code stores the server-type mask but does not transmit a local vs
+
+        remote path-mode flag in the TCP Connect frame. A TCP URL creates a
+
+        RemoteConnection regardless of hostname; server sessions set remote_server
+
+        true. Both localhost and 127.0.0.1 observations are identified as endpoint
+
+        spellings, not selectors of the requested file-system policy.
+
+        The SERVER_ROOT_CONTROL reaches file operations separately from rejected
+
+        client-root connection inputs.
+
 
         With several client roots, whichever root matches must be stripped. User''s
 

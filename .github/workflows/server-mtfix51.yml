@@ -1,4 +1,4 @@
-name: MTFIX51 drive-only connection root test server
+name: MTFIX51 legacy self-root restoration test server
 'on':
   push:
     branches:
@@ -85,9 +85,9 @@ jobs:
         grep -qi 'DLL Name: openace32.dll' output/diagnostic-client-pe.txt\n\ng++ -std=c++17 -static -static-libgcc\
         \ -static-libstdc++ -Imatrix-kit49/mtfix49-mutual-auth/include root-table-matrix.cpp kit/libopenace32.dll.a\
         \ -o matrix-client/root-table-matrix.exe\n"
-    - name: Apply only diagnostic base and drive-only server change
+    - name: Apply diagnostic client base and minimal legacy self-root server fix
       shell: bash
-      run: "set -euxo pipefail\npython - <<'PY51'\nimport base64,pathlib,subprocess\nfor n,b in [('mtfix50-client.patch','ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL2NsaWVudC5jcHAgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCmluZGV4IGQ4ZDkyNGYxLi40YWM0YzI4NyAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvY2xpZW50LmNwcAorKysgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCkBAIC01MTcsOCArNTE3LDExIEBAIHV0aWw6OlJlc3VsdDxzdGQ6OnZlY3RvcjxzdGQ6OnVpbnQ4X3Q+PiBSZW1vdGVDb25uZWN0aW9uOjpiZWdpbl9hdXRoKHN0ZDo6dW5pcXVlCiAgICAgdHJhbnNwb3J0Xz1zdGQ6Om1vdmUodCk7YXV0aF9kaXJfPWRpcjsKICAgICBGcmFtZSBmO2Yub3Bjb2RlPU9wY29kZTo6QmVnaW5BdXRoO2YucGF5bG9hZC5hc3NpZ24oZGlyLmJlZ2luKCksZGlyLmVuZCgpKTsKICAgICBhdXRvIHJlcD1yZXF1ZXN0KGYpOwotICAgIGlmKCFyZXAgfHwgcmVwLnZhbHVlKCkub3Bjb2RlIT1PcGNvZGU6OkJlZ2luQXV0aEFjayB8fCByZXAudmFsdWUoKS5wYXlsb2FkLnNpemUoKSE9MzIpewotICAgICAgICB0cmFuc3BvcnRfLT5jbG9zZSgpO3JldHVybiB1dGlsOjpFcnJvcns1MDAwLDAsIkJlZ2luQXV0aCBmYWlsZWQiLCIifTsKKyAgICBpZighcmVwKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gcmVwLmVycm9yKCk7CisgICAgfQorICAgIGlmKHJlcC52YWx1ZSgpLm9wY29kZSE9T3Bjb2RlOjpCZWdpbkF1dGhBY2sgfHwgcmVwLnZhbHVlKCkucGF5bG9hZC5zaXplKCkhPTMyKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gdXRpbDo6RXJyb3J7NTAwMCwwLCJCZWdpbkF1dGggcmVwbHkgaW52YWxpZCIsIiJ9OwogICAgIH0KICAgICBhdXRoX3BlbmRpbmdfPXRydWU7cmV0dXJuIHJlcC52YWx1ZSgpLnBheWxvYWQ7CiB9Cg=='),('mtfix51-drive-root.patch','ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL3Nlc3Npb24uY3BwIGIvc3JjL25ldHdvcmsvc2Vzc2lvbi5jcHAKaW5kZXggNDkxNjQyNjIuLmM2MGIzOTQzIDEwMDY0NAotLS0gYS9zcmMvbmV0d29yay9zZXNzaW9uLmNwcAorKysgYi9zcmMvbmV0d29yay9zZXNzaW9uLmNwcApAQCAtMTg3OCw3ICsxODc4LDcgQEAgRGlzcGF0Y2hSZXN1bHQgU2Vzc2lvbjo6ZGlzcGF0Y2goY29uc3QgRnJhbWUmIGYpIHsKICAgICAgICAgICAgIGNvbnN0IGF1dG8mIGVmZmVjdGl2ZT1kZWZhdWx0X2RhdGFfZGlyXy5lbXB0eSgpP3Nydl8tPmRhdGFfZGlyXzpkZWZhdWx0X2RhdGFfZGlyXzsKICAgICAgICAgICAgIGlmKCFlZmZlY3RpdmUuZW1wdHkoKSkgewogICAgICAgICAgICAgICAgIGF1dG8gcm9vdHM9b3BlbmFkczo6cGxhdGZvcm06OnNwbGl0X2RhdGFfcm9vdHMoZWZmZWN0aXZlKTsKLSAgICAgICAgICAgICAgICBhdXRvIGphaWw9c3J2Xy0+bGVnYWN5X3BhdGhzKCk/b3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfY2xpZW50X3BhdGgocm9vdHMsYXV0aF9kaXJfKTpvcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV91bmRlcl9hbnlfcm9vdChyb290cyxhdXRoX2Rpcl8pOworICAgICAgICAgICAgICAgIGF1dG8gamFpbD1vcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV9jb25uZWN0aW9uX3Jvb3Qocm9vdHMsYXV0aF9kaXJfLHNydl8tPmxlZ2FjeV9wYXRocygpKTsKICAgICAgICAgICAgICAgICBpZighamFpbClyZXR1cm4ge2VycigiQXV0aCBwYXRoIGRlbmllZCIsb3BlbmFkczo6QUVfTE9HSU5fRkFJTEVEKSx0cnVlfTsKICAgICAgICAgICAgICAgICBhdXRoX2Rpcl89KmphaWw7CiAgICAgICAgICAgICB9CkBAIC0yMDE5LDEyICsyMDE5LDggQEAgRGlzcGF0Y2hSZXN1bHQgU2Vzc2lvbjo6ZGlzcGF0Y2goY29uc3QgRnJhbWUmIGYpIHsKICAgICAgICAgICAgIHN0ZDo6c3RyaW5nIHJlc29sdmVkID0gZGlyOwogICAgICAgICAgICAgaWYgKCFlZmZlY3RpdmVfZGF0YV9kaXIuZW1wdHkoKSkgewogICAgICAgICAgICAgICAgIGF1dG8gcm9vdHMgPSBvcGVuYWRzOjpwbGF0Zm9ybTo6c3BsaXRfZGF0YV9yb290cyhlZmZlY3RpdmVfZGF0YV9kaXIpOwotICAgICAgICAgICAgICAgIHN0ZDo6b3B0aW9uYWw8c3RkOjpzdHJpbmc+IGphaWw7Ci0gICAgICAgICAgICAgICAgaWYgKHNydl8tPmxlZ2FjeV9wYXRocygpKSB7Ci0gICAgICAgICAgICAgICAgICAgIGphaWwgPSBvcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV9jbGllbnRfcGF0aChyb290cywgZGlyKTsKLSAgICAgICAgICAgICAgICB9IGVsc2UgewotICAgICAgICAgICAgICAgICAgICBqYWlsID0gb3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfdW5kZXJfYW55X3Jvb3Qocm9vdHMsIGRpcik7Ci0gICAgICAgICAgICAgICAgfQorICAgICAgICAgICAgICAgIGF1dG8gamFpbCA9IG9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX2Nvbm5lY3Rpb25fcm9vdCgKKyAgICAgICAgICAgICAgICAgICAgcm9vdHMsIGRpciwgc3J2Xy0+bGVnYWN5X3BhdGhzKCkpOwogICAgICAgICAgICAgICAgIGlmICghamFpbCkgewogICAgICAgICAgICAgICAgICAgICByZXBseSA9IGVycigiQ29ubmVjdDogcGF0aCBvdXRzaWRlIGRhdGEgZGlyZWN0b3J5IiwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgb3BlbmFkczo6QUVfQUNDRVNTX0RFTklFRCk7CmRpZmYgLS1naXQgYS9zcmMvcGxhdGZvcm0vcGF0aC5jcHAgYi9zcmMvcGxhdGZvcm0vcGF0aC5jcHAKaW5kZXggZWM3NGJhZmIuLjAyNDA0NjIzIDEwMDY0NAotLS0gYS9zcmMvcGxhdGZvcm0vcGF0aC5jcHAKKysrIGIvc3JjL3BsYXRmb3JtL3BhdGguY3BwCkBAIC0xLDUgKzEsNiBAQAogI2luY2x1ZGUgInBsYXRmb3JtL3BhdGguaCIKICNpbmNsdWRlICJwbGF0Zm9ybS9maWxlLmgiCisjaW5jbHVkZSAicGxhdGZvcm0vZnNfc2FuZGJveC5oIgogCiAjaW5jbHVkZSA8YWxnb3JpdGhtPgogI2luY2x1ZGUgPGNjdHlwZT4KQEAgLTE2NSw2ICsxNjYsMjEgQEAgc3RkOjpvcHRpb25hbDxzdGQ6OnN0cmluZz4gcmVzb2x2ZV91bmRlcl9hbnlfcm9vdCgKICAgICByZXR1cm4gc3RkOjpudWxsb3B0OwogfQogCitzdGQ6Om9wdGlvbmFsPHN0ZDo6c3RyaW5nPiByZXNvbHZlX2Nvbm5lY3Rpb25fcm9vdCgKKyAgICBjb25zdCBzdGQ6OnZlY3RvcjxzdGQ6OnN0cmluZz4mIHJvb3RzLCBjb25zdCBzdGQ6OnN0cmluZyYgY2xpZW50X3BhdGgsCisgICAgYm9vbCBsZWdhY3lfcGF0aHMpIHsKKyAgICBpZiAocm9vdHMuZW1wdHkoKSkgcmV0dXJuIHN0ZDo6bnVsbG9wdDsKKyAgICBpZiAoY2xpZW50X3BhdGguc2l6ZSgpID09IDMgJiYKKyAgICAgICAgKChjbGllbnRfcGF0aFswXSA+PSAnQScgJiYgY2xpZW50X3BhdGhbMF0gPD0gJ1onKSB8fAorICAgICAgICAgKGNsaWVudF9wYXRoWzBdID49ICdhJyAmJiBjbGllbnRfcGF0aFswXSA8PSAneicpKSAmJgorICAgICAgICBjbGllbnRfcGF0aFsxXSA9PSAnOicgJiYKKyAgICAgICAgKGNsaWVudF9wYXRoWzJdID09ICcvJyB8fCBjbGllbnRfcGF0aFsyXSA9PSAnXFwnKSkgeworICAgICAgICByZXR1cm4gcmVzb2x2ZV91bmRlcl9yb290KHJvb3RzLmZyb250KCksICIuIik7CisgICAgfQorICAgIHJldHVybiBsZWdhY3lfcGF0aHMgPyByZXNvbHZlX2NsaWVudF9wYXRoKHJvb3RzLCBjbGllbnRfcGF0aCkKKyAgICAgICAgICAgICAgICAgICAgICAgIDogcmVzb2x2ZV91bmRlcl9hbnlfcm9vdChyb290cywgY2xpZW50X3BhdGgpOworfQorCiAvLyBSQ0IgMjAyNi0wNy0xMCDigJQgc2VlIHBhdGguaC4gVGhlIGFkZHJlc3Mgb2YgdGhpcyBmdW5jdGlvbiBpdHNlbGYgaXMKIC8vIHVzZWQgYXMgdGhlIGFuY2hvciwgc28gdGhlIGFuc3dlciBpcyB0aGUgbW9kdWxlIHRoYXQgYWN0dWFsbHkgaG9sZHMKIC8vIHRoZSBlbmdpbmUgY29kZSAodGhlIERMTCB1bmRlciBvcGVuYWNlNjQuZGxsLCB0aGUgZXhlIHdoZW4gbGlua2VkCmRpZmYgLS1naXQgYS9zcmMvcGxhdGZvcm0vcGF0aC5oIGIvc3JjL3BsYXRmb3JtL3BhdGguaAppbmRleCBjMGQzOGY5Yy4uOGNiZTg1ZDMgMTAwNjQ0Ci0tLSBhL3NyYy9wbGF0Zm9ybS9wYXRoLmgKKysrIGIvc3JjL3BsYXRmb3JtL3BhdGguaApAQCAtMzMsNiArMzMsMTEgQEAgc3RkOjp2ZWN0b3I8c3RkOjpzdHJpbmc+IHNwbGl0X2RhdGFfcm9vdHMoY29uc3Qgc3RkOjpzdHJpbmcmIHJvb3RzKTsKIHN0ZDo6b3B0aW9uYWw8c3RkOjpzdHJpbmc+IHJlc29sdmVfdW5kZXJfYW55X3Jvb3QoCiAgICAgY29uc3Qgc3RkOjp2ZWN0b3I8c3RkOjpzdHJpbmc+JiByb290cywgY29uc3Qgc3RkOjpzdHJpbmcmIGNsaWVudF9wYXRoKTsKIAorLy8gQ29ubmVjdGlvbi1vbmx5IGV4YWN0IGRyaXZlLXJvb3QgYWxpYXMuIE90aGVyIGlucHV0cyBrZWVwIGV4aXN0aW5nIHBvbGljeS4KK3N0ZDo6b3B0aW9uYWw8c3RkOjpzdHJpbmc+IHJlc29sdmVfY29ubmVjdGlvbl9yb290KAorICAgIGNvbnN0IHN0ZDo6dmVjdG9yPHN0ZDo6c3RyaW5nPiYgcm9vdHMsIGNvbnN0IHN0ZDo6c3RyaW5nJiBjbGllbnRfcGF0aCwKKyAgICBib29sIGxlZ2FjeV9wYXRocyk7CisKIC8vIFJDQiAyMDI2LTA3LTEwIOKAlCBkaXJlY3Rvcnkgb2YgdGhlIGJpbmFyeSBtb2R1bGUgdGhhdCBjb250YWlucyB0aGUKIC8vIE9wZW5BRFMgZW5naW5lIGNvZGU6IG9wZW5hY2U2NC5kbGwgLyBvcGVuYWNlMzIuZGxsIHdoZW4gdGhlIGVuZ2luZSBpcwogLy8gbG9hZGVkIGFzIHRoZSBBQ0UtY29tcGF0aWJsZSBETEwsIG9yIHRoZSBleGVjdXRhYmxlIGl0c2VsZiBmb3IKZGlmZiAtLWdpdCBhL3Rlc3RzL3VuaXQvcGxhdGZvcm1fcGF0aF90ZXN0LmNwcCBiL3Rlc3RzL3VuaXQvcGxhdGZvcm1fcGF0aF90ZXN0LmNwcAppbmRleCAxY2NjOGNhMy4uMTRkOGYwZDUgMTAwNjQ0Ci0tLSBhL3Rlc3RzL3VuaXQvcGxhdGZvcm1fcGF0aF90ZXN0LmNwcAorKysgYi90ZXN0cy91bml0L3BsYXRmb3JtX3BhdGhfdGVzdC5jcHAKQEAgLTEzNiwzICsxMzYsMjggQEAgVEVTVF9DQVNFKCJyZXNvbHZlX3VuZGVyX2FueV9yb290IGFjY2VwdHMgYSBwYXRoIHVuZGVyIGFueSBsaXN0ZWQgcm9vdCIpIHsKICAgICBmczo6cmVtb3ZlX2FsbChyb290Qik7CiAgICAgZnM6OnJlbW92ZV9hbGwob3V0c2lkZSk7CiB9CisKK1RFU1RfQ0FTRSgiY29ubmVjdGlvbiBkcml2ZSByb290IGFsaWFzZXMgZmlyc3QgZGF0YSByb290IG9ubHkiKSB7CisgICAgY29uc3QgYXV0byByb290ID0gc3RkOjpmaWxlc3lzdGVtOjp0ZW1wX2RpcmVjdG9yeV9wYXRoKCkgLyAib2Fkcy1kcml2ZS1yb290IjsKKyAgICBzdGQ6OmZpbGVzeXN0ZW06OmNyZWF0ZV9kaXJlY3Rvcmllcyhyb290KTsKKyAgICBjb25zdCBzdGQ6OnZlY3RvcjxzdGQ6OnN0cmluZz4gcm9vdHN7cm9vdC5zdHJpbmcoKX07CisgICAgZm9yIChib29sIGxlZ2FjeSA6IHtmYWxzZSwgdHJ1ZX0pIHsKKyAgICAgICAgZm9yIChjb25zdCBhdXRvKiBpbnB1dCA6IHsiQzovIiwgIkQ6LyIsICJlOlxcIiwgIno6LyJ9KSB7CisgICAgICAgICAgICBhdXRvIGdvdCA9IG9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX2Nvbm5lY3Rpb25fcm9vdChyb290cywgaW5wdXQsIGxlZ2FjeSk7CisgICAgICAgICAgICBSRVFVSVJFKGdvdC5oYXNfdmFsdWUoKSk7CisgICAgICAgICAgICBSRVFVSVJFKCpnb3QgPT0gKnJlc29sdmVfdW5kZXJfcm9vdChyb290LnN0cmluZygpLCAiLiIpKTsKKyAgICAgICAgfQorICAgICAgICBSRVFVSVJFX0ZBTFNFKG9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX2Nvbm5lY3Rpb25fcm9vdChyb290cywgIi4uL291dHNpZGUiLCBsZWdhY3kpKTsKKyNpZiBkZWZpbmVkKF9XSU4zMikKKyAgICAgICAgZm9yIChjb25zdCBhdXRvKiBpbnB1dCA6IHsiQzovLi4vLi4vb3V0c2lkZSIsICJDOi8uLi9vdXRzaWRlIn0pIHsKKyAgICAgICAgICAgIFJFUVVJUkVfRkFMU0Uob3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfY29ubmVjdGlvbl9yb290KHJvb3RzLCBpbnB1dCwgbGVnYWN5KSk7CisgICAgICAgIH0KKyNlbmRpZgorICAgIH0KKyAgICBSRVFVSVJFX0ZBTFNFKG9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX2Nvbm5lY3Rpb25fcm9vdCh7fSwgIkM6LyIsIGZhbHNlKSk7CisjaWYgZGVmaW5lZChfV0lOMzIpCisgICAgUkVRVUlSRShvcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV9jb25uZWN0aW9uX3Jvb3Qocm9vdHMsICJDOiIsIGZhbHNlKSA9PSByZXNvbHZlX3VuZGVyX2FueV9yb290KHJvb3RzLCAiQzoiKSk7CisgICAgUkVRVUlSRV9GQUxTRShvcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV9jb25uZWN0aW9uX3Jvb3Qocm9vdHMsICJDOi9lbHNld2hlcmUiLCBmYWxzZSkpOworI2VuZGlmCisgICAgUkVRVUlSRShvcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV9jb25uZWN0aW9uX3Jvb3Qocm9vdHMsIHJvb3Quc3RyaW5nKCksIGZhbHNlKSk7Cit9Cg==')]:\n\
+      run: "set -euxo pipefail\npython - <<'PY51'\nimport base64,pathlib,subprocess\nfor n,b in [('mtfix50-client.patch','ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL2NsaWVudC5jcHAgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCmluZGV4IGQ4ZDkyNGYxLi40YWM0YzI4NyAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvY2xpZW50LmNwcAorKysgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCkBAIC01MTcsOCArNTE3LDExIEBAIHV0aWw6OlJlc3VsdDxzdGQ6OnZlY3RvcjxzdGQ6OnVpbnQ4X3Q+PiBSZW1vdGVDb25uZWN0aW9uOjpiZWdpbl9hdXRoKHN0ZDo6dW5pcXVlCiAgICAgdHJhbnNwb3J0Xz1zdGQ6Om1vdmUodCk7YXV0aF9kaXJfPWRpcjsKICAgICBGcmFtZSBmO2Yub3Bjb2RlPU9wY29kZTo6QmVnaW5BdXRoO2YucGF5bG9hZC5hc3NpZ24oZGlyLmJlZ2luKCksZGlyLmVuZCgpKTsKICAgICBhdXRvIHJlcD1yZXF1ZXN0KGYpOwotICAgIGlmKCFyZXAgfHwgcmVwLnZhbHVlKCkub3Bjb2RlIT1PcGNvZGU6OkJlZ2luQXV0aEFjayB8fCByZXAudmFsdWUoKS5wYXlsb2FkLnNpemUoKSE9MzIpewotICAgICAgICB0cmFuc3BvcnRfLT5jbG9zZSgpO3JldHVybiB1dGlsOjpFcnJvcns1MDAwLDAsIkJlZ2luQXV0aCBmYWlsZWQiLCIifTsKKyAgICBpZighcmVwKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gcmVwLmVycm9yKCk7CisgICAgfQorICAgIGlmKHJlcC52YWx1ZSgpLm9wY29kZSE9T3Bjb2RlOjpCZWdpbkF1dGhBY2sgfHwgcmVwLnZhbHVlKCkucGF5bG9hZC5zaXplKCkhPTMyKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gdXRpbDo6RXJyb3J7NTAwMCwwLCJCZWdpbkF1dGggcmVwbHkgaW52YWxpZCIsIiJ9OwogICAgIH0KICAgICBhdXRoX3BlbmRpbmdfPXRydWU7cmV0dXJuIHJlcC52YWx1ZSgpLnBheWxvYWQ7CiB9Cg=='),('mtfix51-legacy-self-root.patch','ZGlmZiAtLWdpdCBhL3NyYy9wbGF0Zm9ybS9wYXRoLmNwcCBiL3NyYy9wbGF0Zm9ybS9wYXRoLmNwcAppbmRleCBlYzc0YmFmYi4uZGQ3YWZiZTQgMTAwNjQ0Ci0tLSBhL3NyYy9wbGF0Zm9ybS9wYXRoLmNwcAorKysgYi9zcmMvcGxhdGZvcm0vcGF0aC5jcHAKQEAgLTExMiw3ICsxMTIsMTMgQEAgc3RkOjpvcHRpb25hbDxzdGQ6OnN0cmluZz4gcmVzb2x2ZV91bmRlcl9yb290KGNvbnN0IHN0ZDo6c3RyaW5nJiByb290LAogICAgIGlmIChlYykgcmV0dXJuIHN0ZDo6bnVsbG9wdDsKIAogICAgIGZzOjpwYXRoIGNsaWVudF9wKGNsaWVudF9wYXRoKTsKLSAgICBmczo6cGF0aCBjb21iaW5lZCA9IGNsaWVudF9wLmlzX2Fic29sdXRlKCkgPyBjbGllbnRfcCA6IChyb290X3AgLyBjbGllbnRfcCk7CisgICAgLy8gR0NDIDEwLjIgb24gV2luZG93cyByZWplY3RzIHdlYWtseV9jYW5vbmljYWwoIkM6L1RlbXAvLiIpCisgICAgLy8gd2l0aCBFTk9FTlQuIEEgc2VsZi1kaXJlY3RvcnkgbmFtZXMgdGhlIHJvb3QgaXRzZWxmLiBLZWVwIHRoZQorICAgIC8vIHJvb3QncyBvcmlnaW5hbCBzcGVsbGluZyBmb3IgdGhlIG5vLWZvbGxvdyBqYWlsIGJlbG93OyBkbyBub3QKKyAgICAvLyBsZXhpY2FsbHkgY29sbGFwc2Ugb3RoZXIgY29tcG9uZW50cyAoZXNwZWNpYWxseSBzeW1saW5rLy4uKS4KKyAgICBmczo6cGF0aCBjb21iaW5lZCA9IGNsaWVudF9wID09IGZzOjpwYXRoKCIuIikKKyAgICAgICAgPyByb290X3AKKyAgICAgICAgOiAoY2xpZW50X3AuaXNfYWJzb2x1dGUoKSA/IGNsaWVudF9wIDogKHJvb3RfcCAvIGNsaWVudF9wKSk7CiAKICAgICBmczo6cGF0aCBjYW5vbiA9IGZzOjp3ZWFrbHlfY2Fub25pY2FsKGNvbWJpbmVkLCBlYyk7CiAgICAgaWYgKGVjKSByZXR1cm4gc3RkOjpudWxsb3B0OwpkaWZmIC0tZ2l0IGEvdGVzdHMvdW5pdC9wbGF0Zm9ybV9wYXRoX3Rlc3QuY3BwIGIvdGVzdHMvdW5pdC9wbGF0Zm9ybV9wYXRoX3Rlc3QuY3BwCmluZGV4IDFjY2M4Y2EzLi5lYzZkNzNlMCAxMDA2NDQKLS0tIGEvdGVzdHMvdW5pdC9wbGF0Zm9ybV9wYXRoX3Rlc3QuY3BwCisrKyBiL3Rlc3RzL3VuaXQvcGxhdGZvcm1fcGF0aF90ZXN0LmNwcApAQCAtMTM2LDMgKzEzNiwxNiBAQCBURVNUX0NBU0UoInJlc29sdmVfdW5kZXJfYW55X3Jvb3QgYWNjZXB0cyBhIHBhdGggdW5kZXIgYW55IGxpc3RlZCByb290IikgewogICAgIGZzOjpyZW1vdmVfYWxsKHJvb3RCKTsKICAgICBmczo6cmVtb3ZlX2FsbChvdXRzaWRlKTsKIH0KKworVEVTVF9DQVNFKCJyZXNvbHZlX3VuZGVyX3Jvb3Qgc2VsZi1kaXJlY3RvcnkgcmV0YWlucyBjYW5vbmljYWwgY29udGFpbm1lbnQiKSB7CisgICAgbmFtZXNwYWNlIGZzID0gc3RkOjpmaWxlc3lzdGVtOworICAgIGF1dG8gcm9vdCA9IGZzOjp0ZW1wX2RpcmVjdG9yeV9wYXRoKCkgLyAib3BlbmFkcy1zZWxmLXJvb3QiOworICAgIGZzOjpjcmVhdGVfZGlyZWN0b3JpZXMocm9vdCk7CisgICAgYXV0byBleHBlY3RlZCA9IGZzOjp3ZWFrbHlfY2Fub25pY2FsKHJvb3QpLmdlbmVyaWNfc3RyaW5nKCk7CisgICAgYXV0byBzZWxmID0gb3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfdW5kZXJfcm9vdChyb290LnN0cmluZygpLCAiLiIpOworICAgIFJFUVVJUkUoc2VsZi5oYXNfdmFsdWUoKSk7CisgICAgQ0hFQ0soKnNlbGYgPT0gZXhwZWN0ZWQpOworICAgIENIRUNLX0ZBTFNFKG9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX3VuZGVyX3Jvb3Qocm9vdC5zdHJpbmcoKSwgIi4uL291dHNpZGUiKS5oYXNfdmFsdWUoKSk7CisgICAgQ0hFQ0tfRkFMU0Uob3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfdW5kZXJfcm9vdChyb290LnN0cmluZygpLCAocm9vdC5wYXJlbnRfcGF0aCgpIC8gIm91dHNpZGUiKS5zdHJpbmcoKSkuaGFzX3ZhbHVlKCkpOworICAgIGZzOjpyZW1vdmVfYWxsKHJvb3QpOworfQo=')]:\n\
         \ pathlib.Path(n).write_bytes(base64.b64decode(b));subprocess.run(['git','apply','--check',n],check=True);subprocess.run(['git','apply',n],check=True)\n\
         PY51\n"
     - name: Build pinned Windows mtfix51 server and unit tests
@@ -115,14 +115,20 @@ jobs:
         cmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static
         -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON
-        -DOPENADS_VERSION_FORCE=1.09.74-mtfix51-drive-root-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON
+        -DOPENADS_VERSION_FORCE=1.09.74-mtfix51-legacy-root-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON
         -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw"
         -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
 
         cmake --build build-legacy --target openads_serverd openads_unit_tests -j2
 
-        build-legacy/tests/openads_unit_tests.exe --test-case="*connection drive root*,*resolve_under_root*,*root*,*traversal*"
+        mkdir -p "$RUNNER_TEMP/mtfix51-unittmp"
+
+        export TMP="$(cygpath -m "$RUNNER_TEMP/mtfix51-unittmp")" TEMP="$(cygpath -m "$RUNNER_TEMP/mtfix51-unittmp")"
+
+        build-legacy/tests/openads_unit_tests.exe --test-case="*resolve_under_root*,*resolve_under_any_root*,*fs_sandbox*,*fold_absolute*,*resolve_client_path*,*traversal*,*jail*"
         > output/mtfix51-unit-proof.txt
+
+        cat output/mtfix51-unit-proof.txt
 
         '
       shell: bash
@@ -143,101 +149,55 @@ jobs:
         exit 0
 
         '
-    - name: Drive folder control traversal and unchanged behavior Windows proof
+    - name: Legacy root restoration strict parity containment and speed Windows proof
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\n$servers=@(@('44',(Resolve-Path comparison44/mtfix44-static-auth/bin/openads_serverd.exe).Path),@('49',(Resolve-Path\
         \ matrix-kit49/mtfix49-mutual-auth/bin/openads_serverd.exe).Path),@('51',(Resolve-Path build-legacy/tools/serverd/openads_serverd.exe).Path))\n\
-        $rows=@();$data='C:/Temp/mtfix51-data';New-Item -ItemType Directory -Force $data,($data+'/MyDataFolder/Creative.acd'),($data+'/Creative.acd'),($data+'/MyDataFolder/MyDataFolder/Creative.acd')\
-        \ | Out-Null\nforeach($sv in $servers){foreach($legacy in @(0,1)){foreach($scheme in @('tcp','auth')){\n\
-        \ $case=$sv[0]+'-'+$legacy+'-'+$scheme\n $a='--host 127.0.0.1 --port 17268 --data \"'+$data+'\" --auth_user\
-        \ usr:pw';if($legacy -eq 1){$a+=' --legacy_paths'};if($scheme -eq 'auth'){$a+=' --auth_module \"'+(Resolve-Path\
-        \ auth-probe.hrb).Path+'\"'}\n $o='output/mtfix51-'+$case+'.out';$e='output/mtfix51-'+$case+'.err';$p=Start-Process\
+        $rows=@();$speed=@();$data='C:/Temp'\nNew-Item -ItemType Directory -Force $data,($data+'/Creative.acd'),($data+'/MyDataFolder/Creative.acd'),($data+'/MyDataFolder/MyDataFolder/Creative.acd'),'C:/Creative.acd','C:/mtfix51-outside'\
+        \ | Out-Null\ncmd /c 'mklink /J C:\\Temp\\outside-link C:\\mtfix51-outside'\nif($LASTEXITCODE -ne 0){throw\
+        \ 'junction fixture failed'}\ncmd /c 'mklink /J C:\\Temp\\inside-link C:\\Temp\\Creative.acd'\nif($LASTEXITCODE\
+        \ -ne 0){throw 'in-root junction fixture failed'}\nforeach($sv in $servers){foreach($legacy in @(0,1)){foreach($scheme\
+        \ in @('tcp','auth')){\n $case=$sv[0]+'-'+$legacy+'-'+$scheme\n $a='--host 127.0.0.1 --port 6262 --data\
+        \ C:/Temp --auth_user usr:pw';if($legacy -eq 1){$a+=' --legacy_paths'};if($scheme -eq 'auth'){$a+=' --auth_module\
+        \ \"'+(Resolve-Path auth-probe.hrb).Path+'\"'}\n $o='output/mtfix51-'+$case+'.out';$e='output/mtfix51-'+$case+'.err';$p=Start-Process\
         \ $sv[1] -ArgumentList $a -WorkingDirectory (Split-Path $sv[1]) -RedirectStandardOutput $o -RedirectStandardError\
         \ $e -PassThru\n try{\n  $ready=$false;for($i=0;$i -lt 100;$i++){if(Select-String $o -Pattern 'listening\
         \ on' -Quiet){$ready=$true;break};if($p.HasExited){throw ('server exited '+(Get-Content $e -Raw))};Start-Sleep\
-        \ -Milliseconds 200};if(-not $ready){throw 'not listening'}\n  foreach($root in @('C:/','D:/','e:/','C:/MyDataFolder',$data,'C:/../outside','C:/../../outside','../outside','C:/NotMapped','C:','C:/,D:/','')){\n\
-        \   Get-ChildItem $data -Recurse -Filter 00001.dbf | Remove-Item -Force\n   $url=$scheme+'://127.0.0.1:17268/'+$root;$file='C:/MyDataFolder/Creative.acd/00001.dbf';$watch=[Diagnostics.Stopwatch]::StartNew()\n\
-        \   $r=& matrix-client/root-table-matrix.exe $url $file ($data+'/MyDataFolder/Creative.acd/00001.dbf') 2>&1;$rc=$LASTEXITCODE;$watch.Stop();if($rc\
-        \ -ne 0){throw 'client crash'}\n   $text=$r -join \"`n\";$connected=($text -match '(CONNECT|COMPLETE)=0');$actual=@(Get-ChildItem\
-        \ $data -Recurse -Filter 00001.dbf | ForEach-Object {$_.FullName.Replace('\\','/')})\n   if($sv[0] -eq '51'\
-        \ -and $root -match '^[A-Za-z]:/$'){\n    if(-not $connected -or $text -notmatch 'CREATE=0' -or $text -notmatch\
-        \ 'OPEN=0' -or $actual.Count -ne 1 -or $actual[0] -ine ($data+'/MyDataFolder/Creative.acd/00001.dbf')){throw\
-        \ ('drive root failed '+$text+' '+($actual -join ';'))}\n   }\n   if($root.Contains('..') -and $connected){throw\
-        \ 'traversal admitted'}\n   $row=@{version=$sv[0];legacy=$legacy;scheme=$scheme;root=$root;result=$text;actual=$actual;elapsed_ms=$watch.Elapsed.TotalMilliseconds};$rows+=$row\n\
-        \   \"SERVER=$($sv[0]) LEGACY=$legacy SCHEME=$scheme ROOT=$root MS=$($watch.Elapsed.TotalMilliseconds)\"\
-        \ | Tee-Object -FilePath output/mtfix51-results.txt -Append;$r | Tee-Object -FilePath output/mtfix51-results.txt\
-        \ -Append\n  }\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n}}}\n$rows | ConvertTo-Json\
-        \ -Depth 5 | Set-Content output/mtfix51-results.json -Encoding utf8\n# All non-drive inputs must retain\
-        \ 49 behavior and physical paths.\nforeach($row in @($rows | Where-Object {$_.version -eq '51' -and $_.root\
-        \ -notmatch '^[A-Za-z]:/$'})){\n $b=@($rows | Where-Object {$_.version -eq '49' -and $_.legacy -eq $row.legacy\
-        \ -and $_.scheme -eq $row.scheme -and $_.root -eq $row.root})[0]\n if($row.result -ne $b.result -or ($row.actual\
-        \ -join ';') -ne ($b.actual -join ';')){throw ('non-drive behavior changed '+$row.root)}\n}\n'PASS: drive-only\
-        \ alias; non-drive49 parity; traversal refusal' | Tee-Object -FilePath output/mtfix51-results.txt -Append\n\
-        exit 0\n"
-    - name: Package test server only
-      shell: bash
-      run: 'set -euxo pipefail
-
-        mkdir -p delivery/mtfix51-server-only/{bin,docs}
-
-        cp build-legacy/tools/serverd/openads_serverd.exe delivery/mtfix51-server-only/bin/
-
-        cp mtfix51-drive-root.patch output/mtfix51-*txt output/mtfix51-results.json delivery/mtfix51-server-only/docs/
-
-        cat > delivery/mtfix51-server-only/docs/README.txt <<''TXT''
-
-        MTFIX51 TEST SERVER ONLY, WINDOWS X86
-
-        Replace only serverd after stopping the test server and backing it up.
-
-        Keep matched mtfix49 auth worker and mtfix50 client DLL. No worker or client
-
-        binary is shipped. No production deployment, main merge or upstream change.
-
-        Exactly drive-only client connection roots X:/ or X:\ now select first
-
-        --data root in plain TCP and auth. ASCII letters only, case-insensitive.
-
-        C:, C:/folder, empty, lists, extra slashes and traversal are NOT this alias.
-
-        All other inputs retain strict/legacy resolution and all filesystem checks.
-
-        Folder case1 remains a recorded existing mismatch, NOT silently fixed here.
-
-        This patch changes connection-root resolution only, not file remapping.
-
-        Case2 drive root + C:/MyDataFolder/Creative.acd/00001.dbf resolves to
-
-        --data/MyDataFolder/Creative.acd/00001.dbf. Local literal-path semantics and
-
-        multi-root client lookup remain separate unresolved implementation work.
-
-        Extra work per connection: length check, ASCII drive test, and existing jail
-
-        resolution of first root. No extra network round trip or table-operation work.
-
-        Elapsed Windows whole-flow samples are in results JSON; they include auth,
-
-        process scheduling and create/open, not an isolated network benchmark.
-
-        Legacy_paths remains available and tested; non-drive behavior must match49.
-
-        Vouch multi-instance acceptance still gates main merge.
-
-        TXT
-
-        (cd delivery && find mtfix51-server-only -type f -exec sha256sum {} \; > SHA256.txt)
-
-        7z a -tzip mtfix51-server-only-qt492-x86.zip ./delivery/*
-
-        gh release create v1.09.74-mtfix51-drive-root-test mtfix51-server-only-qt492-x86.zip --target "$GITHUB_SHA"
-        --prerelease --title ''OpenADS mtfix51 drive-only root test server'' --notes ''Server-only test candidate.
-        Exact drive-only connection roots select first --data root for TCP/auth. Other path policy unchanged. Read
-        included Windows observations; no main or deployment.''
-
-        '
-      env:
-        GH_TOKEN: ${{ github.token }}
+        \ -Milliseconds 200};if(-not $ready){throw 'not listening'}\n  foreach($root in @('C:/','D:/','C:/Temp','C:/MyDataFolder','C:/../mtfix51-outside','C:/../../mtfix51-outside','../mtfix51-outside','C:/NotMapped','C:','C:/,D:/','')){\n\
+        \   Remove-Item 'C:/Temp/Creative.acd/x.dbf','C:/Creative.acd/x.dbf' -Force -ErrorAction SilentlyContinue\n\
+        \   Get-ChildItem $data -Recurse -Filter 00001.dbf | Remove-Item -Force\n   $url=$scheme+'://127.0.0.1:6262/'+$root;$file='C:\\\
+        Creative.acd\\x.dbf';$watch=[Diagnostics.Stopwatch]::StartNew()\n   $r=& matrix-client/root-table-matrix.exe\
+        \ $url $file 'C:/Temp/Creative.acd/x.dbf' 2>&1;$rc=$LASTEXITCODE;$watch.Stop();if($rc -ne 0){throw 'client\
+        \ crash'}\n   $text=$r -join \"`n\";$connected=($text -match '(CONNECT|COMPLETE)=0');$actual=@(Get-ChildItem\
+        \ $data -Recurse -Filter x.dbf | ForEach-Object {$_.FullName.Replace('\\','/')})\n   if($sv[0] -eq '51'\
+        \ -and $legacy -eq 1 -and $root -in @('C:/','D:/','C:/Temp')){\n    if(-not $connected -or $text -notmatch\
+        \ 'CREATE=0' -or $text -notmatch 'OPEN=0' -or $actual.Count -ne 1 -or $actual[0] -ine 'C:/Temp/Creative.acd/x.dbf'){throw\
+        \ ('legacy root failed '+$text+' '+($actual -join ';'))}\n   }\n   if($sv[0] -eq '51' -and $legacy -eq 0\
+        \ -and $root -eq 'C:/' -and $connected){throw 'strict root relaxed'}\n   if($root.Contains('..') -and $connected){throw\
+        \ 'traversal admitted'}\n   if(Test-Path 'C:/Creative.acd/x.dbf'){throw 'literal outside file created'}\n\
+        \   $row=@{version=$sv[0];legacy=$legacy;scheme=$scheme;root=$root;result=$text;actual=$actual;elapsed_ms=$watch.Elapsed.TotalMilliseconds};$rows+=$row\n\
+        \   \"SERVER=$($sv[0]) LEGACY=$legacy SCHEME=$scheme ROOT=$root\" | Tee-Object -FilePath output/mtfix51-results.txt\
+        \ -Append;$r | Tee-Object -FilePath output/mtfix51-results.txt -Append\n  }\n  if($sv[0] -eq '51'){\n  \
+        \ foreach($leaf in @('C:/outside-link/escape.dbf','C:/inside-link/escape.dbf','C:/outside-link/../Creative.acd/escape.dbf','C:/../mtfix51-outside/escape.dbf')){\n\
+        \    $url=$scheme+'://127.0.0.1:6262/'+$(if($legacy){'C:/'}else{'C:/Temp'})\n    $r=& matrix-client/root-table-matrix.exe\
+        \ $url $leaf 'C:/mtfix51-outside/escape.dbf' 2>&1\n    $t=$r -join \"`n\";if($t -match 'CREATE=0' -or (Test-Path\
+        \ 'C:/mtfix51-outside/escape.dbf')){throw ('jail escape '+$leaf+' '+$t)}\n    \"JAIL $case $leaf`n$t\" |\
+        \ Tee-Object output/mtfix51-jail-proof.txt -Append\n   }\n  }\n  if($sv[0] -in @('49','51') -and $legacy\
+        \ -eq 0 -and $scheme -eq 'tcp'){\n   foreach($i in 1..30){Remove-Item 'C:/Temp/Creative.acd/speed.dbf' -ErrorAction\
+        \ SilentlyContinue;$w=[Diagnostics.Stopwatch]::StartNew();$rr=& matrix-client/root-table-matrix.exe 'tcp://127.0.0.1:6262/C:/Temp'\
+        \ 'C:/Creative.acd/speed.dbf' 'C:/Temp/Creative.acd/speed.dbf' 2>&1;$w.Stop();if(($rr -join ' ') -notmatch\
+        \ 'OPEN=0'){throw 'speed control failed'};$speed+=@{version=$sv[0];iteration=$i;elapsed_ms=$w.Elapsed.TotalMilliseconds}}\n\
+        \  }\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n}}}\n$rows | ConvertTo-Json -Depth 5\
+        \ | Set-Content output/mtfix51-results.json -Encoding utf8\n$speed | ConvertTo-Json -Depth 5 | Set-Content\
+        \ output/mtfix51-speed.json -Encoding utf8\nforeach($row in @($rows | Where-Object {$_.version -eq '51'\
+        \ -and -not ($_.legacy -eq 1 -and $_.root -in @('C:/','D:/','C:/Temp',''))})){\n $b=@($rows | Where-Object\
+        \ {$_.version -eq '49' -and $_.legacy -eq $row.legacy -and $_.scheme -eq $row.scheme -and $_.root -eq $row.root})[0]\n\
+        \ if($row.result -ne $b.result -or ($row.actual -join ';') -ne ($b.actual -join ';')){throw ('unexpected49\
+        \ parity change '+$row.root+' '+$row.result+' vs '+$b.result)}\n $c=@($rows | Where-Object {$_.version -eq\
+        \ '44' -and $_.legacy -eq $row.legacy -and $_.scheme -eq $row.scheme -and $_.root -eq $row.root})[0]\n if($b.result\
+        \ -ne $c.result){throw ('44/49 mismatch '+$row.root)}\n}\n'PASS: legacy self-root restored; strict policy\
+        \ unchanged;49 parity elsewhere; junction and traversal refusal' | Tee-Object -FilePath output/mtfix51-results.txt\
+        \ -Append\nexit 0\n"
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -245,3 +205,10 @@ jobs:
         path: 'output/
 
           build-legacy/tools/serverd/openads_serverd.exe'
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix51-server-candidate
+        path: 'build-legacy/tools/serverd/openads_serverd.exe
+
+          mtfix51-legacy-self-root.patch'

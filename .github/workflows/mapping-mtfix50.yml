@@ -1,0 +1,362 @@
+name: MTFIX50 diagnostic proof recovery and mapping observation
+'on':
+  push:
+    branches:
+    - test/auth-diagnostic-mtfix50
+    paths:
+    - .github/workflows/mapping-mtfix50.yml
+  workflow_dispatch: {}
+permissions:
+  actions: read
+  contents: write
+jobs:
+  proof:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 45752b9ab4b11d7b8efb7cdea1909894006c8a6c
+    - name: Reuse exact successful DLL build and proofs
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: '$ErrorActionPreference=''Stop''
+
+        gh run download 38919695226 --repo bedipritpal/OpenADS --name mtfix50-diagnostic-results --dir output
+
+        if($LASTEXITCODE -ne 0){throw ''build outputs download failed''}
+
+        Invoke-WebRequest ''https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix49-mutual-auth-test/mtfix49-mutual-auth-qt492-x86.zip''
+        -OutFile kit49.zip
+
+        if((Get-FileHash kit49.zip -Algorithm SHA256).Hash.ToLower() -ne ''0dcb6fecc720eb894639e8aeeb2d1c6c2898b1e5b4e9306d9bb5e03f91c0cbf7''){throw
+        ''49 kit hash mismatch''}
+
+        Expand-Archive kit49.zip -DestinationPath matrix-kit49
+
+        New-Item -ItemType Directory -Force kit,srv,mtdata,build-legacy/tools/serverd,matrix-client | Out-Null
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/lib/* kit/
+
+        Copy-Item -Recurse matrix-kit49/mtfix49-mutual-auth/runtime-notices kit/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/*.exe srv/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/openads_auth_worker.exe build-legacy/tools/serverd/
+
+        Copy-Item output/openace32.dll srv/
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile compiler.7z
+
+        & 7z x compiler.7z (''-o''+$env:RUNNER_TEMP+''/winlibs'') -y
+
+        if($LASTEXITCODE -ne 0){throw ''compiler extraction failed''}
+
+        '
+    - name: Prepare same public V1 fixture and proof sources
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n[IO.File]::WriteAllBytes((Join-Path $PWD 'auth-probe.hrb'),[Convert]::FromBase64String('wEhSQgIAAwAAAE9BRFNfQVVUSF9WMQAFAUxFTgAAAlJFUExJQ0FURQAAAgEAAABPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbABAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALACAGoCAABcBAwCSG4H'))\n\
+        [IO.File]::WriteAllBytes((Join-Path $PWD 'fix-hrb-acl.cmd'),[Convert]::FromBase64String('QGVjaG8gb2ZmDQpzZXRsb2NhbCBEaXNhYmxlRGVsYXllZEV4cGFuc2lvbg0KcmVtIFRlc3QgZml4dHVyZSBvbmx5LiBOZXZlciBhcHBseSB0aGlzIGhlbHBlciB0byBhIHByb2R1Y3Rpb24gYXV0aCBtb2R1bGUuDQppZiAiJX4xIj09IiIgZ290byB1c2FnZQ0KaWYgbm90ICIlfjIiPT0iIiBnb3RvIHVzYWdlDQppZiAvSSBub3QgIiV+bngxIj09Im11dHVhbC10ZXN0LW9ubHkuaHJiIiAoDQogIGVjaG8gUmVmdXNlZDogb25seSBtdXR1YWwtdGVzdC1vbmx5LmhyYiBpcyBzdXBwb3J0ZWQuIDE+JjINCiAgZXhpdCAvYiAyDQopDQppZiBub3QgZXhpc3QgIiV+ZjEiICgNCiAgZWNobyBUZXN0IEhSQiBub3QgZm91bmQuIDE+JjINCiAgZXhpdCAvYiAyDQopDQppY2FjbHMgIiV+ZjEiIC9pbmhlcml0YW5jZTpyDQppZiBlcnJvcmxldmVsIDEgZXhpdCAvYiAxDQppY2FjbHMgIiV+ZjEiIC9ncmFudDpyICIlVVNFUkRPTUFJTiVcJVVTRVJOQU1FJTpSIg0KaWYgZXJyb3JsZXZlbCAxIGV4aXQgL2IgMQ0KZWNobyBBQ0wgY29tbWFuZHMgY29tcGxldGVkLiBSZS1ydW4gdGhlIHNlcnZlciBwcm9iZTsgcmVtYWluaW5nIGV4cGxpY2l0IGdyYW50cyBtYXkgc3RpbGwgYmUgcmVqZWN0ZWQuDQpleGl0IC9iIDANCjp1c2FnZQ0KZWNobyBVc2FnZTogZml4LWhyYi1hY2wuY21kICJwYXRoXG11dHVhbC10ZXN0LW9ubHkuaHJiIiAxPiYyDQpleGl0IC9iIDINCg=='))\n\
+        [IO.File]::WriteAllBytes((Join-Path $PWD 'mtfix50-client.patch'),[Convert]::FromBase64String('ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL2NsaWVudC5jcHAgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCmluZGV4IGQ4ZDkyNGYxLi40YWM0YzI4NyAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvY2xpZW50LmNwcAorKysgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCkBAIC01MTcsOCArNTE3LDExIEBAIHV0aWw6OlJlc3VsdDxzdGQ6OnZlY3RvcjxzdGQ6OnVpbnQ4X3Q+PiBSZW1vdGVDb25uZWN0aW9uOjpiZWdpbl9hdXRoKHN0ZDo6dW5pcXVlCiAgICAgdHJhbnNwb3J0Xz1zdGQ6Om1vdmUodCk7YXV0aF9kaXJfPWRpcjsKICAgICBGcmFtZSBmO2Yub3Bjb2RlPU9wY29kZTo6QmVnaW5BdXRoO2YucGF5bG9hZC5hc3NpZ24oZGlyLmJlZ2luKCksZGlyLmVuZCgpKTsKICAgICBhdXRvIHJlcD1yZXF1ZXN0KGYpOwotICAgIGlmKCFyZXAgfHwgcmVwLnZhbHVlKCkub3Bjb2RlIT1PcGNvZGU6OkJlZ2luQXV0aEFjayB8fCByZXAudmFsdWUoKS5wYXlsb2FkLnNpemUoKSE9MzIpewotICAgICAgICB0cmFuc3BvcnRfLT5jbG9zZSgpO3JldHVybiB1dGlsOjpFcnJvcns1MDAwLDAsIkJlZ2luQXV0aCBmYWlsZWQiLCIifTsKKyAgICBpZighcmVwKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gcmVwLmVycm9yKCk7CisgICAgfQorICAgIGlmKHJlcC52YWx1ZSgpLm9wY29kZSE9T3Bjb2RlOjpCZWdpbkF1dGhBY2sgfHwgcmVwLnZhbHVlKCkucGF5bG9hZC5zaXplKCkhPTMyKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gdXRpbDo6RXJyb3J7NTAwMCwwLCJCZWdpbkF1dGggcmVwbHkgaW52YWxpZCIsIiJ9OwogICAgIH0KICAgICBhdXRoX3BlbmRpbmdfPXRydWU7cmV0dXJuIHJlcC52YWx1ZSgpLnBheWxvYWQ7CiB9Cg=='))\n\
+        [IO.File]::WriteAllBytes((Join-Path $PWD 'root-table-matrix.cpp'),[Convert]::FromBase64String('I2luY2x1ZGUgImFjZS5oIgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxzdHJpbmc+CnZvaWQgZXJyb3IoY29uc3QgY2hhciogc3RhZ2UsVU5TSUdORUQzMiByYyl7VU5TSUdORUQzMiBjb2RlPTA7VU5TSUdORUQ4IG1bMTAyNF17fTtVTlNJR05FRDE2IG49MTAyMztBZHNHZXRMYXN0RXJyb3IoJmNvZGUsbSwmbik7c3RkOjpjb3V0PDxzdGFnZTw8Ij0iPDxyYzw8IiBFUlJPUj0iPDxtPDxzdGQ6OmVuZGw7fQppbnQgbWFpbihpbnQgYXJnYyxjaGFyKiogYXJndil7CiBpZihhcmdjIT00KXJldHVybiAyOwogc3RkOjpzdHJpbmcgdXJpPWFyZ3ZbMV0sZmlsZT1hcmd2WzJdO0FEU0hBTkRMRSBoPTAscD0wLHQ9MDtVTlNJR05FRDMyIHJjPTA7CiBpZih1cmkucmZpbmQoImF1dGg6Ly8iLDApPT0wKXtVTlNJR05FRDggY1szMl17fTtyYz1PQWRzQmVnaW5BdXRoKHVyaS5jX3N0cigpLCZwLGMpO2Vycm9yKCJCRUdJTiIscmMpO2lmKHJjKXJldHVybiAwO3N0ZDo6c3RyaW5nIGJsb2IocmVpbnRlcnByZXRfY2FzdDxjaGFyKj4oYyksMzIpO2Jsb2IrPSJ0ZXN0LW9ubHkiO3JjPU9BZHNDb21wbGV0ZUF1dGgocCxyZWludGVycHJldF9jYXN0PGNvbnN0IFVOU0lHTkVEOCo+KGJsb2IuZGF0YSgpKSxibG9iLnNpemUoKSwmaCk7ZXJyb3IoIkNPTVBMRVRFIixyYyk7fQogZWxzZXtyYz1BZHNDb25uZWN0NjAocmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPih1cmkuZGF0YSgpKSxBRFNfUkVNT1RFX1NFUlZFUixyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGNvbnN0X2Nhc3Q8Y2hhcio+KCJ1c3IiKSkscmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPihjb25zdF9jYXN0PGNoYXIqPigicHciKSksMCwmaCk7ZXJyb3IoIkNPTk5FQ1QiLHJjKTt9CiBpZihyYylyZXR1cm4gMDsKIFVOU0lHTkVEOCBkZWZbXT0iSUQsQyw4OyI7CiByYz1BZHNDcmVhdGVUYWJsZShoLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oZmlsZS5kYXRhKCkpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsZGVmLCZ0KTtlcnJvcigiQ1JFQVRFIixyYyk7CiBpZighcmMpe0Fkc0Nsb3NlVGFibGUodCk7dD0wO3JjPUFkc09wZW5UYWJsZShoLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oZmlsZS5kYXRhKCkpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsJnQpO2Vycm9yKCJPUEVOIixyYyk7aWYoIXJjKXtVTlNJR05FRDggZls0MDk2XXt9O1VOU0lHTkVEMTYgbj00MDk1O3JjPUFkc0dldFRhYmxlRmlsZW5hbWUodCxBRFNfRlVMTFBBVEhOQU1FLGYsJm4pO3N0ZDo6Y291dDw8IlRBQkxFX0ZJTEVOQU1FPSI8PGY8PCIgUkM9Ijw8cmM8PHN0ZDo6ZW5kbDtBZHNDbG9zZVRhYmxlKHQpO319CiBBZHNEaXNjb25uZWN0KGgpO3JldHVybiAwOwp9Cg=='))\n\
+        $path=(Resolve-Path auth-probe.hrb).Path\n$acl=New-Object System.Security.AccessControl.FileSecurity;$acl.SetAccessRuleProtection($true,$false)\n\
+        $me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User\nforeach($sid in @($me.Value,'S-1-5-18','S-1-5-32-544')){\n\
+        \ $id=New-Object System.Security.Principal.SecurityIdentifier($sid)\n $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'Read','Allow');$acl.AddAccessRule($rule)\n\
+        }\nSet-Acl $path $acl\nCopy-Item auth-probe.hrb matrix-test-only.hrb\nCopy-Item output/openace32.dll matrix-client/\n\
+        & output/local_create.exe (Resolve-Path mtdata).Path\nif($LASTEXITCODE -ne 0){throw 'table fixture setup\
+        \ failed'}\n"
+    - name: Compile diagnostic import client
+      shell: bash
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ncat >\
+        \ output/auth-diagnostic.cpp <<'CPP'\n#include \"openads/ace.h\"\n#include <windows.h>\n#include <iostream>\n\
+        #include <string>\nint main(int n,char** v){\n if(n!=4)return 2;\n HMODULE m=GetModuleHandleA(\"openace32.dll\"\
+        );char path[32768]{};\n if(!m||!GetModuleFileNameA(m,path,sizeof(path)))return 3;\n std::cout<<\"LOADED-DLL=\"\
+        <<path<<std::endl;\n ADSHANDLE p=0;UNSIGNED8 c[32]{};auto rc=OAdsBeginAuth(v[1],&p,c);\n UNSIGNED32 code=0;UNSIGNED8\
+        \ msg[1024]{};UNSIGNED16 len=1023;\n if(rc)AdsGetLastError(&code,msg,&len);\n std::cout<<\"BEGIN=\"<<rc<<\"\
+        \ MESSAGE=\"<<msg<<std::endl;\n if(rc!=static_cast<UNSIGNED32>(std::stoul(v[2])))return 4;\n if(std::string(v[3])!=\"\
+        PASS\" && std::string(reinterpret_cast<char*>(msg)).find(v[3])==std::string::npos)return 5;\n if(p)OAdsCancelAuth(p);return\
+        \ 0;\n}\nCPP\ng++ -static -static-libgcc -static-libstdc++ -Iinclude output/auth-diagnostic.cpp kit/libopenace32.dll.a\
+        \ -o output/auth-diagnostic.exe\nobjdump -p output/auth-diagnostic.exe > output/diagnostic-client-pe.txt\n\
+        grep -qi 'DLL Name: openace32.dll' output/diagnostic-client-pe.txt\n\ng++ -static -static-libgcc -static-libstdc++\
+        \ -Imatrix-kit49/mtfix49-mutual-auth/include root-table-matrix.cpp kit/libopenace32.dll.a -o matrix-client/root-table-matrix.exe\n"
+    - name: Windows V1 BeginAuth path/error parity and test ACL helper
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n\
+        $mod=(Resolve-Path auth-probe.hrb).Path\n$probe=(Resolve-Path output/auth-diagnostic.exe).Path\n$proof=Join-Path\
+        \ $PWD 'output/beginauth-diagnostic-proof.txt'\nfunction Run-Probe($url,$code,$message){\n $r=& $probe $url\
+        \ $code $message 2>&1\n $r | Tee-Object -FilePath $proof -Append\n if($LASTEXITCODE -ne 0){throw \"diagnostic\
+        \ client failed: $url\"}\n}\nforeach($legacy in @(0,1)){\n $a='--host 127.0.0.1 --port 17266 --data \"'+$data+'\"\
+        \ --auth_user usr:pw --auth_module \"'+$mod+'\"'\n if($legacy -eq 1){$a+=' --legacy_paths'}\n $p=Start-Process\
+        \ $srv -ArgumentList $a -RedirectStandardOutput \"output/diag-server-$legacy.out\" -RedirectStandardError\
+        \ \"output/diag-server-$legacy.err\" -PassThru\n try{\n  $ready=$false\n  for($i=0;$i -lt 100;$i++){\n \
+        \  if(Select-String \"output/diag-server-$legacy.out\" -Pattern 'listening on' -Quiet){$ready=$true;break}\n\
+        \   if($p.HasExited){throw 'diagnostic server exited'}\n   Start-Sleep -Milliseconds 200\n  }\n  if(-not\
+        \ $ready){throw 'diagnostic server not ready'}\n  Run-Probe ('auth://127.0.0.1:17266/'+$data.Replace('\\\
+        ','/')) 0 PASS\n  if($legacy -eq 0){\n   Run-Probe 'auth://127.0.0.1:17266/C:/' 7077 'Auth path denied'\n\
+        \   Run-Probe 'auth://127.0.0.1:17266/' 7077 'Auth path denied'\n  }else{\n   Run-Probe 'auth://127.0.0.1:17266/C:/'\
+        \ 0 PASS\n   Run-Probe 'auth://127.0.0.1:17266/' 0 PASS\n  }\n  Run-Probe 'tcp://127.0.0.1:17266/C:/' 7077\
+        \ 'auth:// URL required'\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n}\n# Fresh-copy\
+        \ public V1 fixture: inherited grants must be fixed with the helper.\n$aclDir=Join-Path $PWD 'output/acl\
+        \ helper test';New-Item -ItemType Directory -Force $aclDir | Out-Null\n$test=Join-Path $aclDir 'mutual-test-only.hrb';Copy-Item\
+        \ $mod $test\n& icacls $test /grant '*S-1-1-0:R' | Out-Null\nif($LASTEXITCODE -ne 0){throw 'unsafe ACL fixture\
+        \ failed'}\n# Remove explicit Everyone, then inherit a broad grant from parent, like ZIP extraction.\n&\
+        \ icacls $test /remove:g '*S-1-1-0' | Out-Null\n& icacls $aclDir /grant '*S-1-1-0:(OI)(CI)R' | Out-Null\n\
+        & icacls $test /reset | Out-Null\n$w=(Resolve-Path build-legacy/tools/serverd/openads_auth_worker.exe).Path\n\
+        function Worker-Probe($file){\n $si=New-Object System.Diagnostics.ProcessStartInfo\n $si.FileName=$w;$si.Arguments='\"\
+        '+$file+'\"';$si.UseShellExecute=$false\n $si.RedirectStandardInput=$true;$si.RedirectStandardOutput=$true;$si.RedirectStandardError=$true\n\
+        \ $q=New-Object System.Diagnostics.Process;$q.StartInfo=$si;[void]$q.Start()\n $q.StandardInput.Write('P');$q.StandardInput.Close()\n\
+        \ $o=$q.StandardOutput.ReadToEnd();$e=$q.StandardError.ReadToEnd();$q.WaitForExit()\n return @{code=$q.ExitCode;out=$o;err=$e}\n\
+        }\n$r=Worker-Probe $test;if($r.code -eq 0){throw 'unsafe inherited ACL was not refused'}\n& cmd /c ('fix-hrb-acl.cmd\
+        \ \"'+$test+'\"')\nif($LASTEXITCODE -ne 0){throw 'ACL helper failed'}\n$r=Worker-Probe $test;if($r.code\
+        \ -ne 0 -or $r.out -ne 'READY'){throw ('fixed ACL probe failed '+$r.err)}\n$real=Join-Path $aclDir 'vouch_auth.hrb';Copy-Item\
+        \ $mod $real\n& cmd /c ('fix-hrb-acl.cmd \"'+$real+'\"')\nif($LASTEXITCODE -ne 2){throw 'helper did not\
+        \ refuse real-HRB name'}\n'Windows diagnostic path/error matrix and test-only ACL helper PASS' | Tee-Object\
+        \ -FilePath $proof -Append\n"
+    - name: Compare native mtfix44 and mtfix49 V1 both path modes
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$proof=Join-Path $PWD 'output/mtfix44-vs49-v1-proof.txt'\n\
+        $mod=(Resolve-Path auth-probe.hrb).Path\n$probe=(Resolve-Path output/auth-diagnostic.exe).Path\n$originalDll=(Resolve-Path\
+        \ output/openace32.dll).Path\nInvoke-WebRequest 'https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix44-static-auth-test/mtfix44-static-auth-qt492-x86.zip'\
+        \ -OutFile mtfix44.zip\nif((Get-FileHash mtfix44.zip -Algorithm SHA256).Hash.ToLower() -ne 'da56bd37dcf51997f339c4cff421fbcc3c2364b0f18a42f751bc12741cd1eb7e'){throw\
+        \ '44 archive hash mismatch'}\nExpand-Archive mtfix44.zip -DestinationPath comparison44\nforeach($version\
+        \ in @(44,49)){\n $srv=if($version -eq 44){(Resolve-Path comparison44/mtfix44-static-auth/bin/openads_serverd.exe).Path}else{(Resolve-Path\
+        \ srv/openads_serverd.exe).Path}\n foreach($legacy in @(0,1)){\n  $a='--host 127.0.0.1 --port 17267 --data\
+        \ \"'+$data+'\" --auth_user usr:pw --auth_module \"'+$mod+'\"'\n  if($legacy -eq 1){$a+=' --legacy_paths'}\n\
+        \  $o=\"output/comparison-$version-$legacy.out\";$e=\"output/comparison-$version-$legacy.err\"\n  $p=Start-Process\
+        \ $srv -ArgumentList $a -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput $o -RedirectStandardError\
+        \ $e -PassThru\n  try{\n   $ready=$false\n   for($i=0;$i -lt 100;$i++){\n    if(Select-String $o -Pattern\
+        \ 'listening on' -Quiet){$ready=$true;break}\n    if($p.HasExited){throw \"comparison server $version exited\"\
+        }\n    Start-Sleep -Milliseconds 200\n   }\n   if(-not $ready){throw 'comparison server not ready'}\n  \
+        \ \"SERVER=$version LEGACY=$legacy\" | Tee-Object -FilePath $proof -Append\n   $url='auth://127.0.0.1:17267/'+$data.Replace('\\\
+        ','/')\n   & $probe $url 0 PASS | Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw\
+        \ 'exact-root BeginAuth parity failed'}\n   # Same Harbour DLL-import V1 flow, complete auth, open/close\
+        \ table.\n   & output/auth_static.exe $url | Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne\
+        \ 0){throw 'V1 CompleteAuth/RDD comparison failed'}\n   $expected=if($legacy -eq 0){7077}else{0}\n   $message=if($legacy\
+        \ -eq 0){'Auth path denied'}else{'PASS'}\n   & $probe 'auth://127.0.0.1:17267/C:/' $expected $message |\
+        \ Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw 'drive-root BeginAuth parity failed'}\n\
+        \  }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n }\n}\n'Native mtfix44 vs mtfix49 V1 BeginAuth/CompleteAuth/RDD\
+        \ parity PASS' | Tee-Object -FilePath $proof -Append\n"
+    - name: Observe client mapping and server mapping corrected examples
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\nCopy-Item -Recurse comparison44 matrix-kit44\n$rows=@();$log=Join-Path\
+        \ $PWD 'matrix-output/root-table-matrix.txt'\nNew-Item -ItemType Directory -Force matrix-output | Out-Null\n\
+        $base='C:/Temp/mtfix50-mapping-matrix'\nforeach($version in @(44,49)){\n foreach($legacy in @(0,1)){\n \
+        \ foreach($scheme in @('tcp','auth')){\n   foreach($clientMapping in @('C:/','D:/','E:/','F:/','C:/MyDataFolder','C:/,E:/MyDataFolder','C:/;E:/MyDataFolder')){\n\
+        \    $case=\"v$version-l$legacy-$scheme-\"+$clientMapping.Replace(':','').Replace('/','_').Replace(';','_semi_').Replace(',','_comma_')\n\
+        \    $serverMapping=$base+'/'+$case\n    New-Item -ItemType Directory -Force ($serverMapping+'/Creative.acd'),($serverMapping+'/MyDataFolder/Creative.acd')\
+        \ | Out-Null\n    # Prepare possible current remount destinations too; do not change resolution rules.\n\
+        \    New-Item -ItemType Directory -Force ($serverMapping+'/MyDataFolder/MyDataFolder/Creative.acd') | Out-Null\n\
+        \    $srv=(Resolve-Path \"matrix-kit$version/mtfix$version-$(if($version -eq 44){'static-auth'}else{'mutual-auth'})/bin/openads_serverd.exe\"\
+        ).Path\n    $a='--host 127.0.0.1 --port 17268 --data \"'+$serverMapping+'\" --auth_user usr:pw'\n    if($scheme\
+        \ -eq 'auth'){$a+=' --auth_module \"'+(Resolve-Path matrix-test-only.hrb).Path+'\"'}\n    if($legacy -eq\
+        \ 1){$a+=' --legacy_paths'}\n    $o=\"matrix-output/$case-server.out\";$e=\"matrix-output/$case-server.err\"\
+        \n    $p=Start-Process $srv -ArgumentList $a -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput\
+        \ $o -RedirectStandardError $e -PassThru\n    try{\n     $ready=$false\n     for($i=0;$i -lt 100;$i++){\n\
+        \      if(Select-String $o -Pattern 'listening on' -Quiet){$ready=$true;break}\n      if($p.HasExited){throw\
+        \ \"$case server exited\"}\n      Start-Sleep -Milliseconds 200\n     }\n     if(-not $ready){throw \"$case\
+        \ server not ready\"}\n     $uri=$scheme+'://127.0.0.1:17268/'+$clientMapping\n     # Same client file path\
+        \ in both corrected folder/root examples.\n     $file=if($clientMapping.Contains(',') -or $clientMapping.Contains(';')){'E:/MyDataFolder/Creative.acd/00001.dbf'}elseif($clientMapping\
+        \ -eq 'C:/MyDataFolder'){'C:/MyDataFolder/Creative.acd/00001.dbf'}else{$clientMapping+'MyDataFolder/Creative.acd/00001.dbf'}\n\
+        \     $expected=if($clientMapping.Contains(',') -or $clientMapping.Contains(';')){$serverMapping+'/Creative.acd/00001.dbf'}elseif($clientMapping\
+        \ -eq 'C:/MyDataFolder'){$serverMapping+'/Creative.acd/00001.dbf'}else{$serverMapping+'/MyDataFolder/Creative.acd/00001.dbf'}\n\
+        \     \"CASE=$case CLIENT MAPPING=$clientMapping SERVER MAPPING=$serverMapping FILE=$file EXPECTED=$expected\"\
+        \ | Tee-Object -FilePath $log -Append\n     $result=& matrix-client/root-table-matrix.exe $uri $file $expected\
+        \ 2>&1\n     $exit=$LASTEXITCODE;$result | Tee-Object -FilePath $log -Append\n     if($exit -ne 0){throw\
+        \ 'matrix client crashed'}\n     $actual=@(Get-ChildItem -Recurse $serverMapping -Filter 00001.dbf | ForEach-Object\
+        \ {$_.FullName.Replace('\\','/')})\n     $match=($actual.Count -eq 1 -and $actual[0] -ieq $expected)\n \
+        \    \"ACTUAL=$($actual -join ';') INTENDED_MATCH=$match\" | Tee-Object -FilePath $log -Append\n     $rows+=@{server_version=$version;legacy_paths=$legacy;transport=$scheme;client_mapping=$clientMapping;server_mapping=$serverMapping;requested_file=$file;expected=$expected;actual=$actual;intended_match=$match;client_result=($result\
+        \ -join \"`n\")}\n    }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n   }\n  }\n }\n}\n$rows\
+        \ | ConvertTo-Json -Depth 6 | Set-Content matrix-output/root-table-matrix.json -Encoding utf8\n'Completed\
+        \ all existing-policy observations. Mismatches are reported, not fixed or waived.' | Tee-Object -FilePath\
+        \ $log -Append\n"
+    - name: Package diagnostic DLL only
+      shell: bash
+      run: 'set -euxo pipefail
+
+        mkdir -p delivery/mtfix50-auth-diagnostic/{bin,docs,lib}
+
+        cp output/openace32.dll delivery/mtfix50-auth-diagnostic/bin/
+
+        cp fix-hrb-acl.cmd delivery/mtfix50-auth-diagnostic/bin/
+
+        cp output/auth-diagnostic.exe delivery/mtfix50-auth-diagnostic/bin/
+
+        cp kit/libopenace32.dll.a delivery/mtfix50-auth-diagnostic/lib/
+
+        cp mtfix50-client.patch delivery/mtfix50-auth-diagnostic/docs/source.patch
+
+        cp matrix-output/root-table-matrix.txt matrix-output/root-table-matrix.json delivery/mtfix50-auth-diagnostic/docs/
+
+        cp output/mtfix44-vs49-v1-proof.txt output/beginauth-diagnostic-proof.txt output/diagnostic-client-pe.txt
+        output/dll-pe.txt output/static-auth-stdout.txt output/hrb-crypto-proof.txt output/hrb-resource-proof.txt
+        output/mutual-native-proof.txt delivery/mtfix50-auth-diagnostic/docs/
+
+        cp -r kit/runtime-notices delivery/mtfix50-auth-diagnostic/
+
+        cat > delivery/mtfix50-auth-diagnostic/docs/README.txt <<''TXT''
+
+        MTFIX50 DIAGNOSTIC CLIENT DLL ONLY - WINDOWS X86
+
+        Diagnostic delta against mtfix49: return the real BeginAuth server/transport
+
+        error instead of masking it as 5000 BeginAuth failed. No wire-format, path
+
+        policy, cryptography or server change. Main and Lightsail untouched.
+
+
+        Close Vouch. Back up its current openace32.dll, then put bin/openace32.dll
+
+        beside Vouch''s EXE. Keep the matched mtfix49 RDD and headers. This is a DLL
+
+        replacement, not a production release; no server/worker is shipped here.
+
+        lib/libopenace32.dll.a is supplied if relinking is needed; -lopenace32 selects
+
+        an archive but the archive decides which DLL name Windows imports.
+
+        This archive imports openace32.dll, not libopenace32.dll. Do not rename one
+
+        DLL to impersonate another. An older Vouch EXE may still import a different
+
+        name. Inspect its import table or the actual loaded module before guessing.
+
+
+        bin/auth-diagnostic.exe URL EXPECTED_CODE EXPECTED_MESSAGE_SUBSTRING
+
+        prints its own loaded openace32.dll full path and BeginAuth result.
+
+        For a valid BeginAuth use expected code 0 and message PASS; it then cancels.
+
+        This probe does NOT authenticate or print credentials. Its module path proves
+
+        only its own loaded DLL, not which DLL a separate Vouch process loads.
+
+        Example (not a promised success):
+
+        auth-diagnostic.exe auth://127.0.0.1:6262/C:/ 0 PASS
+
+        If it fails, copy the BEGIN/MESSAGE line. Do not change data roots based on
+
+        the generic old 5000 message. Current server log remains authoritative.
+
+
+        fix-hrb-acl.cmd accepts ONLY mutual-test-only.hrb. Run it as the server user
+
+        on a public test fixture after extraction. It does not change directories or
+
+        the real vouch_auth.hrb. Existing explicit unsafe grants may still fail the
+
+        strict worker check. No ACL bypass switch is included.
+
+
+        Native Windows proofs and same-flow mtfix44/49 comparison are included.
+
+        Both default strict and optional legacy-path modes are tested; neither is changed. This focused diagnostic
+        kit does not
+
+        rerun the full unit-baseline comparison from mtfix49 (1733 baseline cases,
+
+        1738 candidate cases, same 213 failed names, zero new failed names). It runs
+
+        focused V1/V2, crypto/containment and diagnostic path/error proofs instead.
+
+        Hostile-HRB containment remains bounded tested protection, not a sandbox or
+
+        an absolute never-crash guarantee. After-auth Hello still adds one RTT:
+
+        two becomes three. Vouch multi-instance acceptance still gates main merge.
+
+        TXT
+
+        cat > delivery/mtfix50-auth-diagnostic/docs/DEVELOPER-PATH-NOTE.txt <<''DEV''
+
+        LEGACY_PATHS: EXISTING BEHAVIOR, NOT CHANGED IN MTFIX50
+
+        Absent/commented means false. INI legacy_paths=1 or CLI --legacy_paths enables.
+
+        CLIENT MAPPING is the connection root in the URL. SERVER MAPPING is --data.
+
+        Intended folder example: C:/MyDataFolder + C:/MyDataFolder/Creative.acd/00001.dbf
+
+        should land at --data/Creative.acd/00001.dbf. Intended drive-only example:
+
+        C:/ + the same file should land at --data/MyDataFolder/Creative.acd/00001.dbf.
+
+        These are intended rules; see root-table-matrix for actual results/mismatches.
+
+        Multi-root URL observation: tested comma and semicolon spellings separately.
+
+        Current URL parser has no list separator or mapping hash: it sends the entire
+
+        post-host path as one string. Semicolon splitting belongs to server --data,
+
+        not the client URL. Observed acceptance is not proof of per-root matching.
+
+        Folder connection roots remain valid; no folder-refusal policy was added.
+
+        Both TCP Connect and V1 BeginAuth parse the URL identically: remove one slash
+
+        after host:port. Ending :6262/ sends empty; /C:/ sends C:/; // sends /.
+
+        Connection root with strict mode: absolute must be within a configured data
+
+        root, relative joins under it; empty is rejected. On Windows data=C:/Temp,
+
+        C:/ is outside the root. With legacy mode C:/ and empty select first root;
+
+        C:/Creative.acd maps under C:/Temp/Creative.acd; D:/x maps to C:/Temp/x.
+
+        Root-prefix matching is case-insensitive and strips drive letters in legacy
+
+        mode; parent escapes and file/link access protections still apply.
+
+
+        RDD table names are a SEPARATE later layer. Even in strict remote mode,
+
+        Connection::resolve_table_file folds out-of-root drive-rooted names under the
+
+        connection directory, while preserving already-in-root server-owned paths.
+
+        Thus observing C:/Creative.acd/file.dbf stored under C:/Temp does NOT alone
+
+        prove the connection URL C:/ passed its separate root gate. In legacy mode
+
+        client-absolute table names always remount, even if a same-named host file
+
+        exists. Do not infer connection-root policy from a successful USE/DbCreate.
+
+
+        No default or remapping rule changes here. The included native Windows
+
+        comparison reports actual mtfix44 and mtfix49 results for both modes with the
+
+        same synthetic V1 HRB; it does not certify the user''s private HRB or DLL load.
+
+        DEV
+
+        (cd delivery && find mtfix50-auth-diagnostic -type f -exec sha256sum {} \; > SHA256.txt)
+
+        7z a -tzip mtfix50-auth-diagnostic-qt492-x86.zip ./delivery/*
+
+        '
+    - name: Publish diagnostic test ZIP after proof
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euxo pipefail
+
+        gh release create v1.09.74-mtfix50-auth-diagnostic-test mtfix50-auth-diagnostic-qt492-x86.zip --target "$GITHUB_SHA"
+        --prerelease --title ''OpenADS mtfix50 BeginAuth diagnostic DLL'' --notes ''Diagnostic client DLL only:
+        real BeginAuth errors, native Windows path/error proof, public-test-HRB ACL helper. Same mtfix49 protocol
+        and strict defaults. No server binary or deployment; not a full new regression certification.''
+
+        '
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix50-diagnostic-final-results
+        path: 'output/
+
+          matrix-output/'

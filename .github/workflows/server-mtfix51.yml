@@ -1,4 +1,4 @@
-name: MTFIX51 legacy proof with explicit test fixture directory
+name: MTFIX51 legacy restoration clean matrix proof
 'on':
   push:
     branches:
@@ -149,11 +149,11 @@ jobs:
         \ $e -PassThru\n try{\n  $ready=$false;for($i=0;$i -lt 100;$i++){if(Select-String $o -Pattern 'listening\
         \ on' -Quiet){$ready=$true;break};if($p.HasExited){throw ('server exited '+(Get-Content $e -Raw))};Start-Sleep\
         \ -Milliseconds 200};if(-not $ready){throw 'not listening'}\n  foreach($root in @('C:/','D:/','C:/Temp','C:/MyDataFolder','C:/../mtfix51-outside','C:/../../mtfix51-outside','../mtfix51-outside','C:/NotMapped','C:','C:/,D:/','')){\n\
-        \   Remove-Item 'C:/Temp/Creative.acd/x.dbf','C:/Creative.acd/x.dbf' -Force -ErrorAction SilentlyContinue\n\
-        \   Get-ChildItem $data -Recurse -Filter 00001.dbf | Remove-Item -Force\n   $url=$scheme+'://127.0.0.1:6262/'+$root;$file='C:\\\
-        Creative.acd\\x.dbf';$watch=[Diagnostics.Stopwatch]::StartNew()\n   $r=& matrix-client/root-table-matrix.exe\
-        \ $url $file 'C:/Temp/Creative.acd/x.dbf' 2>&1;$rc=$LASTEXITCODE;$watch.Stop();if($rc -ne 0){throw 'client\
-        \ crash'}\n   $text=$r -join \"`n\";$connected=($text -match '(CONNECT|COMPLETE)=0');$actual=@(Get-ChildItem\
+        \   Remove-Item 'C:/Temp/Creative.acd/x.dbf','C:/Temp/MyDataFolder/Creative.acd/x.dbf','C:/Temp/MyDataFolder/MyDataFolder/Creative.acd/x.dbf','C:/Creative.acd/x.dbf'\
+        \ -Force -ErrorAction SilentlyContinue\n   Get-ChildItem $data -Recurse -Filter 00001.dbf | Remove-Item\
+        \ -Force\n   $url=$scheme+'://127.0.0.1:6262/'+$root;$file='C:\\Creative.acd\\x.dbf';$watch=[Diagnostics.Stopwatch]::StartNew()\n\
+        \   $r=& matrix-client/root-table-matrix.exe $url $file 'C:/Temp/Creative.acd/x.dbf' 2>&1;$rc=$LASTEXITCODE;$watch.Stop();if($rc\
+        \ -ne 0){throw 'client crash'}\n   $text=$r -join \"`n\";$connected=($text -match '(CONNECT|COMPLETE)=0');$actual=@(Get-ChildItem\
         \ $data -Recurse -Filter x.dbf | ForEach-Object {$_.FullName.Replace('\\','/')})\n   if($sv[0] -eq '51'\
         \ -and $legacy -eq 1 -and $root -in @('C:/','D:/','C:/Temp')){\n    if(-not $connected -or $text -notmatch\
         \ 'CREATE=0' -or $text -notmatch 'OPEN=0' -or $actual.Count -ne 1 -or $actual[0] -ine 'C:/Temp/Creative.acd/x.dbf'){throw\

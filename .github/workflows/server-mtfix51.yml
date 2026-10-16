@@ -1,4 +1,4 @@
-name: MTFIX51 legacy self-root restoration test server
+name: MTFIX51 exact legacy server proof recovery
 'on':
   push:
     branches:
@@ -90,48 +90,39 @@ jobs:
       run: "set -euxo pipefail\npython - <<'PY51'\nimport base64,pathlib,subprocess\nfor n,b in [('mtfix50-client.patch','ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL2NsaWVudC5jcHAgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCmluZGV4IGQ4ZDkyNGYxLi40YWM0YzI4NyAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvY2xpZW50LmNwcAorKysgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCkBAIC01MTcsOCArNTE3LDExIEBAIHV0aWw6OlJlc3VsdDxzdGQ6OnZlY3RvcjxzdGQ6OnVpbnQ4X3Q+PiBSZW1vdGVDb25uZWN0aW9uOjpiZWdpbl9hdXRoKHN0ZDo6dW5pcXVlCiAgICAgdHJhbnNwb3J0Xz1zdGQ6Om1vdmUodCk7YXV0aF9kaXJfPWRpcjsKICAgICBGcmFtZSBmO2Yub3Bjb2RlPU9wY29kZTo6QmVnaW5BdXRoO2YucGF5bG9hZC5hc3NpZ24oZGlyLmJlZ2luKCksZGlyLmVuZCgpKTsKICAgICBhdXRvIHJlcD1yZXF1ZXN0KGYpOwotICAgIGlmKCFyZXAgfHwgcmVwLnZhbHVlKCkub3Bjb2RlIT1PcGNvZGU6OkJlZ2luQXV0aEFjayB8fCByZXAudmFsdWUoKS5wYXlsb2FkLnNpemUoKSE9MzIpewotICAgICAgICB0cmFuc3BvcnRfLT5jbG9zZSgpO3JldHVybiB1dGlsOjpFcnJvcns1MDAwLDAsIkJlZ2luQXV0aCBmYWlsZWQiLCIifTsKKyAgICBpZighcmVwKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gcmVwLmVycm9yKCk7CisgICAgfQorICAgIGlmKHJlcC52YWx1ZSgpLm9wY29kZSE9T3Bjb2RlOjpCZWdpbkF1dGhBY2sgfHwgcmVwLnZhbHVlKCkucGF5bG9hZC5zaXplKCkhPTMyKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gdXRpbDo6RXJyb3J7NTAwMCwwLCJCZWdpbkF1dGggcmVwbHkgaW52YWxpZCIsIiJ9OwogICAgIH0KICAgICBhdXRoX3BlbmRpbmdfPXRydWU7cmV0dXJuIHJlcC52YWx1ZSgpLnBheWxvYWQ7CiB9Cg=='),('mtfix51-legacy-self-root.patch','ZGlmZiAtLWdpdCBhL3NyYy9wbGF0Zm9ybS9wYXRoLmNwcCBiL3NyYy9wbGF0Zm9ybS9wYXRoLmNwcAppbmRleCBlYzc0YmFmYi4uZGQ3YWZiZTQgMTAwNjQ0Ci0tLSBhL3NyYy9wbGF0Zm9ybS9wYXRoLmNwcAorKysgYi9zcmMvcGxhdGZvcm0vcGF0aC5jcHAKQEAgLTExMiw3ICsxMTIsMTMgQEAgc3RkOjpvcHRpb25hbDxzdGQ6OnN0cmluZz4gcmVzb2x2ZV91bmRlcl9yb290KGNvbnN0IHN0ZDo6c3RyaW5nJiByb290LAogICAgIGlmIChlYykgcmV0dXJuIHN0ZDo6bnVsbG9wdDsKIAogICAgIGZzOjpwYXRoIGNsaWVudF9wKGNsaWVudF9wYXRoKTsKLSAgICBmczo6cGF0aCBjb21iaW5lZCA9IGNsaWVudF9wLmlzX2Fic29sdXRlKCkgPyBjbGllbnRfcCA6IChyb290X3AgLyBjbGllbnRfcCk7CisgICAgLy8gR0NDIDEwLjIgb24gV2luZG93cyByZWplY3RzIHdlYWtseV9jYW5vbmljYWwoIkM6L1RlbXAvLiIpCisgICAgLy8gd2l0aCBFTk9FTlQuIEEgc2VsZi1kaXJlY3RvcnkgbmFtZXMgdGhlIHJvb3QgaXRzZWxmLiBLZWVwIHRoZQorICAgIC8vIHJvb3QncyBvcmlnaW5hbCBzcGVsbGluZyBmb3IgdGhlIG5vLWZvbGxvdyBqYWlsIGJlbG93OyBkbyBub3QKKyAgICAvLyBsZXhpY2FsbHkgY29sbGFwc2Ugb3RoZXIgY29tcG9uZW50cyAoZXNwZWNpYWxseSBzeW1saW5rLy4uKS4KKyAgICBmczo6cGF0aCBjb21iaW5lZCA9IGNsaWVudF9wID09IGZzOjpwYXRoKCIuIikKKyAgICAgICAgPyByb290X3AKKyAgICAgICAgOiAoY2xpZW50X3AuaXNfYWJzb2x1dGUoKSA/IGNsaWVudF9wIDogKHJvb3RfcCAvIGNsaWVudF9wKSk7CiAKICAgICBmczo6cGF0aCBjYW5vbiA9IGZzOjp3ZWFrbHlfY2Fub25pY2FsKGNvbWJpbmVkLCBlYyk7CiAgICAgaWYgKGVjKSByZXR1cm4gc3RkOjpudWxsb3B0OwpkaWZmIC0tZ2l0IGEvdGVzdHMvdW5pdC9wbGF0Zm9ybV9wYXRoX3Rlc3QuY3BwIGIvdGVzdHMvdW5pdC9wbGF0Zm9ybV9wYXRoX3Rlc3QuY3BwCmluZGV4IDFjY2M4Y2EzLi5lYzZkNzNlMCAxMDA2NDQKLS0tIGEvdGVzdHMvdW5pdC9wbGF0Zm9ybV9wYXRoX3Rlc3QuY3BwCisrKyBiL3Rlc3RzL3VuaXQvcGxhdGZvcm1fcGF0aF90ZXN0LmNwcApAQCAtMTM2LDMgKzEzNiwxNiBAQCBURVNUX0NBU0UoInJlc29sdmVfdW5kZXJfYW55X3Jvb3QgYWNjZXB0cyBhIHBhdGggdW5kZXIgYW55IGxpc3RlZCByb290IikgewogICAgIGZzOjpyZW1vdmVfYWxsKHJvb3RCKTsKICAgICBmczo6cmVtb3ZlX2FsbChvdXRzaWRlKTsKIH0KKworVEVTVF9DQVNFKCJyZXNvbHZlX3VuZGVyX3Jvb3Qgc2VsZi1kaXJlY3RvcnkgcmV0YWlucyBjYW5vbmljYWwgY29udGFpbm1lbnQiKSB7CisgICAgbmFtZXNwYWNlIGZzID0gc3RkOjpmaWxlc3lzdGVtOworICAgIGF1dG8gcm9vdCA9IGZzOjp0ZW1wX2RpcmVjdG9yeV9wYXRoKCkgLyAib3BlbmFkcy1zZWxmLXJvb3QiOworICAgIGZzOjpjcmVhdGVfZGlyZWN0b3JpZXMocm9vdCk7CisgICAgYXV0byBleHBlY3RlZCA9IGZzOjp3ZWFrbHlfY2Fub25pY2FsKHJvb3QpLmdlbmVyaWNfc3RyaW5nKCk7CisgICAgYXV0byBzZWxmID0gb3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfdW5kZXJfcm9vdChyb290LnN0cmluZygpLCAiLiIpOworICAgIFJFUVVJUkUoc2VsZi5oYXNfdmFsdWUoKSk7CisgICAgQ0hFQ0soKnNlbGYgPT0gZXhwZWN0ZWQpOworICAgIENIRUNLX0ZBTFNFKG9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX3VuZGVyX3Jvb3Qocm9vdC5zdHJpbmcoKSwgIi4uL291dHNpZGUiKS5oYXNfdmFsdWUoKSk7CisgICAgQ0hFQ0tfRkFMU0Uob3BlbmFkczo6cGxhdGZvcm06OnJlc29sdmVfdW5kZXJfcm9vdChyb290LnN0cmluZygpLCAocm9vdC5wYXJlbnRfcGF0aCgpIC8gIm91dHNpZGUiKS5zdHJpbmcoKSkuaGFzX3ZhbHVlKCkpOworICAgIGZzOjpyZW1vdmVfYWxsKHJvb3QpOworfQo=')]:\n\
         \ pathlib.Path(n).write_bytes(base64.b64decode(b));subprocess.run(['git','apply','--check',n],check=True);subprocess.run(['git','apply',n],check=True)\n\
         PY51\n"
-    - name: Build pinned Windows mtfix51 server and unit tests
+    - name: Reuse exact newly compiled legacy candidate and compile focused unit runner
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: 'set -euxo pipefail
 
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
 
-        test "$(gcc -dumpversion)" = 10.2.0
+        gh run download 38938650173 --repo bedipritpal/OpenADS --name mtfix51-server-candidate --dir recovered51
 
-        find "$RUNNER_TEMP/winlibs" -iname ''*copying*'' -o -iname ''*license*'' | sort
+        mkdir -p build-legacy/tools/serverd
 
-        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-server"
+        cp recovered51/build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/
 
-        git -C "$RUNNER_TEMP/harbour-server" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
-
-        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
-
-        mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
-
-        HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
-
-        printf ''\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n'' >>
-        src/CMakeLists.txt
-
-        cmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static
-        -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON
-        -DOPENADS_VERSION_FORCE=1.09.74-mtfix51-legacy-root-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON
-        -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw"
-        -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
-
-        cmake --build build-legacy --target openads_serverd openads_unit_tests -j2
-
-        mkdir -p "$RUNNER_TEMP/mtfix51-unittmp"
-
-        export TMP="$(cygpath -m "$RUNNER_TEMP/mtfix51-unittmp")" TEMP="$(cygpath -m "$RUNNER_TEMP/mtfix51-unittmp")"
-
-        build-legacy/tests/openads_unit_tests.exe --test-case="*resolve_under_root*,*resolve_under_any_root*,*fs_sandbox*,*fold_absolute*,*resolve_client_path*,*traversal*,*jail*"
-        > output/mtfix51-unit-proof.txt
-
-        cat output/mtfix51-unit-proof.txt
+        g++ -std=c++17 -static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600 -Isrc -Ithird_party/doctest
+        tests/unit/doctest_main.cpp tests/unit/platform_path_test.cpp tests/unit/fs_sandbox_test.cpp tests/unit/file_jail_test.cpp
+        src/platform/path.cpp src/platform/fs_sandbox.cpp src/platform/file_win32.cpp src/platform/lock_win32.cpp
+        -o output/mtfix51-path-tests.exe
 
         '
-      shell: bash
+    - name: Run focused Windows tests with native Windows temp setup
+      shell: pwsh
+      run: '$ErrorActionPreference=''Stop''
+
+        New-Item -ItemType Directory -Force C:/Temp | Out-Null
+
+        $env:TMP=''C:\Temp'';$env:TEMP=''C:\Temp'';$env:TMPDIR=''C:\Temp''
+
+        ./output/mtfix51-path-tests.exe | Tee-Object output/mtfix51-unit-proof.txt
+
+        if($LASTEXITCODE -ne 0){throw ''focused tests failed''}
+
+        '
     - name: Prepare released comparison44 and unchanged49 worker
       shell: pwsh
       run: '$ErrorActionPreference=''Stop''

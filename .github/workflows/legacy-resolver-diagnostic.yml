@@ -1,0 +1,95 @@
+name: Legacy path resolver compiler diagnostic
+'on':
+  push:
+    branches:
+    - test/auth-diagnostic-mtfix50
+    paths:
+    - .github/workflows/legacy-resolver-diagnostic.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  boundary:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 83d4a7149fb3543768a175231deef89fe9ed2f4c
+    - name: Reuse exact successful DLL build and proofs
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: '$ErrorActionPreference=''Stop''
+
+        gh run download 38919695226 --repo bedipritpal/OpenADS --name mtfix50-diagnostic-results --dir output
+
+        if($LASTEXITCODE -ne 0){throw ''build outputs download failed''}
+
+        Invoke-WebRequest ''https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix49-mutual-auth-test/mtfix49-mutual-auth-qt492-x86.zip''
+        -OutFile kit49.zip
+
+        if((Get-FileHash kit49.zip -Algorithm SHA256).Hash.ToLower() -ne ''0dcb6fecc720eb894639e8aeeb2d1c6c2898b1e5b4e9306d9bb5e03f91c0cbf7''){throw
+        ''49 kit hash mismatch''}
+
+        Expand-Archive kit49.zip -DestinationPath matrix-kit49
+
+        New-Item -ItemType Directory -Force kit,srv,mtdata,build-legacy/tools/serverd,matrix-client | Out-Null
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/lib/* kit/
+
+        Copy-Item -Recurse matrix-kit49/mtfix49-mutual-auth/runtime-notices kit/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/*.exe srv/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/openads_auth_worker.exe build-legacy/tools/serverd/
+
+        Copy-Item output/openace32.dll srv/
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile compiler.7z
+
+        & 7z x compiler.7z (''-o''+$env:RUNNER_TEMP+''/winlibs'') -y
+
+        if($LASTEXITCODE -ne 0){throw ''compiler extraction failed''}
+
+
+        exit 0
+
+        '
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x86
+    - name: Write standalone diagnostic
+      shell: pwsh
+      run: 'New-Item -ItemType Directory -Force resolver-output | Out-Null
+
+        [IO.File]::WriteAllBytes((Join-Path $PWD ''resolver-diag.cpp''),[Convert]::FromBase64String(''I2luY2x1ZGUgInBsYXRmb3JtL3BhdGguaCIKI2luY2x1ZGUgInBsYXRmb3JtL2ZzX3NhbmRib3guaCIKI2luY2x1ZGUgPGZpbGVzeXN0ZW0+CiNpbmNsdWRlIDxpb3N0cmVhbT4KbmFtZXNwYWNlIGZzPXN0ZDo6ZmlsZXN5c3RlbTsKaW50IG1haW4oKXtmczo6Y3JlYXRlX2RpcmVjdG9yaWVzKCJDOi9UZW1wIik7Zm9yKGF1dG8gcm9vdDp7IkM6L1RlbXAiLCJDOi9UZW1wLyIsIkM6XFxUZW1wIiwiYzovdGVtcCJ9KXtmb3IoYXV0byBjbGllbnQ6eyIuIiwiLi8iLCJDOi9UZW1wIiwiQzovIiwiQ3JlYXRpdmUuYWNkL3guZGJmIn0pe3N0ZDo6ZXJyb3JfY29kZSBlYzthdXRvIHJwPWZzOjphYnNvbHV0ZShmczo6cGF0aChyb290KSxlYyk7c3RkOjpjb3V0PDwiUk9PVD0iPDxyb290PDwiIENMSUVOVD0iPDxjbGllbnQ8PCIgYWJzcm9vdD0iPDxycC5nZW5lcmljX3N0cmluZygpPDwiIGVjPSI8PGVjLm1lc3NhZ2UoKTw8IlxuIjthdXRvIGNwPWZzOjpwYXRoKGNsaWVudCk7YXV0byBjb21iaW5lZD1jcC5pc19hYnNvbHV0ZSgpP2NwOnJwL2NwO2F1dG8gY2Fub249ZnM6OndlYWtseV9jYW5vbmljYWwoY29tYmluZWQsZWMpO3N0ZDo6Y291dDw8IiBjb21iaW5lZD0iPDxjb21iaW5lZC5nZW5lcmljX3N0cmluZygpPDwiIGNhbm9uPSI8PGNhbm9uLmdlbmVyaWNfc3RyaW5nKCk8PCIgZWM9Ijw8ZWMubWVzc2FnZSgpO2F1dG8gcmM9ZnM6OndlYWtseV9jYW5vbmljYWwocnAsZWMpO3N0ZDo6Y291dDw8IiByb290Y2Fub249Ijw8cmMuZ2VuZXJpY19zdHJpbmcoKTw8IiBlYz0iPDxlYy5tZXNzYWdlKCk8PCJcbiI7YXV0byByPW9wZW5hZHM6OnBsYXRmb3JtOjpyZXNvbHZlX3VuZGVyX3Jvb3Qocm9vdCxjbGllbnQpO2F1dG8gbD1vcGVuYWRzOjpwbGF0Zm9ybTo6cmVzb2x2ZV9jbGllbnRfcGF0aCh7cm9vdH0sY2xpZW50KTtzdGQ6OmNvdXQ8PCIgc3RyaWN0PSI8PChyPypyOiJSRUpFQ1QiKTw8IiBsZWdhY3k9Ijw8KGw/Kmw6IlJFSkVDVCIpPDwiXG4iO319fQo=''))'
+    - name: GCC10.2 unchanged27 resolver
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+
+        g++ -std=c++17 -static -static-libgcc -static-libstdc++ -Isrc resolver-diag.cpp src/platform/path.cpp src/platform/fs_sandbox.cpp
+        -o resolver-output/gcc-probe.exe
+
+        ./resolver-output/gcc-probe.exe | tee resolver-output/gcc-result.txt
+
+        '
+    - name: MSVC unchanged27 resolver comparison only
+      shell: pwsh
+      run: 'cl /nologo /EHsc /std:c++17 /Isrc resolver-diag.cpp src/platform/path.cpp src/platform/fs_sandbox.cpp
+        /Feresolver-output/msvc-probe.exe
+
+        if($LASTEXITCODE -ne 0){throw ''cl failed''}
+
+        ./resolver-output/msvc-probe.exe | Tee-Object resolver-output/msvc-result.txt
+
+        '
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: legacy-resolver-compiler-diagnostic
+        path: resolver-output/

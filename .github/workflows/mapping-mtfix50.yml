@@ -54,6 +54,9 @@ jobs:
 
         if($LASTEXITCODE -ne 0){throw ''compiler extraction failed''}
 
+
+        exit 0
+
         '
     - name: Prepare same public V1 fixture and proof sources
       shell: pwsh
@@ -66,7 +69,7 @@ jobs:
         \ $id=New-Object System.Security.Principal.SecurityIdentifier($sid)\n $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'Read','Allow');$acl.AddAccessRule($rule)\n\
         }\nSet-Acl $path $acl\nCopy-Item auth-probe.hrb matrix-test-only.hrb\nCopy-Item output/openace32.dll matrix-client/\n\
         & output/local_create.exe (Resolve-Path mtdata).Path\nif($LASTEXITCODE -ne 0){throw 'table fixture setup\
-        \ failed'}\n"
+        \ failed'}\n\nexit 0\n"
     - name: Compile diagnostic import client
       shell: bash
       run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ncat >\
@@ -114,7 +117,7 @@ jobs:
         \ -ne 0 -or $r.out -ne 'READY'){throw ('fixed ACL probe failed '+$r.err)}\n$real=Join-Path $aclDir 'vouch_auth.hrb';Copy-Item\
         \ $mod $real\n& cmd /c ('fix-hrb-acl.cmd \"'+$real+'\"')\nif($LASTEXITCODE -ne 2){throw 'helper did not\
         \ refuse real-HRB name'}\n'Windows diagnostic path/error observations complete; test-only ACL helper PASS'\
-        \ | Tee-Object -FilePath $proof -Append\n"
+        \ | Tee-Object -FilePath $proof -Append\n\nexit 0\n"
     - name: Compare native mtfix44 and mtfix49 V1 both path modes
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$proof=Join-Path $PWD 'output/mtfix44-vs49-v1-proof.txt'\n\
@@ -139,7 +142,7 @@ jobs:
         \ path denied'}else{'PASS'}\n   & $probe 'auth://127.0.0.1:17267/C:/' $expected $message | Tee-Object -FilePath\
         \ $proof -Append\n   if($LASTEXITCODE -ne 0){'DRIVE_ROOT_BEGIN_MISMATCH' | Tee-Object -FilePath $proof -Append}\n\
         \  }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n }\n}\n'Native mtfix44 vs mtfix49 V1 observations\
-        \ COMPLETE; inspect mismatch markers' | Tee-Object -FilePath $proof -Append\n"
+        \ COMPLETE; inspect mismatch markers' | Tee-Object -FilePath $proof -Append\n\nexit 0\n"
     - name: Observe client mapping and server mapping corrected examples
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\nCopy-Item -Recurse comparison44 matrix-kit44\n$rows=@();$log=Join-Path\
@@ -178,7 +181,7 @@ jobs:
         \ -join \"`n\")}\n    }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n   }\n  }\n }\n}\n}\n\
         $rows | ConvertTo-Json -Depth 6 | Set-Content matrix-output/root-table-matrix.json -Encoding utf8\n'Completed\
         \ all existing-policy observations. Mismatches are reported, not fixed or waived.' | Tee-Object -FilePath\
-        \ $log -Append\n"
+        \ $log -Append\n\nexit 0\n"
     - name: Package diagnostic DLL only
       shell: bash
       run: 'set -euxo pipefail

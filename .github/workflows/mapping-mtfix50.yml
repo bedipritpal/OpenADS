@@ -67,9 +67,9 @@ jobs:
         $path=(Resolve-Path auth-probe.hrb).Path\n$acl=New-Object System.Security.AccessControl.FileSecurity;$acl.SetAccessRuleProtection($true,$false)\n\
         $me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User\nforeach($sid in @($me.Value,'S-1-5-18','S-1-5-32-544')){\n\
         \ $id=New-Object System.Security.Principal.SecurityIdentifier($sid)\n $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'Read','Allow');$acl.AddAccessRule($rule)\n\
-        }\nSet-Acl $path $acl\nCopy-Item auth-probe.hrb matrix-test-only.hrb\nCopy-Item output/openace32.dll matrix-client/\n\
-        & output/local_create.exe (Resolve-Path mtdata).Path\nif($LASTEXITCODE -ne 0){throw 'table fixture setup\
-        \ failed'}\n\nexit 0\n"
+        }\nSet-Acl $path $acl\nCopy-Item auth-probe.hrb matrix-test-only.hrb\nSet-Acl matrix-test-only.hrb $acl\n\
+        Copy-Item output/openace32.dll matrix-client/\n& output/local_create.exe (Resolve-Path mtdata).Path\nif($LASTEXITCODE\
+        \ -ne 0){throw 'table fixture setup failed'}\n\nexit 0\n"
     - name: Compile diagnostic import client
       shell: bash
       run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ncat >\
@@ -162,8 +162,8 @@ jobs:
         \n    $p=Start-Process $srv -ArgumentList $a -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput\
         \ $o -RedirectStandardError $e -PassThru\n    try{\n     $ready=$false\n     for($i=0;$i -lt 100;$i++){\n\
         \      if(Select-String $o -Pattern 'listening on' -Quiet){$ready=$true;break}\n      if($p.HasExited){throw\
-        \ \"$case server exited\"}\n      Start-Sleep -Milliseconds 200\n     }\n     if(-not $ready){throw \"$case\
-        \ server not ready\"}\n     $effectiveMapping=if($clientMapping -eq 'SERVER_ROOT_CONTROL'){$serverMapping}else{$clientMapping}\n\
+        \ (\"$case server exited: \"+(Get-Content $e -Raw))}\n      Start-Sleep -Milliseconds 200\n     }\n    \
+        \ if(-not $ready){throw \"$case server not ready\"}\n     $effectiveMapping=if($clientMapping -eq 'SERVER_ROOT_CONTROL'){$serverMapping}else{$clientMapping}\n\
         \     $uri=$scheme+'://'+$endpoint+':17268/'+$effectiveMapping\n     # Same client file path in both corrected\
         \ folder/root examples.\n     $file=if($clientMapping -eq 'SERVER_ROOT_CONTROL'){'C:/MyDataFolder/Creative.acd/00001.dbf'}elseif($clientMapping.Contains(',')\
         \ -or $clientMapping.Contains(';')){'E:/MyDataFolder/Creative.acd/00001.dbf'}elseif($clientMapping -eq 'C:/MyDataFolder'){'C:/MyDataFolder/Creative.acd/00001.dbf'}else{$clientMapping+'MyDataFolder/Creative.acd/00001.dbf'}\n\
@@ -176,12 +176,18 @@ jobs:
         \ {$_.FullName.Replace('\\','/')})\n     $match=($actual.Count -eq 1 -and $actual[0] -ieq $expected)\n \
         \    \"ACTUAL=$($actual -join ';') INTENDED_MATCH=$match\" | Tee-Object -FilePath $log -Append\n     $localExpected=$file.Replace('\\\
         ','/');$localFiles=@(Get-ChildItem -Recurse 'C:/MyDataFolder/Creative.acd' -Filter 00001.dbf -ErrorAction\
-        \ SilentlyContinue | ForEach-Object {$_.FullName.Replace('\\','/')})\n     $rows+=@{app_server_type='ADS_REMOTE_SERVER';endpoint=$endpoint;local_literal_expected=$localExpected;local_actual=$localFiles;local_literal_match=($localFiles\
+        \ SilentlyContinue | ForEach-Object {$_.FullName.Replace('\\','/')})\n     $blocked=(($result -join \"`n\"\
+        ) -notmatch '(CONNECT|COMPLETE)=0'); $rowStatus=if($blocked){'BLOCKED_AT_CONNECTION'}elseif($match){'MAPPED_AS_REMOTE_EXPECTED'}else{'FILE_PATH_MISMATCH'}\n\
+        \     $rows+=@{status=$rowStatus;app_server_type='ADS_REMOTE_SERVER';endpoint=$endpoint;local_literal_expected=$localExpected;local_actual=$localFiles;local_literal_match=($localFiles\
         \ -icontains $localExpected);server_version=$version;legacy_paths=$legacy;transport=$scheme;client_mapping=$clientMapping;server_mapping=$serverMapping;requested_file=$file;expected=$expected;actual=$actual;intended_match=$match;client_result=($result\
         \ -join \"`n\")}\n    }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n   }\n  }\n }\n}\n}\n\
-        $rows | ConvertTo-Json -Depth 6 | Set-Content matrix-output/root-table-matrix.json -Encoding utf8\n'Completed\
-        \ all existing-policy observations. Mismatches are reported, not fixed or waived.' | Tee-Object -FilePath\
-        \ $log -Append\n\nexit 0\n"
+        $summary=@('FILE-SYSTEM OBSERVATIONS, NOT A POLICY CHANGE','App calls AdsSetServerType(ADS_REMOTE_SERVER)=2.\
+        \ Local-server intent is literal paths.','Connection-blocked rows do not establish a file-system mapping\
+        \ result.')\n$summary+=@($rows | Group-Object server_version,legacy_paths,transport,status | ForEach-Object\
+        \ { $_.Name+': '+$_.Count })\n$summary | Set-Content matrix-output/SUMMARY.txt -Encoding utf8\n$rows | ConvertTo-Json\
+        \ -Depth 6 | Set-Content matrix-output/root-table-matrix.json -Encoding utf8\n'Completed all existing-policy\
+        \ observations. Mismatches are reported, not fixed or waived.' | Tee-Object -FilePath $log -Append\n\nexit\
+        \ 0\n"
     - name: Package diagnostic DLL only
       shell: bash
       run: 'set -euxo pipefail
@@ -197,6 +203,8 @@ jobs:
         cp kit/libopenace32.dll.a delivery/mtfix50-auth-diagnostic/lib/
 
         cp mtfix50-client.patch delivery/mtfix50-auth-diagnostic/docs/source.patch
+
+        cp matrix-output/SUMMARY.txt delivery/mtfix50-auth-diagnostic/docs/
 
         cp matrix-output/root-table-matrix.txt matrix-output/root-table-matrix.json delivery/mtfix50-auth-diagnostic/docs/
 

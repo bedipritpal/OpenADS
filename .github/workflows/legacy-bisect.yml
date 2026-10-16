@@ -1,0 +1,153 @@
+name: Legacy path Windows historical boundary proof
+'on':
+  push:
+    branches:
+    - test/auth-diagnostic-mtfix50
+    paths:
+    - .github/workflows/legacy-bisect.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  boundary:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        revision:
+        - 83d4a7149fb3543768a175231deef89fe9ed2f4c
+        - 39c8aa1fadaf642315db6b942f217d6ccfd050bd
+        - 4d771acfdaef9cc8fa9557f6ff943438f2fb2b92
+        - 6d5c59f4f91e9603c10231db14691d636f747faf
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ matrix.revision }}
+        fetch-depth: 0
+    - name: Reuse exact successful DLL build and proofs
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: '$ErrorActionPreference=''Stop''
+
+        gh run download 38919695226 --repo bedipritpal/OpenADS --name mtfix50-diagnostic-results --dir output
+
+        if($LASTEXITCODE -ne 0){throw ''build outputs download failed''}
+
+        Invoke-WebRequest ''https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix49-mutual-auth-test/mtfix49-mutual-auth-qt492-x86.zip''
+        -OutFile kit49.zip
+
+        if((Get-FileHash kit49.zip -Algorithm SHA256).Hash.ToLower() -ne ''0dcb6fecc720eb894639e8aeeb2d1c6c2898b1e5b4e9306d9bb5e03f91c0cbf7''){throw
+        ''49 kit hash mismatch''}
+
+        Expand-Archive kit49.zip -DestinationPath matrix-kit49
+
+        New-Item -ItemType Directory -Force kit,srv,mtdata,build-legacy/tools/serverd,matrix-client | Out-Null
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/lib/* kit/
+
+        Copy-Item -Recurse matrix-kit49/mtfix49-mutual-auth/runtime-notices kit/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/*.exe srv/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/openads_auth_worker.exe build-legacy/tools/serverd/
+
+        Copy-Item output/openace32.dll srv/
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile compiler.7z
+
+        & 7z x compiler.7z (''-o''+$env:RUNNER_TEMP+''/winlibs'') -y
+
+        if($LASTEXITCODE -ne 0){throw ''compiler extraction failed''}
+
+
+        exit 0
+
+        '
+    - name: Build unmodified historical server for boundary test
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+
+        test "$(gcc -dumpversion)" = 10.2.0
+
+        cmake -S . -B build-main -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF
+        -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WITH_HARBOUR_UDF=OFF -DOPENADS_VERSION_FORCE=1.09.74-legacy-boundary
+        -DOPENADS_WARNINGS_AS_ERRORS=OFF
+
+        cmake --build build-main --target openads_serverd -j2
+
+        '
+    - name: Prepare original27 and current50 clients
+      shell: pwsh
+      run: '$ErrorActionPreference=''Stop''
+
+        Invoke-WebRequest ''https://github.com/FiveTechSoft/OpenADS/releases/download/v1.09.27/openads-1.09.27-windows-x86.zip''
+        -OutFile original27.zip
+
+        if((Get-FileHash original27.zip).Hash.ToLower() -ne ''39b9343d047c8eec6e05606a28a66653677638f158cd295572dc804856748616''){throw
+        ''27hash mismatch''}
+
+        Expand-Archive original27.zip original27
+
+        New-Item -ItemType Directory -Force client27,client50,legacy-output | Out-Null
+
+        Copy-Item original27/openace32.dll client27/
+
+        Copy-Item output/openace32.dll client50/
+
+        [IO.File]::WriteAllBytes((Join-Path $PWD ''legacy-client.cpp''),[Convert]::FromBase64String(''I2luY2x1ZGUgImFjZS5oIgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxzdHJpbmc+CnZvaWQgZXJyKGNvbnN0IGNoYXIqIHN0YWdlLFVOU0lHTkVEMzIgcmMpe1VOU0lHTkVEMzIgYz0wO1VOU0lHTkVEOCBtWzEwMjRde307VU5TSUdORUQxNiBuPTEwMjM7aWYocmMpQWRzR2V0TGFzdEVycm9yKCZjLG0sJm4pO3N0ZDo6Y291dDw8c3RhZ2U8PCI9Ijw8cmM8PCIgRVJST1I9Ijw8bTw8c3RkOjplbmRsO30KaW50IG1haW4oaW50IG4sY2hhcioqIHYpe2lmKG4hPTMpcmV0dXJuIDI7QWRzU2V0U2VydmVyVHlwZShBRFNfUkVNT1RFX1NFUlZFUik7QURTSEFORExFIGg9MCx0PTA7c3RkOjpzdHJpbmcgdT12WzFdLGY9dlsyXTtVTlNJR05FRDggdXNyW109InVzciIscHdbXT0icHciO2F1dG8gcmM9QWRzQ29ubmVjdDYwKChVTlNJR05FRDgqKXUuZGF0YSgpLEFEU19SRU1PVEVfU0VSVkVSLHVzcixwdywwLCZoKTtlcnIoIkNPTk5FQ1QiLHJjKTtpZihyYylyZXR1cm4gMDtVTlNJR05FRDggZGVmW109IklELEMsODsiO3JjPUFkc0NyZWF0ZVRhYmxlKGgsKFVOU0lHTkVEOCopZi5kYXRhKCksbnVsbHB0cixBRFNfQ0RYLEFEU19BTlNJLEFEU19QUk9QUklFVEFSWV9MT0NLSU5HLEFEU19JR05PUkVSSUdIVFMsMCxkZWYsJnQpO2VycigiQ1JFQVRFIixyYyk7aWYoIXJjKXtBZHNDbG9zZVRhYmxlKHQpO3JjPUFkc09wZW5UYWJsZShoLChVTlNJR05FRDgqKWYuZGF0YSgpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsJnQpO2VycigiT1BFTiIscmMpO2lmKCFyYylBZHNDbG9zZVRhYmxlKHQpO31BZHNEaXNjb25uZWN0KGgpO3JldHVybiAwO30K''))
+
+        exit 0
+
+        '
+    - name: Compile TCP-only probe with no auth imports
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+
+        g++ -std=c++17 -static -static-libgcc -static-libstdc++ -Imatrix-kit49/mtfix49-mutual-auth/include legacy-client.cpp
+        kit/libopenace32.dll.a -o client50/probe.exe
+
+        cp client50/probe.exe client27/probe.exe
+
+        objdump -p client50/probe.exe > legacy-output/client-imports.txt
+
+        if grep -q ''OAdsBeginAuth'' legacy-output/client-imports.txt; then exit 1; fi
+
+        '
+    - name: Measure legacy1 C root and exact root with same USE filename
+      shell: pwsh
+      env:
+        TEST_REV: ${{ matrix.revision }}
+      run: "$ErrorActionPreference='Stop'\nNew-Item -ItemType Directory -Force 'C:/Temp','C:/Temp/Creative.acd','C:/Creative.acd'\
+        \ | Out-Null\n$servers=@(@('built',(Resolve-Path build-main/tools/serverd/openads_serverd.exe).Path),@('release27',(Resolve-Path\
+        \ original27/openads_serverd.exe).Path),@('release49',(Resolve-Path matrix-kit49/mtfix49-mutual-auth/bin/openads_serverd.exe).Path))\n\
+        $rows=@()\nforeach($sv in $servers){foreach($mode in @('default','legacy1')){\n $a='--host 127.0.0.1 --port\
+        \ 6262 --data C:/Temp --auth-user usr:pw --http-port 0';if($mode -eq 'legacy1'){$a+=' --legacy-paths'}\n\
+        \ $o='legacy-output/'+$sv[0]+'-'+$mode+'.out';$e='legacy-output/'+$sv[0]+'-'+$mode+'.err'\n $p=Start-Process\
+        \ $sv[1] -ArgumentList $a -WorkingDirectory (Split-Path $sv[1]) -RedirectStandardOutput $o -RedirectStandardError\
+        \ $e -PassThru\n try{\n  $ready=$false;for($i=0;$i -lt 100;$i++){if(Select-String $o -Pattern 'listening\
+        \ on' -Quiet){$ready=$true;break};if($p.HasExited){throw ('server exit '+(Get-Content $e -Raw))};Start-Sleep\
+        \ -Milliseconds 200};if(-not $ready){throw 'not ready'}\n  foreach($client in @('27','50')){foreach($root\
+        \ in @('C:/','C:/Temp')){\n   Remove-Item 'C:/Temp/Creative.acd/x.dbf','C:/Creative.acd/x.dbf' -Force -ErrorAction\
+        \ SilentlyContinue\n   $url='tcp://127.0.0.1:6262/'+$root;$r=& ('./client'+$client+'/probe.exe') $url 'C:/Creative.acd/x.dbf'\
+        \ 2>&1\n   if($LASTEXITCODE -ne 0){throw ('client failed '+$LASTEXITCODE+' '+($r -join ' '))}\n   $actual=@(Get-ChildItem\
+        \ C:/Temp -Recurse -Filter x.dbf | ForEach-Object {$_.FullName})\n   $row=@{revision=$env:TEST_REV;server=$sv[0];mode=$mode;client=$client;root=$root;result=($r\
+        \ -join \"`n\");actual=$actual;literal_exists=(Test-Path C:/Creative.acd/x.dbf)};$rows+=$row\n   \"REV=$env:TEST_REV\
+        \ SERVER=$($sv[0]) MODE=$mode CLIENT=$client ROOT=$root\" | Tee-Object -FilePath legacy-output/results.txt\
+        \ -Append;$r | Tee-Object -FilePath legacy-output/results.txt -Append\n  }}\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n\
+        }}\n$rows | ConvertTo-Json -Depth 5 | Set-Content legacy-output/results.json -Encoding utf8\nexit 0\n"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: legacy-boundary-${{ matrix.revision }}
+        path: 'legacy-output/
+
+          build-main/tools/serverd/openads_serverd.exe'

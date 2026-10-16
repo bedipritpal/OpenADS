@@ -1,0 +1,128 @@
+name: Plain TCP exact Windows historical mapping observation
+'on':
+  push:
+    branches:
+    - test/auth-diagnostic-mtfix50
+    paths:
+    - .github/workflows/tcp-history-mtfix50.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read
+jobs:
+  proof:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: 6d5c59f4f91e9603c10231db14691d636f747faf
+    - name: Reuse exact successful DLL build and proofs
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: '$ErrorActionPreference=''Stop''
+
+        gh run download 38919695226 --repo bedipritpal/OpenADS --name mtfix50-diagnostic-results --dir output
+
+        if($LASTEXITCODE -ne 0){throw ''build outputs download failed''}
+
+        Invoke-WebRequest ''https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix49-mutual-auth-test/mtfix49-mutual-auth-qt492-x86.zip''
+        -OutFile kit49.zip
+
+        if((Get-FileHash kit49.zip -Algorithm SHA256).Hash.ToLower() -ne ''0dcb6fecc720eb894639e8aeeb2d1c6c2898b1e5b4e9306d9bb5e03f91c0cbf7''){throw
+        ''49 kit hash mismatch''}
+
+        Expand-Archive kit49.zip -DestinationPath matrix-kit49
+
+        New-Item -ItemType Directory -Force kit,srv,mtdata,build-legacy/tools/serverd,matrix-client | Out-Null
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/lib/* kit/
+
+        Copy-Item -Recurse matrix-kit49/mtfix49-mutual-auth/runtime-notices kit/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/*.exe srv/
+
+        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/openads_auth_worker.exe build-legacy/tools/serverd/
+
+        Copy-Item output/openace32.dll srv/
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile compiler.7z
+
+        & 7z x compiler.7z (''-o''+$env:RUNNER_TEMP+''/winlibs'') -y
+
+        if($LASTEXITCODE -ne 0){throw ''compiler extraction failed''}
+
+
+        exit 0
+
+        '
+    - name: Build exact fork-main server without changing source
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+
+        test "$(gcc -dumpversion)" = 10.2.0
+
+        cmake -S . -B build-main -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DOPENADS_BUILD_TESTS=OFF
+        -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WITH_HARBOUR_UDF=OFF -DOPENADS_VERSION_FORCE=1.09.74-main-6d5c59f4
+        -DOPENADS_WARNINGS_AS_ERRORS=OFF
+
+        cmake --build build-main --target openads_serverd -j2
+
+        '
+    - name: Prepare matched previous and current clients and servers
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n$downloads=@(\n @('44','https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix44-static-auth-test/mtfix44-static-auth-qt492-x86.zip','da56bd37dcf51997f339c4cff421fbcc3c2364b0f18a42f751bc12741cd1eb7e'),\n\
+        \ @('45','https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix45-nodelay-test/mtfix45-nodelay-qt492-x86.zip','203b975114eaee59b20c8b304494ee8c36cdcb8ba01400560ba625e27d9a1e40'),\n\
+        \ @('46','https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix46-dll-auth-test/mtfix46-dll-auth-qt492-x86.zip','2b28fc5603ada4c224f2d26ac5c6cb8d56922e7b483c0dae00fc4616ff696b3d'))\n\
+        foreach($a in $downloads){Invoke-WebRequest $a[1] -OutFile ($a[0]+'.zip');if((Get-FileHash ($a[0]+'.zip')).Hash.ToLower()\
+        \ -ne $a[2]){throw 'historical hash mismatch'};Expand-Archive ($a[0]+'.zip') ('history'+$a[0])}\nNew-Item\
+        \ -ItemType Directory -Force client46,client50,tcp-history,'C:/Temp','C:/MyDataFolder/Creative.acd' | Out-Null\n\
+        Copy-Item history46/mtfix46-dll-auth/bin/openace32.dll client46/\nCopy-Item output/openace32.dll client50/\n\
+        [IO.File]::WriteAllBytes((Join-Path $PWD 'tcp-history-client.cpp'),[Convert]::FromBase64String('I2luY2x1ZGUgImFjZS5oIgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxzdHJpbmc+CnZvaWQgZXJyb3IoY29uc3QgY2hhciogc3RhZ2UsVU5TSUdORUQzMiByYyl7VU5TSUdORUQzMiBjb2RlPTA7VU5TSUdORUQ4IG1bMTAyNF17fTtVTlNJR05FRDE2IG49MTAyMztBZHNHZXRMYXN0RXJyb3IoJmNvZGUsbSwmbik7c3RkOjpjb3V0PDxzdGFnZTw8Ij0iPDxyYzw8IiBFUlJPUj0iPDxtPDxzdGQ6OmVuZGw7fQppbnQgbWFpbihpbnQgYXJnYyxjaGFyKiogYXJndil7CiBpZihhcmdjIT00KXJldHVybiAyOyBBZHNTZXRTZXJ2ZXJUeXBlKEFEU19SRU1PVEVfU0VSVkVSKTtzdGQ6OmNvdXQ8PCJBUFBfU0VSVkVSX1RZUEU9QURTX1JFTU9URV9TRVJWRVIgKDIpIjw8c3RkOjplbmRsOwogc3RkOjpzdHJpbmcgdXJpPWFyZ3ZbMV0sZmlsZT1hcmd2WzJdO0FEU0hBTkRMRSBoPTAscD0wLHQ9MDtVTlNJR05FRDMyIHJjPTA7CiBpZih1cmkucmZpbmQoImF1dGg6Ly8iLDApPT0wKXtVTlNJR05FRDggY1szMl17fTtyYz1PQWRzQmVnaW5BdXRoKHVyaS5jX3N0cigpLCZwLGMpO2Vycm9yKCJCRUdJTiIscmMpO2lmKHJjKXJldHVybiAwO3N0ZDo6c3RyaW5nIGJsb2IocmVpbnRlcnByZXRfY2FzdDxjaGFyKj4oYyksMzIpO2Jsb2IrPSJ0ZXN0LW9ubHkiO3JjPU9BZHNDb21wbGV0ZUF1dGgocCxyZWludGVycHJldF9jYXN0PGNvbnN0IFVOU0lHTkVEOCo+KGJsb2IuZGF0YSgpKSxibG9iLnNpemUoKSwmaCk7ZXJyb3IoIkNPTVBMRVRFIixyYyk7fQogZWxzZXtyYz1BZHNDb25uZWN0NjAocmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPih1cmkuZGF0YSgpKSxBRFNfUkVNT1RFX1NFUlZFUixyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGNvbnN0X2Nhc3Q8Y2hhcio+KCJ1c3IiKSkscmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPihjb25zdF9jYXN0PGNoYXIqPigicHciKSksMCwmaCk7ZXJyb3IoIkNPTk5FQ1QiLHJjKTt9CiBpZihyYylyZXR1cm4gMDsKIFVOU0lHTkVEOCBkZWZbXT0iSUQsQyw4OyI7CiByYz1BZHNDcmVhdGVUYWJsZShoLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oZmlsZS5kYXRhKCkpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsZGVmLCZ0KTtlcnJvcigiQ1JFQVRFIixyYyk7CiBpZighcmMpe0Fkc0Nsb3NlVGFibGUodCk7dD0wO3JjPUFkc09wZW5UYWJsZShoLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oZmlsZS5kYXRhKCkpLG51bGxwdHIsQURTX0NEWCxBRFNfQU5TSSxBRFNfUFJPUFJJRVRBUllfTE9DS0lORyxBRFNfSUdOT1JFUklHSFRTLDAsJnQpO2Vycm9yKCJPUEVOIixyYyk7aWYoIXJjKXtVTlNJR05FRDggZls0MDk2XXt9O1VOU0lHTkVEMTYgbj00MDk1O3JjPUFkc0dldFRhYmxlRmlsZW5hbWUodCxBRFNfRlVMTFBBVEhOQU1FLGYsJm4pO3N0ZDo6Y291dDw8IlRBQkxFX0ZJTEVOQU1FPSI8PGY8PCIgUkM9Ijw8cmM8PHN0ZDo6ZW5kbDtBZHNDbG9zZVRhYmxlKHQpO319CiBBZHNEaXNjb25uZWN0KGgpO3JldHVybiAwOwp9Cg=='))\n\
+        exit 0\n"
+    - name: Compile identical plain TCP probe for both DLLs
+      shell: bash
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+
+        g++ -std=c++17 -static -static-libgcc -static-libstdc++ -Imatrix-kit49/mtfix49-mutual-auth/include tcp-history-client.cpp
+        kit/libopenace32.dll.a -o client50/probe.exe
+
+        cp client50/probe.exe client46/probe.exe
+
+        '
+    - name: Observe exact C Temp plain TCP no auth module across historical servers
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n$servers=@(\n @('44',(Resolve-Path history44/mtfix44-static-auth/bin/openads_serverd.exe).Path),\n\
+        \ @('45',(Resolve-Path history45/mtfix45-nodelay/bin/openads_serverd.exe).Path),\n @('49',(Resolve-Path\
+        \ matrix-kit49/mtfix49-mutual-auth/bin/openads_serverd.exe).Path),\n @('main6d5c59f4',(Resolve-Path build-main/tools/serverd/openads_serverd.exe).Path))\n\
+        $rows=@()\nforeach($sv in $servers){\n foreach($mode in @('default','legacy1')){\n  $a='--host 127.0.0.1\
+        \ --port 6262 --data C:/Temp --auth_user usr:pw --http_port 0'\n  if($mode -eq 'legacy1'){$a+=' --legacy_paths'}\n\
+        \  $o='tcp-history/server-'+$sv[0]+'-'+$mode+'.out';$e='tcp-history/server-'+$sv[0]+'-'+$mode+'.err'\n \
+        \ $p=Start-Process $sv[1] -ArgumentList $a -WorkingDirectory (Split-Path $sv[1]) -RedirectStandardOutput\
+        \ $o -RedirectStandardError $e -PassThru\n  try{\n   $ready=$false;for($i=0;$i -lt 100;$i++){if(Select-String\
+        \ $o -Pattern 'listening on' -Quiet){$ready=$true;break};if($p.HasExited){throw ('server exit '+(Get-Content\
+        \ $e -Raw))};Start-Sleep -Milliseconds 200};if(-not $ready){throw 'server not ready'}\n   foreach($client\
+        \ in @('46','50')){\n    foreach($root in @('C:/','C:/Temp')){\n     Remove-Item 'C:/Temp/MyDataFolder/Creative.acd/00001.*','C:/MyDataFolder/Creative.acd/00001.*'\
+        \ -Force -ErrorAction SilentlyContinue\n     New-Item -ItemType Directory -Force 'C:/Temp/MyDataFolder/Creative.acd'\
+        \ | Out-Null\n     $url='tcp://127.0.0.1:6262/'+$root\n     $r=& ('./client'+$client+'/probe.exe') $url\
+        \ 'C:/MyDataFolder/Creative.acd/00001.dbf' 'C:/Temp/MyDataFolder/Creative.acd/00001.dbf' 2>&1\n     if($LASTEXITCODE\
+        \ -ne 0){throw 'probe crashed'}\n     $actual=@(Get-ChildItem -Recurse 'C:/Temp' -Filter 00001.dbf | ForEach-Object\
+        \ {$_.FullName})\n     $row=@{server=$sv[0];client_dll=$client;mode=$mode;url=$url;args=$a;result=($r -join\
+        \ \"`n\");actual=$actual;literal_exists=(Test-Path 'C:/MyDataFolder/Creative.acd/00001.dbf')}\n     $rows+=$row;\"\
+        SERVER=$($sv[0]) CLIENT=$client MODE=$mode URL=$url\" | Tee-Object -FilePath tcp-history/results.txt -Append;$r\
+        \ | Tee-Object -FilePath tcp-history/results.txt -Append\n    }\n   }\n  }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n\
+        \ }\n}\n$rows | ConvertTo-Json -Depth 5 | Set-Content tcp-history/results.json -Encoding utf8\nexit 0\n"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix50-plain-tcp-history
+        path: 'tcp-history/
+
+          build-main/tools/serverd/*.exe'

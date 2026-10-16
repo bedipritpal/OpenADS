@@ -364,29 +364,27 @@ jobs:
         \ 0;\n}\nCPP\ng++ -static -static-libgcc -static-libstdc++ -Iinclude output/auth-diagnostic.cpp -Lkit -lopenace32\
         \ -o output/auth-diagnostic.exe\nobjdump -p output/auth-diagnostic.exe > output/diagnostic-client-pe.txt\n\
         grep -qi 'DLL Name: openace32.dll' output/diagnostic-client-pe.txt\n"
-    - name: Windows V1 BeginAuth path/error parity and test ACL helper
+    - name: Windows V1 BeginAuth errors and test ACL helper
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n\
         $mod=(Resolve-Path auth-probe.hrb).Path\n$probe=(Resolve-Path output/auth-diagnostic.exe).Path\n$proof=Join-Path\
         \ $PWD 'output/beginauth-diagnostic-proof.txt'\nfunction Run-Probe($url,$code,$message){\n $r=& $probe $url\
         \ $code $message 2>&1\n $r | Tee-Object -FilePath $proof -Append\n if($LASTEXITCODE -ne 0){throw \"diagnostic\
-        \ client failed: $url\"}\n}\nforeach($legacy in @(0,1)){\n $a='--host 127.0.0.1 --port 17266 --data \"'+$data+'\"\
-        \ --auth_user usr:pw --auth_module \"'+$mod+'\"'\n if($legacy -eq 1){$a+=' --legacy_paths'}\n $p=Start-Process\
-        \ $srv -ArgumentList $a -RedirectStandardOutput \"output/diag-server-$legacy.out\" -RedirectStandardError\
-        \ \"output/diag-server-$legacy.err\" -PassThru\n try{\n  $ready=$false\n  for($i=0;$i -lt 100;$i++){\n \
-        \  if(Select-String \"output/diag-server-$legacy.out\" -Pattern 'listening on' -Quiet){$ready=$true;break}\n\
-        \   if($p.HasExited){throw 'diagnostic server exited'}\n   Start-Sleep -Milliseconds 200\n  }\n  if(-not\
-        \ $ready){throw 'diagnostic server not ready'}\n  Run-Probe ('auth://127.0.0.1:17266/'+$data.Replace('\\\
-        ','/')) 0 PASS\n  if($legacy -eq 0){\n   Run-Probe 'auth://127.0.0.1:17266/C:/' 7077 'Auth path denied'\n\
-        \   Run-Probe 'auth://127.0.0.1:17266/' 7077 'Auth path denied'\n  }else{\n   Run-Probe 'auth://127.0.0.1:17266/C:/'\
-        \ 0 PASS\n   Run-Probe 'auth://127.0.0.1:17266/' 0 PASS\n  }\n  Run-Probe 'tcp://127.0.0.1:17266/C:/' 7077\
-        \ 'auth:// URL required'\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n}\n# Fresh-copy\
-        \ public V1 fixture: inherited grants must be fixed with the helper.\n$aclDir=Join-Path $PWD 'output/acl\
-        \ helper test';New-Item -ItemType Directory -Force $aclDir | Out-Null\n$test=Join-Path $aclDir 'mutual-test-only.hrb';Copy-Item\
-        \ $mod $test\n& icacls $test /grant '*S-1-1-0:R' | Out-Null\nif($LASTEXITCODE -ne 0){throw 'unsafe ACL fixture\
-        \ failed'}\n# Remove explicit Everyone, then inherit a broad grant from parent, like ZIP extraction.\n&\
-        \ icacls $test /remove:g '*S-1-1-0' | Out-Null\n& icacls $aclDir /grant '*S-1-1-0:(OI)(CI)R' | Out-Null\n\
-        & icacls $test /reset | Out-Null\n$w=(Resolve-Path build-legacy/tools/serverd/openads_auth_worker.exe).Path\n\
+        \ client failed: $url\"}\n}\nforeach($legacy in @(0)){\n $a='--host 127.0.0.1 --port 17266 --data \"'+$data+'\"\
+        \ --auth_user usr:pw --auth_module \"'+$mod+'\"'\n $p=Start-Process $srv -ArgumentList $a -RedirectStandardOutput\
+        \ \"output/diag-server-$legacy.out\" -RedirectStandardError \"output/diag-server-$legacy.err\" -PassThru\n\
+        \ try{\n  $ready=$false\n  for($i=0;$i -lt 100;$i++){\n   if(Select-String \"output/diag-server-$legacy.out\"\
+        \ -Pattern 'listening on' -Quiet){$ready=$true;break}\n   if($p.HasExited){throw 'diagnostic server exited'}\n\
+        \   Start-Sleep -Milliseconds 200\n  }\n  if(-not $ready){throw 'diagnostic server not ready'}\n  Run-Probe\
+        \ ('auth://127.0.0.1:17266/'+$data.Replace('\\','/')) 0 PASS\n  if($legacy -eq 0){\n   Run-Probe 'auth://127.0.0.1:17266/C:/'\
+        \ 7077 'Auth path denied'\n   Run-Probe 'auth://127.0.0.1:17266/' 7077 'Auth path denied'\n  }\n  Run-Probe\
+        \ 'tcp://127.0.0.1:17266/C:/' 7077 'auth:// URL required'\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n\
+        }\n# Fresh-copy public V1 fixture: inherited grants must be fixed with the helper.\n$aclDir=Join-Path $PWD\
+        \ 'output/acl helper test';New-Item -ItemType Directory -Force $aclDir | Out-Null\n$test=Join-Path $aclDir\
+        \ 'mutual-test-only.hrb';Copy-Item $mod $test\n& icacls $test /grant '*S-1-1-0:R' | Out-Null\nif($LASTEXITCODE\
+        \ -ne 0){throw 'unsafe ACL fixture failed'}\n# Remove explicit Everyone, then inherit a broad grant from\
+        \ parent, like ZIP extraction.\n& icacls $test /remove:g '*S-1-1-0' | Out-Null\n& icacls $aclDir /grant\
+        \ '*S-1-1-0:(OI)(CI)R' | Out-Null\n& icacls $test /reset | Out-Null\n$w=(Resolve-Path build-legacy/tools/serverd/openads_auth_worker.exe).Path\n\
         function Worker-Probe($file){\n $si=New-Object System.Diagnostics.ProcessStartInfo\n $si.FileName=$w;$si.Arguments='\"\
         '+$file+'\"';$si.UseShellExecute=$false\n $si.RedirectStandardInput=$true;$si.RedirectStandardOutput=$true;$si.RedirectStandardError=$true\n\
         \ $q=New-Object System.Diagnostics.Process;$q.StartInfo=$si;[void]$q.Start()\n $q.StandardInput.Write('P');$q.StandardInput.Close()\n\
@@ -397,6 +395,30 @@ jobs:
         \ $mod $real\n& cmd /c ('fix-hrb-acl.cmd \"'+$real+'\"')\nif($LASTEXITCODE -ne 2){throw 'helper did not\
         \ refuse real-HRB name'}\n'Windows diagnostic path/error matrix and test-only ACL helper PASS' | Tee-Object\
         \ -FilePath $proof -Append\n"
+    - name: Compare native mtfix44 and mtfix49 V1 default flow
+      shell: pwsh
+      run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$proof=Join-Path $PWD 'output/mtfix44-vs49-v1-proof.txt'\n\
+        $mod=(Resolve-Path auth-probe.hrb).Path\n$probe=(Resolve-Path output/auth-diagnostic.exe).Path\n$originalDll=(Resolve-Path\
+        \ output/openace32.dll).Path\nInvoke-WebRequest 'https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix44-static-auth-test/mtfix44-static-auth-qt492-x86.zip'\
+        \ -OutFile mtfix44.zip\nif((Get-FileHash mtfix44.zip -Algorithm SHA256).Hash.ToLower() -ne 'da56bd37dcf51997f339c4cff421fbcc3c2364b0f18a42f751bc12741cd1eb7e'){throw\
+        \ '44 archive hash mismatch'}\nExpand-Archive mtfix44.zip -DestinationPath comparison44\nforeach($version\
+        \ in @(44,49)){\n $srv=if($version -eq 44){(Resolve-Path comparison44/mtfix44-static-auth/bin/openads_serverd.exe).Path}else{(Resolve-Path\
+        \ srv/openads_serverd.exe).Path}\n foreach($legacy in @(0)){\n  $a='--host 127.0.0.1 --port 17267 --data\
+        \ \"'+$data+'\" --auth_user usr:pw --auth_module \"'+$mod+'\"'\n  $o=\"output/comparison-$version-$legacy.out\"\
+        ;$e=\"output/comparison-$version-$legacy.err\"\n  $p=Start-Process $srv -ArgumentList $a -WorkingDirectory\
+        \ (Split-Path $srv) -RedirectStandardOutput $o -RedirectStandardError $e -PassThru\n  try{\n   $ready=$false\n\
+        \   for($i=0;$i -lt 100;$i++){\n    if(Select-String $o -Pattern 'listening on' -Quiet){$ready=$true;break}\n\
+        \    if($p.HasExited){throw \"comparison server $version exited\"}\n    Start-Sleep -Milliseconds 200\n\
+        \   }\n   if(-not $ready){throw 'comparison server not ready'}\n   \"SERVER=$version DEFAULT-PATH-POLICY\"\
+        \ | Tee-Object -FilePath $proof -Append\n   $url='auth://127.0.0.1:17267/'+$data.Replace('\\','/')\n   &\
+        \ $probe $url 0 PASS | Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw 'exact-root\
+        \ BeginAuth parity failed'}\n   # Same Harbour DLL-import V1 flow, complete auth, open/close table.\n  \
+        \ & output/auth_static.exe $url | Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw\
+        \ 'V1 CompleteAuth/RDD comparison failed'}\n   $expected=if($legacy -eq 0){7077}else{0}\n   $message=if($legacy\
+        \ -eq 0){'Auth path denied'}else{'PASS'}\n   & $probe 'auth://127.0.0.1:17267/C:/' $expected $message |\
+        \ Tee-Object -FilePath $proof -Append\n   if($LASTEXITCODE -ne 0){throw 'drive-root BeginAuth parity failed'}\n\
+        \  }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n }\n}\n'Native mtfix44 vs mtfix49 V1 BeginAuth/CompleteAuth/RDD\
+        \ parity PASS' | Tee-Object -FilePath $proof -Append\n"
     - name: Package diagnostic DLL only
       shell: bash
       run: 'set -euxo pipefail
@@ -413,8 +435,9 @@ jobs:
 
         cp mtfix50-client.patch delivery/mtfix50-auth-diagnostic/docs/source.patch
 
-        cp output/beginauth-diagnostic-proof.txt output/diagnostic-client-pe.txt output/dll-pe.txt output/static-auth-stdout.txt
-        output/hrb-crypto-proof.txt output/hrb-resource-proof.txt output/mutual-native-proof.txt delivery/mtfix50-auth-diagnostic/docs/
+        cp output/mtfix44-vs49-v1-proof.txt output/beginauth-diagnostic-proof.txt output/diagnostic-client-pe.txt
+        output/dll-pe.txt output/static-auth-stdout.txt output/hrb-crypto-proof.txt output/hrb-resource-proof.txt
+        output/mutual-native-proof.txt delivery/mtfix50-auth-diagnostic/docs/
 
         cp -r kit/runtime-notices delivery/mtfix50-auth-diagnostic/
 
@@ -474,7 +497,9 @@ jobs:
         strict worker check. No ACL bypass switch is included.
 
 
-        Native Windows proofs are included. This focused diagnostic kit does not
+        Native Windows proofs and same-flow mtfix44/49 comparison are included.
+
+        No legacy-paths switch is added or used by these diagnostic gates. This focused diagnostic kit does not
 
         rerun the full unit-baseline comparison from mtfix49 (1733 baseline cases,
 

@@ -77,10 +77,11 @@ jobs:
         \ msg[1024]{};UNSIGNED16 len=1023;\n if(rc)AdsGetLastError(&code,msg,&len);\n std::cout<<\"BEGIN=\"<<rc<<\"\
         \ MESSAGE=\"<<msg<<std::endl;\n if(rc!=static_cast<UNSIGNED32>(std::stoul(v[2])))return 4;\n if(std::string(v[3])!=\"\
         PASS\" && std::string(reinterpret_cast<char*>(msg)).find(v[3])==std::string::npos)return 5;\n if(p)OAdsCancelAuth(p);return\
-        \ 0;\n}\nCPP\ng++ -static -static-libgcc -static-libstdc++ -Iinclude output/auth-diagnostic.cpp kit/libopenace32.dll.a\
-        \ -o output/auth-diagnostic.exe\nobjdump -p output/auth-diagnostic.exe > output/diagnostic-client-pe.txt\n\
-        grep -qi 'DLL Name: openace32.dll' output/diagnostic-client-pe.txt\n\ng++ -static -static-libgcc -static-libstdc++\
-        \ -Imatrix-kit49/mtfix49-mutual-auth/include root-table-matrix.cpp kit/libopenace32.dll.a -o matrix-client/root-table-matrix.exe\n"
+        \ 0;\n}\nCPP\ng++ -std=c++17 -static -static-libgcc -static-libstdc++ -Iinclude output/auth-diagnostic.cpp\
+        \ kit/libopenace32.dll.a -o output/auth-diagnostic.exe\nobjdump -p output/auth-diagnostic.exe > output/diagnostic-client-pe.txt\n\
+        grep -qi 'DLL Name: openace32.dll' output/diagnostic-client-pe.txt\n\ng++ -std=c++17 -static -static-libgcc\
+        \ -static-libstdc++ -Imatrix-kit49/mtfix49-mutual-auth/include root-table-matrix.cpp kit/libopenace32.dll.a\
+        \ -o matrix-client/root-table-matrix.exe\n"
     - name: Windows V1 BeginAuth path/error parity and test ACL helper
       shell: pwsh
       run: "$ErrorActionPreference='Stop'\n$data=(Resolve-Path mtdata).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n\
@@ -272,67 +273,78 @@ jobs:
 
         cat > delivery/mtfix50-auth-diagnostic/docs/DEVELOPER-PATH-NOTE.txt <<''DEV''
 
-        LEGACY_PATHS: EXISTING BEHAVIOR, NOT CHANGED IN MTFIX50
+        FILE-SYSTEM MAPPING CONTRACT AND OBSERVATIONS - NO POLICY CHANGE
 
-        Absent/commented means false. INI legacy_paths=1 or CLI --legacy_paths enables.
+        Client mapping is the root or roots named by the client. Server mapping is
 
-        CLIENT MAPPING is the connection root in the URL. SERVER MAPPING is --data.
+        --data. This is a file-system contract, independent of connection protocol
 
-        Intended folder example: C:/MyDataFolder + C:/MyDataFolder/Creative.acd/00001.dbf
-
-        should land at --data/Creative.acd/00001.dbf. Intended drive-only example:
-
-        C:/ + the same file should land at --data/MyDataFolder/Creative.acd/00001.dbf.
-
-        These are intended rules; see root-table-matrix for actual results/mismatches.
-
-        Multi-root URL observation: tested comma and semicolon spellings separately.
-
-        Current URL parser has no list separator or mapping hash: it sends the entire
-
-        post-host path as one string. Semicolon splitting belongs to server --data,
-
-        not the client URL. Observed acceptance is not proof of per-root matching.
-
-        Folder connection roots remain valid; no folder-refusal policy was added.
-
-        Both TCP Connect and V1 BeginAuth parse the URL identically: remove one slash
-
-        after host:port. Ending :6262/ sends empty; /C:/ sends C:/; // sends /.
-
-        Connection root with strict mode: absolute must be within a configured data
-
-        root, relative joins under it; empty is rejected. On Windows data=C:/Temp,
-
-        C:/ is outside the root. With legacy mode C:/ and empty select first root;
-
-        C:/Creative.acd maps under C:/Temp/Creative.acd; D:/x maps to C:/Temp/x.
-
-        Root-prefix matching is case-insensitive and strips drive letters in legacy
-
-        mode; parent escapes and file/link access protections still apply.
+        and authentication. Folder roots are valid; drive-only is not a restriction.
 
 
-        RDD table names are a SEPARATE later layer. Even in strict remote mode,
+        Intended folder example: client mapping C:/MyDataFolder and requested file
 
-        Connection::resolve_table_file folds out-of-root drive-rooted names under the
+        C:/MyDataFolder/Creative.acd/00001.dbf should store at
 
-        connection directory, while preserving already-in-root server-owned paths.
+        --data/Creative.acd/00001.dbf.
 
-        Thus observing C:/Creative.acd/file.dbf stored under C:/Temp does NOT alone
+        Intended drive example: client mapping C:/ and that same requested file
 
-        prove the connection URL C:/ passed its separate root gate. In legacy mode
+        should store at --data/MyDataFolder/Creative.acd/00001.dbf.
 
-        client-absolute table names always remount, even if a same-named host file
+        With several client roots, whichever root matches must be stripped. User''s
 
-        exists. Do not infer connection-root policy from a successful USE/DbCreate.
+        intended design includes a client-side lookup table. That intent is NOT a
+
+        claim that this diagnostic kit implements the lookup table.
 
 
-        No default or remapping rule changes here. The included native Windows
+        The matrix tests actual file create/open and records actual disk paths for
 
-        comparison reports actual mtfix44 and mtfix49 results for both modes with the
+        44 and 49 server binaries, existing default/legacy settings, TCP and V1-auth
 
-        same synthetic V1 HRB; it does not certify the user''s private HRB or DLL load.
+        connections. Its JSON preserves every return code and path. A connection
+
+        rejection means the file-system test was blocked at a precondition; it does
+
+        not prove file remapping itself failed. Mismatches are observations only.
+
+
+        Current inspected URL parser accepts a single remainder string. Neither
+
+        comma nor semicolon is split there. The matrix observes comma and semicolon
+
+        multi-root spellings separately, not as declared supported separators.
+
+        Server --data has a separate semicolon-separated roots parser. This server
+
+        setting is not a client-mapping list. No client root lookup hash was found
+
+        in the inspected client/RDD path. Multi-root acceptance alone would not prove
+
+        that each requested filename matched and stripped the right root.
+
+
+        SEPARATE DIAGNOSTIC: BEGINAUTH ERROR PROPAGATION
+
+        The client DLL now returns the real BeginAuth request error rather than
+
+        masking it as generic 5000. This change does not implement mapping rules.
+
+        The independent BeginAuth proof records accepted/rejected connection inputs
+
+        and error text against both existing legacy settings, plus 44/49 parity.
+
+        These connection checks must not be substituted for file-system results.
+
+
+        Legacy_paths stays in code and tests. Absent/commented means false; INI
+
+        legacy_paths=1 or CLI --legacy_paths enables existing optional behavior.
+
+        No path rule, default, separator or cryptography was changed in this kit.
+
+        The private Vouch HRB and separately running Vouch DLL load remain unproven.
 
         DEV
 

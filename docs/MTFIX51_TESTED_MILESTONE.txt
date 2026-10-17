@@ -38,3 +38,8 @@ Original header SHA256 cde28b5e96d96022ac0f3ebc744b5741b8fd513d2d07ec869a441c554
 Corrected header SHA256 3ed043631b3a5f0973b554e641e36b686aff550d3b8a91216b097db58f729dbc
 Manifest uses standard checksum text to avoid API-key false positives.
 The existing private-key test fixture scan failure is identical on main.
+
+Portable POSIX-only follow-up replaces unavailable macOS sigtimedwait
+with blocked pending-signal inspection and sigwait consumption.
+Windows AuthWorker run branch is byte-identical. Two focused tests
+cover no pending signal and a real EPIPE/SIGPIPE before mask restore.

@@ -268,6 +268,7 @@ add_executable(openads_unit_tests
     unit/abi_index_collation_persist_test.cpp
     unit/network_socket_test.cpp
     unit/network_auth_attempt_test.cpp
+    unit/network_auth_signal_drain_test.cpp
     unit/network_server_test.cpp
     unit/network_pool_test.cpp
     unit/network_frame_reader_test.cpp

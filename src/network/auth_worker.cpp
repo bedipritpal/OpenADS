@@ -9,6 +9,7 @@
 #define NOMINMAX
 #include <windows.h>
 #else
+#include "network/auth_signal_drain.h"
 #include <spawn.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -141,7 +142,7 @@ bool AuthWorker::run(const std::string& in,std::string& out,bool* capacity_busy)
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         if(!exited){kill(pid,SIGKILL);while(waitpid(pid,&status,0)<0&&errno==EINTR){}}
-        timespec zero{};while(sigtimedwait(&set,nullptr,&zero)>=0){}pthread_sigmask(SIG_SETMASK,&old,nullptr);
+        detail::drain_blocked_signal(SIGPIPE);pthread_sigmask(SIG_SETMASK,&old,nullptr);
     }
     if(ip[1]>=0)close(ip[1]);
     close(op[0]);

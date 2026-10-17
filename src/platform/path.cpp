@@ -112,7 +112,13 @@ std::optional<std::string> resolve_under_root(const std::string& root,
     if (ec) return std::nullopt;
 
     fs::path client_p(client_path);
-    fs::path combined = client_p.is_absolute() ? client_p : (root_p / client_p);
+    // GCC 10.2 on Windows rejects weakly_canonical("C:/Temp/.")
+    // with ENOENT. A self-directory names the root itself. Keep the
+    // root's original spelling for the no-follow jail below; do not
+    // lexically collapse other components (especially symlink/..).
+    fs::path combined = client_p == fs::path(".")
+        ? root_p
+        : (client_p.is_absolute() ? client_p : (root_p / client_p));
 
     fs::path canon = fs::weakly_canonical(combined, ec);
     if (ec) return std::nullopt;

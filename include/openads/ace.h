@@ -1564,6 +1564,13 @@ UNSIGNED32 ENTRYPOINT AdsSetDefaultConnection(ADSHANDLE hConn);
 UNSIGNED32 ENTRYPOINT AdsGetDefaultConnection(ADSHANDLE* phConn);
 // OpenADS extension: process-wide logging kill-switch (audit + arc
 // traces). 0 = silent (production), non-zero = enabled (default).
+/* Explicit encrypted-unverified two-step auth. Binary length-bearing buffers. */
+UNSIGNED32 ENTRYPOINT OAdsBeginAuth(const char* url, ADSHANDLE* pending, UNSIGNED8* challenge32);
+UNSIGNED32 ENTRYPOINT OAdsCompleteAuth(ADSHANDLE pending, const UNSIGNED8* blob, UNSIGNED32 bytes, ADSHANDLE* connection);
+/* V2: proof capacity must be4096; returns proof length. Binding is local TLS exporter.
+   Caller MUST verify server proof using its trusted Vouch material before CompleteAuth. */
+UNSIGNED32 ENTRYPOINT OAdsBeginMutualAuth(const char* url,const char* selector,ADSHANDLE* pending,UNSIGNED8* challenge32,UNSIGNED8* binding32,UNSIGNED8* proof,UNSIGNED32* proofBytes);
+UNSIGNED32 ENTRYPOINT OAdsCancelAuth(ADSHANDLE pending);
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn);
 // Aggregate health JSON from an AdsMgConnect handle (NOT a data connection).
 // *pulLen is buffer capacity incl. NUL; out is required size incl. NUL.

@@ -133,8 +133,10 @@ jobs:
           5. Start the mock V2 test server: ./run-mock-test.sh
              The banner must show OpenADS 1.09.74-mtfix52-linux-test
              listening on 127.0.0.1:6262.
-          6. First run copies openads.ini.sample to openads.ini and sets
-             legacy_paths = 1 so Vouch URLs with C:/ roots resolve. To
+          6. First run copies openads.ini.sample to openads.ini, sets
+             legacy_paths = 1 so Vouch URLs with C:/ roots resolve, and
+             sets data to the kit folder as an absolute path (a relative
+             data root breaks the login path resolution on Linux). To
              reach the server from another machine, set host = 0.0.0.0 in
              openads.ini and open TCP 6262 in the box firewall and the EC2
              security group.
@@ -162,6 +164,7 @@ jobs:
           if [ ! -f openads.ini ]; then
             cp openads.ini.sample openads.ini
             sed -i 's/^# legacy_paths = 0/legacy_paths = 1/' openads.ini
+            sed -i "s|^data = \.$|data = $PWD|" openads.ini
           fi
           ulimit -n 65535 2>/dev/null || true
           exec ./openads_serverd --config ./openads.ini --http_port 0 --auth_module "$PWD/mutual-test-only.hrb" --auth_user usr:pw

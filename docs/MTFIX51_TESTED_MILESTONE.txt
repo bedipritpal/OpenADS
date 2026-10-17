@@ -1,0 +1,33 @@
+MTFIX49/50/51 tested milestone, fork main integration
+
+Pritpal Bedi's fork of FiveTechSoft/OpenADS.
+Source: mtfix49 candidate45752b9a, mtfix50 BeginAuth error propagation,
+mtfix51 minimal self-directory resolver fix. Diagnostic build/publishing
+workflows are excluded from this product-only merge branch.
+
+Pritpal cleared localhost Vouch testing on16October2026: duplicate user,
+multi-instance, multi-thread and indexes, all through auth:// URIs with
+mtfix51 server, mtfix49 worker, mtfix50 DLL and his private auth HRB.
+His clearance: "You can merge in main."
+
+The legacy root fix retains canonical containment and no-follow/reparse
+checks. Legacy mode remains off by default; strict C:/ outside C:/Temp
+remains refused. Legacy C:/,D:/,C:/Temp,C: and empty roots use the restored
+self-directory case. Table remapping is unchanged.
+
+Windows proof:22 focused unit tests/88 assertions;132 root-mode TCP/auth
+rows across44,49,51;16 junction/traversal creates refused. The original
+CI assertion omitted restored legacy C: from its expected-change list.
+The corrected review accepts all five existing legacy self-root forms;
+34 other candidate rows match49 exactly, and44/49 results match.
+Test-only temp-directory fixtures avoid pinned GCC10.2 temp_directory_path.
+
+Speed,30 whole-flow samples each:49 median473.30ms,51 median480.80ms
+(+1.58%); mean+1.18%. Includes process startup/scheduling/disk IO, not
+an isolated resolver benchmark. No claim of literally zero overhead.
+
+Build/proof references:
+https://github.com/bedipritpal/OpenADS/actions/runs/38938650173
+https://github.com/bedipritpal/OpenADS/actions/runs/38943917533
+https://github.com/bedipritpal/OpenADS/releases/tag/v1.09.74-mtfix51-legacy-root-test
+No upstream submission or Lightsail deployment is authorized by this merge.

@@ -88,6 +88,9 @@ public:
                                const std::string& user     = "",
                                const std::string& password = "");
 
+    util::Result<std::vector<std::uint8_t>> begin_auth(std::unique_ptr<ITransport>,const std::string& dir);
+    util::Result<std::string> begin_mutual(std::unique_ptr<ITransport>,const std::string&,const std::string&,std::array<std::uint8_t,32>&,std::array<std::uint8_t,32>&);
+    util::Result<void> complete_auth(const std::string& blob);
     void               disconnect() noexcept;
 
     // M12.34 — remote transaction lifecycle.
@@ -618,6 +621,8 @@ public:
     }
 
 private:
+    std::string auth_dir_;
+    bool auth_pending_ = false;
     util::Result<Frame> request(const Frame& f);
 
     // Record a cursor/visibility-affecting frame. Called at the top of

@@ -322,6 +322,10 @@ EXPORTS
     AdsSetDefault
     AdsSetDefaultConnection
     OAdsGetServerStats
+    OAdsBeginMutualAuth
+    OAdsBeginAuth
+    OAdsCompleteAuth
+    OAdsCancelAuth
     OAdsSetLogging
     AdsSetEpoch
     AdsSetExact

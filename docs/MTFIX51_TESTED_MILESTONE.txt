@@ -31,3 +31,10 @@ https://github.com/bedipritpal/OpenADS/actions/runs/38938650173
 https://github.com/bedipritpal/OpenADS/actions/runs/38943917533
 https://github.com/bedipritpal/OpenADS/releases/tag/v1.09.74-mtfix51-legacy-root-test
 No upstream submission or Lightsail deployment is authorized by this merge.
+
+PR CI build-only follow-up: explicit size_t promotion for two unsigned
+length bytes in auth_result.h; no wire/protocol or bounds change.
+Original header SHA256 cde28b5e96d96022ac0f3ebc744b5741b8fd513d2d07ec869a441c554200103a
+Corrected header SHA256 3ed043631b3a5f0973b554e641e36b686aff550d3b8a91216b097db58f729dbc
+Manifest uses standard checksum text to avoid API-key false positives.
+The existing private-key test fixture scan failure is identical on main.

@@ -28,8 +28,8 @@ inline bool parse_auth_result(std::string_view s, AuthResult& out) {
     std::size_t pos=7;
     auto field=[&](std::string_view& v)->bool {
         if(pos+2>s.size())return false;
-        std::size_t n=static_cast<unsigned char>(s[pos]) |
-            (static_cast<unsigned char>(s[pos+1])<<8);pos+=2;
+        std::size_t n=static_cast<std::size_t>(static_cast<unsigned char>(s[pos])) |
+            (static_cast<std::size_t>(static_cast<unsigned char>(s[pos+1]))<<8);pos+=2;
         if(n>s.size()-pos)return false;
         v=s.substr(pos,n);pos+=n;return true;
     };

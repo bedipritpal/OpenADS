@@ -207,6 +207,8 @@ jobs:
           grep -aq "$KIT_VERSION" "$V/libopenace64.so"
           # Auth worker probe: one byte P must print READY (or READY2).
           "$HARBOUR_COMPILER" -gh -o/tmp/test_only.hrb tests/hrb/auth-spike/test_only.prg
+          # Worker refuses a group/other-readable module by design; lock it.
+          chmod 600 /tmp/test_only.hrb
           probe="$(printf 'P' | "$V/openads_auth_worker" /tmp/test_only.hrb)"
           echo "worker probe: $probe"
           [[ "$probe" == READY* ]]

@@ -1,4 +1,4 @@
-name: MTFIX51 portable POSIX signal drain and Windows parity proof
+name: MTFIX51 POSIX signal fixture disposition proof
 'on':
   push:
     branches:
@@ -8,258 +8,45 @@ name: MTFIX51 portable POSIX signal drain and Windows parity proof
   workflow_dispatch: {}
 permissions:
   contents: write
-  actions: read
 jobs:
-  proof:
-    runs-on: windows-2022
-    timeout-minutes: 45
+  fixture:
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v5
       with:
         ref: merge/mtfix51-owner-tested
-    - name: Apply scoped POSIX portability fix and verify unchanged Windows branch
-      shell: bash
+    - name: Correct only signal test disposition and checksum
       run: 'set -euxo pipefail
 
-        python - <<''PYFIX''
+        python3 - <<''PYFIX''
 
-        import base64,pathlib,subprocess
+        import base64,pathlib
 
-        pathlib.Path(''portable.patch'').write_bytes(base64.b64decode(''ZGlmZiAtLWdpdCBhL2RvY3MvTVRGSVg1MV9URVNURURfTUlMRVNUT05FLnR4dCBiL2RvY3MvTVRGSVg1MV9URVNURURfTUlMRVNUT05FLnR4dAppbmRleCBjNzliMzliZi4uMjE4NjY3NGIgMTAwNjQ0Ci0tLSBhL2RvY3MvTVRGSVg1MV9URVNURURfTUlMRVNUT05FLnR4dAorKysgYi9kb2NzL01URklYNTFfVEVTVEVEX01JTEVTVE9ORS50eHQKQEAgLTM4LDMgKzM4LDggQEAgT3JpZ2luYWwgaGVhZGVyIFNIQTI1NiBjZGUyOGI1ZTk2ZDk2MDIyYWMwZjNlYmM3NDRiNTc0MWI4ZmQ1MTNkMmQwN2VjODY5YTQ0MWM1NTQKIENvcnJlY3RlZCBoZWFkZXIgU0hBMjU2IDNlZDA0MzYzMWIzYTVmMDk3M2I1NTRlNjQxZTM2YjY4NmFmZjU1MGQzYjhhOTEyMTZiMDk3ZGI1OGY3MjlkYmMKIE1hbmlmZXN0IHVzZXMgc3RhbmRhcmQgY2hlY2tzdW0gdGV4dCB0byBhdm9pZCBBUEkta2V5IGZhbHNlIHBvc2l0aXZlcy4KIFRoZSBleGlzdGluZyBwcml2YXRlLWtleSB0ZXN0IGZpeHR1cmUgc2NhbiBmYWlsdXJlIGlzIGlkZW50aWNhbCBvbiBtYWluLgorCitQb3J0YWJsZSBQT1NJWC1vbmx5IGZvbGxvdy11cCByZXBsYWNlcyB1bmF2YWlsYWJsZSBtYWNPUyBzaWd0aW1lZHdhaXQKK3dpdGggYmxvY2tlZCBwZW5kaW5nLXNpZ25hbCBpbnNwZWN0aW9uIGFuZCBzaWd3YWl0IGNvbnN1bXB0aW9uLgorV2luZG93cyBBdXRoV29ya2VyIHJ1biBicmFuY2ggaXMgYnl0ZS1pZGVudGljYWwuIFR3byBmb2N1c2VkIHRlc3RzCitjb3ZlciBubyBwZW5kaW5nIHNpZ25hbCBhbmQgYSByZWFsIEVQSVBFL1NJR1BJUEUgYmVmb3JlIG1hc2sgcmVzdG9yZS4KZGlmZiAtLWdpdCBhL2RvY3MvTVRGSVg1MV9URVNURURfU09VUkNFX1NIQTI1Ni50eHQgYi9kb2NzL01URklYNTFfVEVTVEVEX1NPVVJDRV9TSEEyNTYudHh0CmluZGV4IDhlZDMyNmVkLi4yODQ0ZDY5YyAxMDA2NDQKLS0tIGEvZG9jcy9NVEZJWDUxX1RFU1RFRF9TT1VSQ0VfU0hBMjU2LnR4dAorKysgYi9kb2NzL01URklYNTFfVEVTVEVEX1NPVVJDRV9TSEEyNTYudHh0CkBAIC03LDcgKzcsNyBAQCBiZmM3NTViNjZkOWFkNWY1ZDM5MjA5NTdiNTU1NDA2ZWZkYzE2N2JmNmUyMzJiMTE1YzVhNzQxZTRiODAzYzAwICBjb250cmliL29hZHNfaAogMDg0MjE0OGEyZTA0ZWU3ODBmZmExOWFmNjFhMTM1OTY1NDJjNWQ4N2UyNDBiZjk5MjRkYWU4NGRmYWFkOTkxZCAgc3JjL2FiaS9hY2VfZXhwb3J0cy5jcHAKIDI1MGMxMjM0OGE0YTc5YjYxM2MxMzdiMGI2YzljZDIzM2FiYzI1NTA0ZWFmOTA1NTEyYzY3OWRjYTNkOTZjZGUgIHNyYy9uZXR3b3JrL2F1dGhfYXR0ZW1wdC5oCiAzZWQwNDM2MzFiM2E1ZjA5NzNiNTU0ZTY0MWUzNmI2ODZhZmY1NTBkM2I4YTkxMjE2YjA5N2RiNThmNzI5ZGJjICBzcmMvbmV0d29yay9hdXRoX3Jlc3VsdC5oCi04MjAzZjFkYzQ1OTZlNzQ5MGQyNmM5NjQ2MjMzOTc1ZjRkYjExZDk4NDRiMWIxOGEwZmE1YzAxYTZlNDMzODVlICBzcmMvbmV0d29yay9hdXRoX3dvcmtlci5jcHAKKzVmY2FlOWRjZTQ4OTRkNDVmOTk4Mzc5MDhmODVhNjliMWZhZmVkY2MxNjI4YWUwOTA3MWFiNjAwOTJjMmRhYzMgIHNyYy9uZXR3b3JrL2F1dGhfd29ya2VyLmNwcAogNTcxZGRjZWJiNzBlMzMxNzU5YzZiMzEzN2FjMTg4ZjY0ODk5ZTJmNTIyMmMxODBiYzliM2QyNTllZGNlNGU4ZiAgc3JjL25ldHdvcmsvYXV0aF93b3JrZXIuaAogYzcxZGEzZTM4ZTEyZjI3N2ZlNDdiMzk3OGViNmI2ZmFkOGJlYzAwMzE2YjQ4YmZjZmJhMmNjNmZlNGU1ZWViNyAgc3JjL25ldHdvcmsvY2xpZW50LmNwcAogMWQ4ZDJkZDcxOWNkZDcxNmIzMWVhYWY2ZjdlNzZjOWYwZjk2ZDg2ZGM4NmQzOGExN2Q3M2U1YTgxMGViZTQ4MCAgc3JjL25ldHdvcmsvY2xpZW50LmgKQEAgLTI0LDcgKzI0LDcgQEAgZGFhNzJmOTZlZjNkZjVkZDFmYWZiZjQ0MWUxNTNiYzU1NmI1MzUxOGRlMTBlMmFjMzhmMzYwYTE2ZmVkOWEwYyAgc3JjL25ldHdvcmsvd2kKIGQ2MGJjNjA3Y2E1YTA4YmE1ODhhODJiZWJjZTI0OTYyYTc2YjI5NDY1NmI1MmExMmM1YzBhOGE5OTI3OWFhNmMgIHNyYy9vcGVuYWRzX2FjZS5kZWYKIDg5NzMyMGNiMDg1OWViOTIzN2U4ZWVmZGM5ODUzYzJmN2ZjZDczYjVhNGYxMDExZmZmODFjMDJmZTVhZmFiN2MgIHNyYy9wbGF0Zm9ybS9wYXRoLmNwcAogZDEyOTYxMDY3ZmY5YzE5NDAxNWMxNzk5ZDYzMTg4N2YxMTFmY2ZjZGI3MjhlNWZjNGUzOTAxNDBkMDBkMmQ3MCAgc3JjL3Nlc3Npb24vaGFuZGxlX3JlZ2lzdHJ5LmgKLTgyMjhiYTg4ZWUyNjI0MmMxMmYxMjE1ZjBkOTMwZjk0Y2MzOGQ1MzJmMTkzMWViNWZjODBlOWUzMTM2Y2NkNTggIHRlc3RzL0NNYWtlTGlzdHMudHh0Cis1NmYyZDgzMTgxMzRjM2I4M2QxNDJiNmNiYTJhOTdiMDIwNWU4NGJlNGUxNjAzOWU0ZWE4ZjQxOGM0ZjU1YTA2ICB0ZXN0cy9DTWFrZUxpc3RzLnR4dAogMGZmYjI1YTYwMjgyZTViOTFjNDgzYjc2N2MxYmViZjEzNmU2YjVjMTRlNDEyZGRjNGQwNTkwYTZkOTBkNTNhZSAgdGVzdHMvaHJiL2F1dGgtc3Bpa2UvUkVBRE1FLm1kCiA3Nzc1OGI5YTVmMGFlZDQ1MGRmNDgyMzZjNDEzMDE4OTczY2U3MDU0YzM4YzJmZWY4MzBmMmU3NjgyMmI0YmViICB0ZXN0cy9ocmIvYXV0aC1zcGlrZS9hYmlfcHJvYmUuY3BwCiBmMzVjMWUzZmJjZTYwZWZkNjU3MDEzZDRmZGQyNDBlNWQ3ZTQ0ZjU4OGQ4ODM0YzlhMmNkZTljMDkyOTVkM2ZlICB0ZXN0cy9ocmIvYXV0aC1zcGlrZS9pbnRlZ3JhdGlvbl9wcm9iZS5jcHAKQEAgLTQ5LDMgKzQ5LDUgQEAgYjQyMDU4NWI4Y2Y2ZmQ2YmExMzgwZmE4OTNmMWE1MDhjMGU0N2U1NDg5YzhjY2E4YWFlNTNhNDA2MDUxOWVjZiAgdGVzdHMvdW5pdC9wbGEKIGU1YTI0ZDBhZjhiYTg2MzZlNjEwMmQwMzFlMTY0MTlkNzc4YjMzYWZjNTRlYmQ0NmE3OGNmYjM4NjUwZmFkYTYgIHRvb2xzL3NlcnZlcmQvQ01ha2VMaXN0cy50eHQKIDM0MDJlYjNmYWNjZDJlYmM4YWIxMWE4ZTVkNGIyNGVjYjcwNjYxMWEyOGYwMjJjZGRkMmY2ZjFkZDdmNTFiMGQgIHRvb2xzL3NlcnZlcmQvYXV0aF93b3JrZXJfbWFpbi5jcHAKIGQxMTljNzFmZDhmMmJhYWNiNGFkYWMyMTQ4YmExMmY1MTM4MTg5ZGFmMTRjZmRhYmU2MDkyZDFhYzE3NTUzZmEgIHRvb2xzL3NlcnZlcmQvbWFpbi5jcHAKKzM1MjZjOGY4ZjU3MTA3MmM4MjI5YzAzNDUzMjlmMmM0MDE4ZDc0ZTEwNDljMzEwYWU2MGE0ZTJjZmQ0OTk1ODggIHNyYy9uZXR3b3JrL2F1dGhfc2lnbmFsX2RyYWluLmgKKzY0MzMxYjgxNWJmYjAyODNmYmFmMmVmNDcyZmVlOGM1Y2Q3NmM1ODMyYzliZWQ5ZjUyYWZiYjYxODE4MjdjNzggIHRlc3RzL3VuaXQvbmV0d29ya19hdXRoX3NpZ25hbF9kcmFpbl90ZXN0LmNwcApkaWZmIC0tZ2l0IGEvc3JjL25ldHdvcmsvYXV0aF9zaWduYWxfZHJhaW4uaCBiL3NyYy9uZXR3b3JrL2F1dGhfc2lnbmFsX2RyYWluLmgKbmV3IGZpbGUgbW9kZSAxMDA2NDQKaW5kZXggMDAwMDAwMDAuLjk2Y2YwOWQzCi0tLSAvZGV2L251bGwKKysrIGIvc3JjL25ldHdvcmsvYXV0aF9zaWduYWxfZHJhaW4uaApAQCAtMCwwICsxLDIwIEBACisjcHJhZ21hIG9uY2UKKyNpZm5kZWYgX1dJTjMyCisjaW5jbHVkZSA8c2lnbmFsLmg+CisKK25hbWVzcGFjZSBvcGVuYWRzOjpuZXR3b3JrOjpkZXRhaWwgeworLy8gVGhlIGNhbGxlciBibG9ja3Mgc2lnbmFsX251bWJlciB3aGlsZSB3cml0aW5nIHRvIHRoZSB3b3JrZXIgcGlwZS4KKy8vIFBPU0lYIHNpZ3BlbmRpbmcgKyBzaWd3YWl0IGFsc28gd29yayBvbiBtYWNPUywgdW5saWtlIHNpZ3RpbWVkd2FpdC4KK2lubGluZSBib29sIGRyYWluX2Jsb2NrZWRfc2lnbmFsKGludCBzaWduYWxfbnVtYmVyKSB7CisgICAgc2lnc2V0X3QgcGVuZGluZywgb25lOworICAgIHNpZ2VtcHR5c2V0KCZvbmUpOworICAgIHNpZ2FkZHNldCgmb25lLCBzaWduYWxfbnVtYmVyKTsKKyAgICBmb3IgKDs7KSB7CisgICAgICAgIGlmIChzaWdwZW5kaW5nKCZwZW5kaW5nKSAhPSAwKSByZXR1cm4gZmFsc2U7CisgICAgICAgIGlmIChzaWdpc21lbWJlcigmcGVuZGluZywgc2lnbmFsX251bWJlcikgIT0gMSkgcmV0dXJuIHRydWU7CisgICAgICAgIGludCByZWNlaXZlZCA9IDA7CisgICAgICAgIGlmIChzaWd3YWl0KCZvbmUsICZyZWNlaXZlZCkgIT0gMCkgcmV0dXJuIGZhbHNlOworICAgIH0KK30KK30KKyNlbmRpZgpkaWZmIC0tZ2l0IGEvc3JjL25ldHdvcmsvYXV0aF93b3JrZXIuY3BwIGIvc3JjL25ldHdvcmsvYXV0aF93b3JrZXIuY3BwCmluZGV4IDBhNGQxYmQxLi45OTI5YjQ5NCAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvYXV0aF93b3JrZXIuY3BwCisrKyBiL3NyYy9uZXR3b3JrL2F1dGhfd29ya2VyLmNwcApAQCAtOSw2ICs5LDcgQEAKICNkZWZpbmUgTk9NSU5NQVgKICNpbmNsdWRlIDx3aW5kb3dzLmg+CiAjZWxzZQorI2luY2x1ZGUgIm5ldHdvcmsvYXV0aF9zaWduYWxfZHJhaW4uaCIKICNpbmNsdWRlIDxzcGF3bi5oPgogI2luY2x1ZGUgPHVuaXN0ZC5oPgogI2luY2x1ZGUgPGZjbnRsLmg+CkBAIC0xNDEsNyArMTQyLDcgQEAgYm9vbCBBdXRoV29ya2VyOjpydW4oY29uc3Qgc3RkOjpzdHJpbmcmIGluLHN0ZDo6c3RyaW5nJiBvdXQsYm9vbCogY2FwYWNpdHlfYnVzeSkKICAgICAgICAgICAgIHN0ZDo6dGhpc190aHJlYWQ6OnNsZWVwX2ZvcihzdGQ6OmNocm9ubzo6bWlsbGlzZWNvbmRzKDIpKTsKICAgICAgICAgfQogICAgICAgICBpZighZXhpdGVkKXtraWxsKHBpZCxTSUdLSUxMKTt3aGlsZSh3YWl0cGlkKHBpZCwmc3RhdHVzLDApPDAmJmVycm5vPT1FSU5UUil7fX0KLSAgICAgICAgdGltZXNwZWMgemVyb3t9O3doaWxlKHNpZ3RpbWVkd2FpdCgmc2V0LG51bGxwdHIsJnplcm8pPj0wKXt9cHRocmVhZF9zaWdtYXNrKFNJR19TRVRNQVNLLCZvbGQsbnVsbHB0cik7CisgICAgICAgIGRldGFpbDo6ZHJhaW5fYmxvY2tlZF9zaWduYWwoU0lHUElQRSk7cHRocmVhZF9zaWdtYXNrKFNJR19TRVRNQVNLLCZvbGQsbnVsbHB0cik7CiAgICAgfQogICAgIGlmKGlwWzFdPj0wKWNsb3NlKGlwWzFdKTsKICAgICBjbG9zZShvcFswXSk7CmRpZmYgLS1naXQgYS90ZXN0cy9DTWFrZUxpc3RzLnR4dCBiL3Rlc3RzL0NNYWtlTGlzdHMudHh0CmluZGV4IGQ0ZDJlMWFhLi5iZDY4MTY3OSAxMDA2NDQKLS0tIGEvdGVzdHMvQ01ha2VMaXN0cy50eHQKKysrIGIvdGVzdHMvQ01ha2VMaXN0cy50eHQKQEAgLTI2OCw2ICsyNjgsNyBAQCBhZGRfZXhlY3V0YWJsZShvcGVuYWRzX3VuaXRfdGVzdHMKICAgICB1bml0L2FiaV9pbmRleF9jb2xsYXRpb25fcGVyc2lzdF90ZXN0LmNwcAogICAgIHVuaXQvbmV0d29ya19zb2NrZXRfdGVzdC5jcHAKICAgICB1bml0L25ldHdvcmtfYXV0aF9hdHRlbXB0X3Rlc3QuY3BwCisgICAgdW5pdC9uZXR3b3JrX2F1dGhfc2lnbmFsX2RyYWluX3Rlc3QuY3BwCiAgICAgdW5pdC9uZXR3b3JrX3NlcnZlcl90ZXN0LmNwcAogICAgIHVuaXQvbmV0d29ya19wb29sX3Rlc3QuY3BwCiAgICAgdW5pdC9uZXR3b3JrX2ZyYW1lX3JlYWRlcl90ZXN0LmNwcApkaWZmIC0tZ2l0IGEvdGVzdHMvdW5pdC9uZXR3b3JrX2F1dGhfc2lnbmFsX2RyYWluX3Rlc3QuY3BwIGIvdGVzdHMvdW5pdC9uZXR3b3JrX2F1dGhfc2lnbmFsX2RyYWluX3Rlc3QuY3BwCm5ldyBmaWxlIG1vZGUgMTAwNjQ0CmluZGV4IDAwMDAwMDAwLi42ZTQyOGRmNAotLS0gL2Rldi9udWxsCisrKyBiL3Rlc3RzL3VuaXQvbmV0d29ya19hdXRoX3NpZ25hbF9kcmFpbl90ZXN0LmNwcApAQCAtMCwwICsxLDMxIEBACisjaW5jbHVkZSAiZG9jdGVzdC5oIgorI2lmbmRlZiBfV0lOMzIKKyNpbmNsdWRlICJuZXR3b3JrL2F1dGhfc2lnbmFsX2RyYWluLmgiCisjaW5jbHVkZSA8cHRocmVhZC5oPgorI2luY2x1ZGUgPHNpZ25hbC5oPgorI2luY2x1ZGUgPHVuaXN0ZC5oPgorCitURVNUX0NBU0UoImF1dGggc2lnbmFsIGRyYWluIGlzIG5vbmJsb2NraW5nIHdoZW4gbm8gc2lnbmFsIGlzIHBlbmRpbmciKSB7CisgICAgc2lnc2V0X3Qgc2V0LCBvbGQsIHBlbmRpbmc7CisgICAgc2lnZW1wdHlzZXQoJnNldCk7c2lnYWRkc2V0KCZzZXQsU0lHUElQRSk7CisgICAgUkVRVUlSRShwdGhyZWFkX3NpZ21hc2soU0lHX0JMT0NLLCZzZXQsJm9sZCk9PTApOworICAgIENIRUNLKG9wZW5hZHM6Om5ldHdvcms6OmRldGFpbDo6ZHJhaW5fYmxvY2tlZF9zaWduYWwoU0lHUElQRSkpOworICAgIENIRUNLKHNpZ3BlbmRpbmcoJnBlbmRpbmcpPT0wKTsKKyAgICBDSEVDSyhzaWdpc21lbWJlcigmcGVuZGluZyxTSUdQSVBFKT09MCk7CisgICAgQ0hFQ0socHRocmVhZF9zaWdtYXNrKFNJR19TRVRNQVNLLCZvbGQsbnVsbHB0cik9PTApOworfQorCitURVNUX0NBU0UoImF1dGggc2lnbmFsIGRyYWluIGNvbnN1bWVzIGJyb2tlbi1waXBlIHNpZ25hbCBiZWZvcmUgcmVzdG9yaW5nIG1hc2siKSB7CisgICAgc2lnc2V0X3Qgc2V0LCBvbGQsIHBlbmRpbmc7CisgICAgc2lnZW1wdHlzZXQoJnNldCk7c2lnYWRkc2V0KCZzZXQsU0lHUElQRSk7CisgICAgUkVRVUlSRShwdGhyZWFkX3NpZ21hc2soU0lHX0JMT0NLLCZzZXQsJm9sZCk9PTApOworICAgIGludCBmZHNbMl07UkVRVUlSRShwaXBlKGZkcyk9PTApO2Nsb3NlKGZkc1swXSk7CisgICAgQ0hFQ0sod3JpdGUoZmRzWzFdLCJ4IiwxKT09LTEpO2Nsb3NlKGZkc1sxXSk7CisgICAgQ0hFQ0soc2lncGVuZGluZygmcGVuZGluZyk9PTApOworICAgIENIRUNLKHNpZ2lzbWVtYmVyKCZwZW5kaW5nLFNJR1BJUEUpPT0xKTsKKyAgICBDSEVDSyhvcGVuYWRzOjpuZXR3b3JrOjpkZXRhaWw6OmRyYWluX2Jsb2NrZWRfc2lnbmFsKFNJR1BJUEUpKTsKKyAgICBDSEVDSyhzaWdwZW5kaW5nKCZwZW5kaW5nKT09MCk7CisgICAgQ0hFQ0soc2lnaXNtZW1iZXIoJnBlbmRpbmcsU0lHUElQRSk9PTApOworICAgIENIRUNLKHB0aHJlYWRfc2lnbWFzayhTSUdfU0VUTUFTSywmb2xkLG51bGxwdHIpPT0wKTsKK30KKyNlbmRpZgo=''))
-
-        a=pathlib.Path(''src/network/auth_worker.cpp'').read_text();a=a[a.index(''#ifdef _WIN32'',a.index(''bool
-        AuthWorker::run'')):];a=a[:a.index(''\n#else'')]
-
-        subprocess.run([''git'',''apply'',''--check'',''portable.patch''],check=True);subprocess.run([''git'',''apply'',''portable.patch''],check=True)
-
-        b=pathlib.Path(''src/network/auth_worker.cpp'').read_text();b=b[b.index(''#ifdef _WIN32'',b.index(''bool
-        AuthWorker::run'')):];b=b[:b.index(''\n#else'')]
-
-        assert a==b,''Windows implementation changed''
+        pathlib.Path(''/tmp/fixture.patch'').write_bytes(base64.b64decode(''ZGlmZiAtLWdpdCBhL2RvY3MvTVRGSVg1MV9URVNURURfU09VUkNFX1NIQTI1Ni50eHQgYi9kb2NzL01URklYNTFfVEVTVEVEX1NPVVJDRV9TSEEyNTYudHh0CmluZGV4IDI4NDRkNjljLi5hMDM5MjEyMyAxMDA2NDQKLS0tIGEvZG9jcy9NVEZJWDUxX1RFU1RFRF9TT1VSQ0VfU0hBMjU2LnR4dAorKysgYi9kb2NzL01URklYNTFfVEVTVEVEX1NPVVJDRV9TSEEyNTYudHh0CkBAIC01MCw0ICs1MCw0IEBAIGU1YTI0ZDBhZjhiYTg2MzZlNjEwMmQwMzFlMTY0MTlkNzc4YjMzYWZjNTRlYmQ0NmE3OGNmYjM4NjUwZmFkYTYgIHRvb2xzL3NlcnZlcmQvCiAzNDAyZWIzZmFjY2QyZWJjOGFiMTFhOGU1ZDRiMjRlY2I3MDY2MTFhMjhmMDIyY2RkZDJmNmYxZGQ3ZjUxYjBkICB0b29scy9zZXJ2ZXJkL2F1dGhfd29ya2VyX21haW4uY3BwCiBkMTE5YzcxZmQ4ZjJiYWFjYjRhZGFjMjE0OGJhMTJmNTEzODE4OWRhZjE0Y2ZkYWJlNjA5MmQxYWMxNzU1M2ZhICB0b29scy9zZXJ2ZXJkL21haW4uY3BwCiAzNTI2YzhmOGY1NzEwNzJjODIyOWMwMzQ1MzI5ZjJjNDAxOGQ3NGUxMDQ5YzMxMGFlNjBhNGUyY2ZkNDk5NTg4ICBzcmMvbmV0d29yay9hdXRoX3NpZ25hbF9kcmFpbi5oCi02NDMzMWI4MTViZmIwMjgzZmJhZjJlZjQ3MmZlZThjNWNkNzZjNTgzMmM5YmVkOWY1MmFmYmI2MTgxODI3Yzc4ICB0ZXN0cy91bml0L25ldHdvcmtfYXV0aF9zaWduYWxfZHJhaW5fdGVzdC5jcHAKK2IxNTM1ZDFlMmVkZTNjN2EwNzlkNzBkM2M1YjQ0Yjg3YmZiYWE0YWQzMDBmM2VjZTY4YTk3NTMzZjU5MjBmNmMgIHRlc3RzL3VuaXQvbmV0d29ya19hdXRoX3NpZ25hbF9kcmFpbl90ZXN0LmNwcApkaWZmIC0tZ2l0IGEvdGVzdHMvdW5pdC9uZXR3b3JrX2F1dGhfc2lnbmFsX2RyYWluX3Rlc3QuY3BwIGIvdGVzdHMvdW5pdC9uZXR3b3JrX2F1dGhfc2lnbmFsX2RyYWluX3Rlc3QuY3BwCmluZGV4IDZlNDI4ZGY0Li5lYTFhYzE4NCAxMDA2NDQKLS0tIGEvdGVzdHMvdW5pdC9uZXR3b3JrX2F1dGhfc2lnbmFsX2RyYWluX3Rlc3QuY3BwCisrKyBiL3Rlc3RzL3VuaXQvbmV0d29ya19hdXRoX3NpZ25hbF9kcmFpbl90ZXN0LmNwcApAQCAtMTksNiArMTksMTEgQEAgVEVTVF9DQVNFKCJhdXRoIHNpZ25hbCBkcmFpbiBjb25zdW1lcyBicm9rZW4tcGlwZSBzaWduYWwgYmVmb3JlIHJlc3RvcmluZyBtYXNrIikKICAgICBzaWdzZXRfdCBzZXQsIG9sZCwgcGVuZGluZzsKICAgICBzaWdlbXB0eXNldCgmc2V0KTtzaWdhZGRzZXQoJnNldCxTSUdQSVBFKTsKICAgICBSRVFVSVJFKHB0aHJlYWRfc2lnbWFzayhTSUdfQkxPQ0ssJnNldCwmb2xkKT09MCk7CisgICAgLy8gQ0kgbGF1bmNoZXJzIG1heSBpbmhlcml0IFNJR19JR04uIFVzZSB0aGUgbm9ybWFsIGRpc3Bvc2l0aW9uIHNvIEVQSVBFCisgICAgLy8gbXVzdCBnZW5lcmF0ZSBhIHBlbmRpbmcgU0lHUElQRSwgdGhlbiByZXN0b3JlIHRoZSBpbmhlcml0ZWQgZGlzcG9zaXRpb24uCisgICAgc3RydWN0IHNpZ2FjdGlvbiBhY3Rpb257fSwgcHJldmlvdXN7fTsKKyAgICBhY3Rpb24uc2FfaGFuZGxlcj1TSUdfREZMO3NpZ2VtcHR5c2V0KCZhY3Rpb24uc2FfbWFzayk7CisgICAgUkVRVUlSRShzaWdhY3Rpb24oU0lHUElQRSwmYWN0aW9uLCZwcmV2aW91cyk9PTApOwogICAgIGludCBmZHNbMl07UkVRVUlSRShwaXBlKGZkcyk9PTApO2Nsb3NlKGZkc1swXSk7CiAgICAgQ0hFQ0sod3JpdGUoZmRzWzFdLCJ4IiwxKT09LTEpO2Nsb3NlKGZkc1sxXSk7CiAgICAgQ0hFQ0soc2lncGVuZGluZygmcGVuZGluZyk9PTApOwpAQCAtMjYsNiArMzEsNyBAQCBURVNUX0NBU0UoImF1dGggc2lnbmFsIGRyYWluIGNvbnN1bWVzIGJyb2tlbi1waXBlIHNpZ25hbCBiZWZvcmUgcmVzdG9yaW5nIG1hc2siKQogICAgIENIRUNLKG9wZW5hZHM6Om5ldHdvcms6OmRldGFpbDo6ZHJhaW5fYmxvY2tlZF9zaWduYWwoU0lHUElQRSkpOwogICAgIENIRUNLKHNpZ3BlbmRpbmcoJnBlbmRpbmcpPT0wKTsKICAgICBDSEVDSyhzaWdpc21lbWJlcigmcGVuZGluZyxTSUdQSVBFKT09MCk7CisgICAgQ0hFQ0soc2lnYWN0aW9uKFNJR1BJUEUsJnByZXZpb3VzLG51bGxwdHIpPT0wKTsKICAgICBDSEVDSyhwdGhyZWFkX3NpZ21hc2soU0lHX1NFVE1BU0ssJm9sZCxudWxscHRyKT09MCk7CiB9CiAjZW5kaWYK''))
 
         PYFIX
+
+        test "$(git rev-parse HEAD)" = f96e625cc671ded94e7e4415816fa09e68a1cce2
+
+        git apply --check /tmp/fixture.patch
+
+        git apply /tmp/fixture.patch
+
+        sha256sum -c docs/MTFIX51_TESTED_SOURCE_SHA256.txt
 
         git config user.name ''github-actions[bot]''
 
         git config user.email ''41898282+github-actions[bot]@users.noreply.github.com''
 
-        git add src/network/auth_worker.cpp src/network/auth_signal_drain.h tests/CMakeLists.txt tests/unit/network_auth_signal_drain_test.cpp
-        docs/MTFIX51_TESTED*
+        git add tests/unit/network_auth_signal_drain_test.cpp docs/MTFIX51_TESTED_SOURCE_SHA256.txt
 
-        git commit -m ''Use portable POSIX blocked-signal drain; preserve Windows auth worker''
+        git commit -m ''Set and restore SIGPIPE disposition in portable drain test''
 
         git push origin HEAD:refs/heads/merge/mtfix51-owner-tested
 
-        sha256sum -c docs/MTFIX51_TESTED_SOURCE_SHA256.txt
-
         '
-    - name: Reuse exact successful DLL build and proofs
-      shell: pwsh
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: '$ErrorActionPreference=''Stop''
-
-        gh run download 38919695226 --repo bedipritpal/OpenADS --name mtfix50-diagnostic-results --dir output
-
-        if($LASTEXITCODE -ne 0){throw ''build outputs download failed''}
-
-        Invoke-WebRequest ''https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix49-mutual-auth-test/mtfix49-mutual-auth-qt492-x86.zip''
-        -OutFile kit49.zip
-
-        if((Get-FileHash kit49.zip -Algorithm SHA256).Hash.ToLower() -ne ''0dcb6fecc720eb894639e8aeeb2d1c6c2898b1e5b4e9306d9bb5e03f91c0cbf7''){throw
-        ''49 kit hash mismatch''}
-
-        Expand-Archive kit49.zip -DestinationPath matrix-kit49
-
-        New-Item -ItemType Directory -Force kit,srv,mtdata,build-legacy/tools/serverd,matrix-client | Out-Null
-
-        Copy-Item matrix-kit49/mtfix49-mutual-auth/lib/* kit/
-
-        Copy-Item -Recurse matrix-kit49/mtfix49-mutual-auth/runtime-notices kit/
-
-        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/*.exe srv/
-
-        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/openads_auth_worker.exe build-legacy/tools/serverd/
-
-        Copy-Item output/openace32.dll srv/
-
-        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
-        -OutFile compiler.7z
-
-        & 7z x compiler.7z (''-o''+$env:RUNNER_TEMP+''/winlibs'') -y
-
-        if($LASTEXITCODE -ne 0){throw ''compiler extraction failed''}
-
-
-        exit 0
-
-        '
-    - name: Prepare same public V1 fixture and proof sources
-      shell: pwsh
-      run: "$ErrorActionPreference='Stop'\n[IO.File]::WriteAllBytes((Join-Path $PWD 'auth-probe.hrb'),[Convert]::FromBase64String('wEhSQgIAAwAAAE9BRFNfQVVUSF9WMQAFAUxFTgAAAlJFUExJQ0FURQAAAgEAAABPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbABAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALACAGoCAABcBAwCSG4H'))\n\
-        [IO.File]::WriteAllBytes((Join-Path $PWD 'fix-hrb-acl.cmd'),[Convert]::FromBase64String('QGVjaG8gb2ZmDQpzZXRsb2NhbCBEaXNhYmxlRGVsYXllZEV4cGFuc2lvbg0KcmVtIFRlc3QgZml4dHVyZSBvbmx5LiBOZXZlciBhcHBseSB0aGlzIGhlbHBlciB0byBhIHByb2R1Y3Rpb24gYXV0aCBtb2R1bGUuDQppZiAiJX4xIj09IiIgZ290byB1c2FnZQ0KaWYgbm90ICIlfjIiPT0iIiBnb3RvIHVzYWdlDQppZiAvSSBub3QgIiV+bngxIj09Im11dHVhbC10ZXN0LW9ubHkuaHJiIiAoDQogIGVjaG8gUmVmdXNlZDogb25seSBtdXR1YWwtdGVzdC1vbmx5LmhyYiBpcyBzdXBwb3J0ZWQuIDE+JjINCiAgZXhpdCAvYiAyDQopDQppZiBub3QgZXhpc3QgIiV+ZjEiICgNCiAgZWNobyBUZXN0IEhSQiBub3QgZm91bmQuIDE+JjINCiAgZXhpdCAvYiAyDQopDQppY2FjbHMgIiV+ZjEiIC9pbmhlcml0YW5jZTpyDQppZiBlcnJvcmxldmVsIDEgZXhpdCAvYiAxDQppY2FjbHMgIiV+ZjEiIC9ncmFudDpyICIlVVNFUkRPTUFJTiVcJVVTRVJOQU1FJTpSIg0KaWYgZXJyb3JsZXZlbCAxIGV4aXQgL2IgMQ0KZWNobyBBQ0wgY29tbWFuZHMgY29tcGxldGVkLiBSZS1ydW4gdGhlIHNlcnZlciBwcm9iZTsgcmVtYWluaW5nIGV4cGxpY2l0IGdyYW50cyBtYXkgc3RpbGwgYmUgcmVqZWN0ZWQuDQpleGl0IC9iIDANCjp1c2FnZQ0KZWNobyBVc2FnZTogZml4LWhyYi1hY2wuY21kICJwYXRoXG11dHVhbC10ZXN0LW9ubHkuaHJiIiAxPiYyDQpleGl0IC9iIDINCg=='))\n\
-        [IO.File]::WriteAllBytes((Join-Path $PWD 'mtfix50-client.patch'),[Convert]::FromBase64String('ZGlmZiAtLWdpdCBhL3NyYy9uZXR3b3JrL2NsaWVudC5jcHAgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCmluZGV4IGQ4ZDkyNGYxLi40YWM0YzI4NyAxMDA2NDQKLS0tIGEvc3JjL25ldHdvcmsvY2xpZW50LmNwcAorKysgYi9zcmMvbmV0d29yay9jbGllbnQuY3BwCkBAIC01MTcsOCArNTE3LDExIEBAIHV0aWw6OlJlc3VsdDxzdGQ6OnZlY3RvcjxzdGQ6OnVpbnQ4X3Q+PiBSZW1vdGVDb25uZWN0aW9uOjpiZWdpbl9hdXRoKHN0ZDo6dW5pcXVlCiAgICAgdHJhbnNwb3J0Xz1zdGQ6Om1vdmUodCk7YXV0aF9kaXJfPWRpcjsKICAgICBGcmFtZSBmO2Yub3Bjb2RlPU9wY29kZTo6QmVnaW5BdXRoO2YucGF5bG9hZC5hc3NpZ24oZGlyLmJlZ2luKCksZGlyLmVuZCgpKTsKICAgICBhdXRvIHJlcD1yZXF1ZXN0KGYpOwotICAgIGlmKCFyZXAgfHwgcmVwLnZhbHVlKCkub3Bjb2RlIT1PcGNvZGU6OkJlZ2luQXV0aEFjayB8fCByZXAudmFsdWUoKS5wYXlsb2FkLnNpemUoKSE9MzIpewotICAgICAgICB0cmFuc3BvcnRfLT5jbG9zZSgpO3JldHVybiB1dGlsOjpFcnJvcns1MDAwLDAsIkJlZ2luQXV0aCBmYWlsZWQiLCIifTsKKyAgICBpZighcmVwKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gcmVwLmVycm9yKCk7CisgICAgfQorICAgIGlmKHJlcC52YWx1ZSgpLm9wY29kZSE9T3Bjb2RlOjpCZWdpbkF1dGhBY2sgfHwgcmVwLnZhbHVlKCkucGF5bG9hZC5zaXplKCkhPTMyKXsKKyAgICAgICAgdHJhbnNwb3J0Xy0+Y2xvc2UoKTtyZXR1cm4gdXRpbDo6RXJyb3J7NTAwMCwwLCJCZWdpbkF1dGggcmVwbHkgaW52YWxpZCIsIiJ9OwogICAgIH0KICAgICBhdXRoX3BlbmRpbmdfPXRydWU7cmV0dXJuIHJlcC52YWx1ZSgpLnBheWxvYWQ7CiB9Cg=='))\n\
-        [IO.File]::WriteAllBytes((Join-Path $PWD 'root-table-matrix.cpp'),[Convert]::FromBase64String('I2luY2x1ZGUgImFjZS5oIgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxzdHJpbmc+CnZvaWQgZXJyb3IoY29uc3QgY2hhciogc3RhZ2UsVU5TSUdORUQzMiByYyl7VU5TSUdORUQzMiBjb2RlPTA7VU5TSUdORUQ4IG1bMTAyNF17fTtVTlNJR05FRDE2IG49MTAyMztBZHNHZXRMYXN0RXJyb3IoJmNvZGUsbSwmbik7c3RkOjpjb3V0PDxzdGFnZTw8Ij0iPDxyYzw8IiBFUlJPUj0iPDxtPDxzdGQ6OmVuZGw7fQppbnQgbWFpbihpbnQgYXJnYyxjaGFyKiogYXJndil7CiBpZihhcmdjIT00KXJldHVybiAyOwogQWRzU2V0U2VydmVyVHlwZShBRFNfUkVNT1RFX1NFUlZFUik7c3RkOjpjb3V0PDwiQVBQX1NFUlZFUl9UWVBFPUFEU19SRU1PVEVfU0VSVkVSICgyKSI8PHN0ZDo6ZW5kbDsKIHN0ZDo6c3RyaW5nIHVyaT1hcmd2WzFdLGZpbGU9YXJndlsyXTtBRFNIQU5ETEUgaD0wLHA9MCx0PTA7VU5TSUdORUQzMiByYz0wOwogaWYodXJpLnJmaW5kKCJhdXRoOi8vIiwwKT09MCl7VU5TSUdORUQ4IGNbMzJde307cmM9T0Fkc0JlZ2luQXV0aCh1cmkuY19zdHIoKSwmcCxjKTtlcnJvcigiQkVHSU4iLHJjKTtpZihyYylyZXR1cm4gMDtzdGQ6OnN0cmluZyBibG9iKHJlaW50ZXJwcmV0X2Nhc3Q8Y2hhcio+KGMpLDMyKTtibG9iKz0idGVzdC1vbmx5IjtyYz1PQWRzQ29tcGxldGVBdXRoKHAscmVpbnRlcnByZXRfY2FzdDxjb25zdCBVTlNJR05FRDgqPihibG9iLmRhdGEoKSksYmxvYi5zaXplKCksJmgpO2Vycm9yKCJDT01QTEVURSIscmMpO30KIGVsc2V7cmM9QWRzQ29ubmVjdDYwKHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4odXJpLmRhdGEoKSksQURTX1JFTU9URV9TRVJWRVIscmVpbnRlcnByZXRfY2FzdDxVTlNJR05FRDgqPihjb25zdF9jYXN0PGNoYXIqPigidXNyIikpLHJlaW50ZXJwcmV0X2Nhc3Q8VU5TSUdORUQ4Kj4oY29uc3RfY2FzdDxjaGFyKj4oInB3IikpLDAsJmgpO2Vycm9yKCJDT05ORUNUIixyYyk7fQogaWYocmMpcmV0dXJuIDA7CiBVTlNJR05FRDggZGVmW109IklELEMsODsiOwogcmM9QWRzQ3JlYXRlVGFibGUoaCxyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGZpbGUuZGF0YSgpKSxudWxscHRyLEFEU19DRFgsQURTX0FOU0ksQURTX1BST1BSSUVUQVJZX0xPQ0tJTkcsQURTX0lHTk9SRVJJR0hUUywwLGRlZiwmdCk7ZXJyb3IoIkNSRUFURSIscmMpOwogaWYoIXJjKXtBZHNDbG9zZVRhYmxlKHQpO3Q9MDtyYz1BZHNPcGVuVGFibGUoaCxyZWludGVycHJldF9jYXN0PFVOU0lHTkVEOCo+KGZpbGUuZGF0YSgpKSxudWxscHRyLEFEU19DRFgsQURTX0FOU0ksQURTX1BST1BSSUVUQVJZX0xPQ0tJTkcsQURTX0lHTk9SRVJJR0hUUywwLCZ0KTtlcnJvcigiT1BFTiIscmMpO2lmKCFyYyl7VU5TSUdORUQ4IGZbNDA5Nl17fTtVTlNJR05FRDE2IG49NDA5NTtyYz1BZHNHZXRUYWJsZUZpbGVuYW1lKHQsQURTX0ZVTExQQVRITkFNRSxmLCZuKTtzdGQ6OmNvdXQ8PCJUQUJMRV9GSUxFTkFNRT0iPDxmPDwiIFJDPSI8PHJjPDxzdGQ6OmVuZGw7QWRzQ2xvc2VUYWJsZSh0KTt9fQogQWRzRGlzY29ubmVjdChoKTtyZXR1cm4gMDsKfQo='))\n\
-        $path=(Resolve-Path auth-probe.hrb).Path\n$acl=New-Object System.Security.AccessControl.FileSecurity;$acl.SetAccessRuleProtection($true,$false)\n\
-        $me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User\nforeach($sid in @($me.Value,'S-1-5-18','S-1-5-32-544')){\n\
-        \ $id=New-Object System.Security.Principal.SecurityIdentifier($sid)\n $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,'Read','Allow');$acl.AddAccessRule($rule)\n\
-        }\nSet-Acl $path $acl\nCopy-Item auth-probe.hrb matrix-test-only.hrb\nSet-Acl matrix-test-only.hrb $acl\n\
-        Copy-Item output/openace32.dll matrix-client/\n& output/local_create.exe (Resolve-Path mtdata).Path\nif($LASTEXITCODE\
-        \ -ne 0){throw 'table fixture setup failed'}\n\nexit 0\n"
-    - name: Compile diagnostic import client
-      shell: bash
-      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ncat >\
-        \ output/auth-diagnostic.cpp <<'CPP'\n#include \"openads/ace.h\"\n#include <windows.h>\n#include <iostream>\n\
-        #include <string>\nint main(int n,char** v){\n if(n!=4)return 2;\n HMODULE m=GetModuleHandleA(\"openace32.dll\"\
-        );char path[32768]{};\n if(!m||!GetModuleFileNameA(m,path,sizeof(path)))return 3;\n std::cout<<\"LOADED-DLL=\"\
-        <<path<<std::endl;\n ADSHANDLE p=0;UNSIGNED8 c[32]{};auto rc=OAdsBeginAuth(v[1],&p,c);\n UNSIGNED32 code=0;UNSIGNED8\
-        \ msg[1024]{};UNSIGNED16 len=1023;\n if(rc)AdsGetLastError(&code,msg,&len);\n std::cout<<\"BEGIN=\"<<rc<<\"\
-        \ MESSAGE=\"<<msg<<std::endl;\n if(rc!=static_cast<UNSIGNED32>(std::stoul(v[2])))return 4;\n if(std::string(v[3])!=\"\
-        PASS\" && std::string(reinterpret_cast<char*>(msg)).find(v[3])==std::string::npos)return 5;\n if(p)OAdsCancelAuth(p);return\
-        \ 0;\n}\nCPP\ng++ -std=c++17 -static -static-libgcc -static-libstdc++ -Iinclude output/auth-diagnostic.cpp\
-        \ kit/libopenace32.dll.a -o output/auth-diagnostic.exe\nobjdump -p output/auth-diagnostic.exe > output/diagnostic-client-pe.txt\n\
-        grep -qi 'DLL Name: openace32.dll' output/diagnostic-client-pe.txt\n\ng++ -std=c++17 -static -static-libgcc\
-        \ -static-libstdc++ -Imatrix-kit49/mtfix49-mutual-auth/include root-table-matrix.cpp kit/libopenace32.dll.a\
-        \ -o matrix-client/root-table-matrix.exe\n"
-    - name: Rebuild corrected merge server with pinned GCC10.2 and unchanged Harbour
-      run: 'set -euxo pipefail
-
-        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
-
-        test "$(gcc -dumpversion)" = 10.2.0
-
-        find "$RUNNER_TEMP/winlibs" -iname ''*copying*'' -o -iname ''*license*'' | sort
-
-        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-server"
-
-        git -C "$RUNNER_TEMP/harbour-server" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
-
-        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
-
-        mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
-
-        HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
-
-        printf ''\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n'' >>
-        src/CMakeLists.txt
-
-        cmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static
-        -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON
-        -DOPENADS_VERSION_FORCE=1.09.74-mtfix51-legacy-root-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON
-        -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw"
-        -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
-
-        cmake --build build-legacy --target openads_serverd -j2
-
-        '
-      shell: bash
-    - name: Reuse exact newly compiled legacy candidate and compile focused unit runner
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\n# Test-fixture-only\
-        \ replacement: pinned GCC temp_directory_path also fails.\n# Product resolver and server remain byte-identical\
-        \ to the compiled candidate.\npython - <<'PYFIX'\nimport pathlib\nfor n in ['platform_path_test.cpp','fs_sandbox_test.cpp','file_jail_test.cpp']:\n\
-        \ p=pathlib.Path('tests/unit')/n\n p.write_text(p.read_text().replace('fs::temp_directory_path()', 'fs::path(\"\
-        C:/Temp/\")'))\nPYFIX\ng++ -std=c++17 -static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600 -Isrc\
-        \ -Ithird_party/doctest tests/unit/doctest_main.cpp tests/unit/platform_path_test.cpp tests/unit/fs_sandbox_test.cpp\
-        \ tests/unit/file_jail_test.cpp src/platform/path.cpp src/platform/fs_sandbox.cpp src/platform/file_win32.cpp\
-        \ src/platform/lock_win32.cpp -o output/mtfix51-path-tests.exe\n"
-    - name: Run focused Windows tests with native Windows temp setup
-      shell: pwsh
-      run: '$ErrorActionPreference=''Stop''
-
-        New-Item -ItemType Directory -Force C:/Temp | Out-Null
-
-        $env:TMP=''C:\Temp'';$env:TEMP=''C:\Temp'';$env:TMPDIR=''C:\Temp''
-
-        ./output/mtfix51-path-tests.exe | Tee-Object output/mtfix51-unit-proof.txt
-
-        if($LASTEXITCODE -ne 0){throw ''focused tests failed''}
-
-        '
-    - name: Prepare released comparison44 and unchanged49 worker
-      shell: pwsh
-      run: '$ErrorActionPreference=''Stop''
-
-        Invoke-WebRequest ''https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix44-static-auth-test/mtfix44-static-auth-qt492-x86.zip''
-        -OutFile mtfix44.zip
-
-        if((Get-FileHash mtfix44.zip).Hash.ToLower() -ne ''da56bd37dcf51997f339c4cff421fbcc3c2364b0f18a42f751bc12741cd1eb7e''){throw
-        ''44 hash mismatch''}
-
-        Expand-Archive mtfix44.zip comparison44
-
-        Copy-Item matrix-kit49/mtfix49-mutual-auth/bin/openads_auth_worker.exe build-legacy/tools/serverd/
-
-        exit 0
-
-        '
-    - name: Legacy root restoration strict parity containment and speed Windows proof
-      shell: pwsh
-      run: "$ErrorActionPreference='Stop'\n$servers=@(@('44',(Resolve-Path comparison44/mtfix44-static-auth/bin/openads_serverd.exe).Path),@('49',(Resolve-Path\
-        \ matrix-kit49/mtfix49-mutual-auth/bin/openads_serverd.exe).Path),@('51',(Resolve-Path build-legacy/tools/serverd/openads_serverd.exe).Path))\n\
-        $rows=@();$speed=@();$data='C:/Temp'\nNew-Item -ItemType Directory -Force $data,($data+'/Creative.acd'),($data+'/MyDataFolder/Creative.acd'),($data+'/MyDataFolder/MyDataFolder/Creative.acd'),'C:/Creative.acd','C:/mtfix51-outside'\
-        \ | Out-Null\ncmd /c 'mklink /J C:\\Temp\\outside-link C:\\mtfix51-outside'\nif($LASTEXITCODE -ne 0){throw\
-        \ 'junction fixture failed'}\ncmd /c 'mklink /J C:\\Temp\\inside-link C:\\Temp\\Creative.acd'\nif($LASTEXITCODE\
-        \ -ne 0){throw 'in-root junction fixture failed'}\nforeach($sv in $servers){foreach($legacy in @(0,1)){foreach($scheme\
-        \ in @('tcp','auth')){\n $case=$sv[0]+'-'+$legacy+'-'+$scheme\n $a='--host 127.0.0.1 --port 6262 --data\
-        \ C:/Temp --auth_user usr:pw';if($legacy -eq 1){$a+=' --legacy_paths'};if($scheme -eq 'auth'){$a+=' --auth_module\
-        \ \"'+(Resolve-Path auth-probe.hrb).Path+'\"'}\n $o='output/mtfix51-'+$case+'.out';$e='output/mtfix51-'+$case+'.err';$p=Start-Process\
-        \ $sv[1] -ArgumentList $a -WorkingDirectory (Split-Path $sv[1]) -RedirectStandardOutput $o -RedirectStandardError\
-        \ $e -PassThru\n try{\n  $ready=$false;for($i=0;$i -lt 100;$i++){if(Select-String $o -Pattern 'listening\
-        \ on' -Quiet){$ready=$true;break};if($p.HasExited){throw ('server exited '+(Get-Content $e -Raw))};Start-Sleep\
-        \ -Milliseconds 200};if(-not $ready){throw 'not listening'}\n  foreach($root in @('C:/','D:/','C:/Temp','C:/MyDataFolder','C:/../mtfix51-outside','C:/../../mtfix51-outside','../mtfix51-outside','C:/NotMapped','C:','C:/,D:/','')){\n\
-        \   Remove-Item 'C:/Temp/Creative.acd/x.dbf','C:/Temp/MyDataFolder/Creative.acd/x.dbf','C:/Temp/MyDataFolder/MyDataFolder/Creative.acd/x.dbf','C:/Creative.acd/x.dbf'\
-        \ -Force -ErrorAction SilentlyContinue\n   Get-ChildItem $data -Recurse -Filter 00001.dbf | Remove-Item\
-        \ -Force\n   $url=$scheme+'://127.0.0.1:6262/'+$root;$file='C:\\Creative.acd\\x.dbf';$watch=[Diagnostics.Stopwatch]::StartNew()\n\
-        \   $r=& matrix-client/root-table-matrix.exe $url $file 'C:/Temp/Creative.acd/x.dbf' 2>&1;$rc=$LASTEXITCODE;$watch.Stop();if($rc\
-        \ -ne 0){throw 'client crash'}\n   $text=$r -join \"`n\";$connected=($text -match '(CONNECT|COMPLETE)=0');$actual=@(Get-ChildItem\
-        \ $data -Recurse -Filter x.dbf | ForEach-Object {$_.FullName.Replace('\\','/')})\n   if($sv[0] -eq '51'\
-        \ -and $legacy -eq 1 -and $root -in @('C:/','D:/','C:/Temp')){\n    if(-not $connected -or $text -notmatch\
-        \ 'CREATE=0' -or $text -notmatch 'OPEN=0' -or $actual.Count -ne 1 -or $actual[0] -ine 'C:/Temp/Creative.acd/x.dbf'){throw\
-        \ ('legacy root failed '+$text+' '+($actual -join ';'))}\n   }\n   if($sv[0] -eq '51' -and $legacy -eq 0\
-        \ -and $root -eq 'C:/' -and $connected){throw 'strict root relaxed'}\n   if($root.Contains('..') -and $connected){throw\
-        \ 'traversal admitted'}\n   if(Test-Path 'C:/Creative.acd/x.dbf'){throw 'literal outside file created'}\n\
-        \   $row=@{version=$sv[0];legacy=$legacy;scheme=$scheme;root=$root;result=$text;actual=$actual;elapsed_ms=$watch.Elapsed.TotalMilliseconds};$rows+=$row\n\
-        \   \"SERVER=$($sv[0]) LEGACY=$legacy SCHEME=$scheme ROOT=$root\" | Tee-Object -FilePath output/mtfix51-results.txt\
-        \ -Append;$r | Tee-Object -FilePath output/mtfix51-results.txt -Append\n  }\n  if($sv[0] -eq '51'){\n  \
-        \ foreach($leaf in @('C:/outside-link/escape.dbf','C:/inside-link/escape.dbf','C:/outside-link/../Creative.acd/escape.dbf','C:/../mtfix51-outside/escape.dbf')){\n\
-        \    $url=$scheme+'://127.0.0.1:6262/'+$(if($legacy){'C:/'}else{'C:/Temp'})\n    $r=& matrix-client/root-table-matrix.exe\
-        \ $url $leaf 'C:/mtfix51-outside/escape.dbf' 2>&1\n    $t=$r -join \"`n\";if($t -match 'CREATE=0' -or (Test-Path\
-        \ 'C:/mtfix51-outside/escape.dbf')){throw ('jail escape '+$leaf+' '+$t)}\n    \"JAIL $case $leaf`n$t\" |\
-        \ Tee-Object output/mtfix51-jail-proof.txt -Append\n   }\n  }\n  if($sv[0] -in @('49','51') -and $legacy\
-        \ -eq 0 -and $scheme -eq 'tcp'){\n   foreach($i in 1..30){Remove-Item 'C:/Temp/Creative.acd/speed.dbf' -ErrorAction\
-        \ SilentlyContinue;$w=[Diagnostics.Stopwatch]::StartNew();$rr=& matrix-client/root-table-matrix.exe 'tcp://127.0.0.1:6262/C:/Temp'\
-        \ 'C:/Creative.acd/speed.dbf' 'C:/Temp/Creative.acd/speed.dbf' 2>&1;$w.Stop();if(($rr -join ' ') -notmatch\
-        \ 'OPEN=0'){throw 'speed control failed'};$speed+=@{version=$sv[0];iteration=$i;elapsed_ms=$w.Elapsed.TotalMilliseconds}}\n\
-        \  }\n }finally{if(-not $p.HasExited){$p.Kill();$p.WaitForExit()}}\n}}}\n$rows | ConvertTo-Json -Depth 5\
-        \ | Set-Content output/mtfix51-results.json -Encoding utf8\n$speed | ConvertTo-Json -Depth 5 | Set-Content\
-        \ output/mtfix51-speed.json -Encoding utf8\nforeach($row in @($rows | Where-Object {$_.version -eq '51'\
-        \ -and -not ($_.legacy -eq 1 -and $_.root -in @('C:/','D:/','C:/Temp','C:',''))})){\n $b=@($rows | Where-Object\
-        \ {$_.version -eq '49' -and $_.legacy -eq $row.legacy -and $_.scheme -eq $row.scheme -and $_.root -eq $row.root})[0]\n\
-        \ if($row.result -ne $b.result -or ($row.actual -join ';') -ne ($b.actual -join ';')){throw ('unexpected49\
-        \ parity change '+$row.root+' '+$row.result+' vs '+$b.result)}\n $c=@($rows | Where-Object {$_.version -eq\
-        \ '44' -and $_.legacy -eq $row.legacy -and $_.scheme -eq $row.scheme -and $_.root -eq $row.root})[0]\n if($b.result\
-        \ -ne $c.result){throw ('44/49 mismatch '+$row.root)}\n}\n'PASS: legacy self-root restored; strict policy\
-        \ unchanged;49 parity elsewhere; junction and traversal refusal' | Tee-Object -FilePath output/mtfix51-results.txt\
-        \ -Append\nexit 0\n"
-    - uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: mtfix51-windows-proof
-        path: 'output/
-
-          build-legacy/tools/serverd/openads_serverd.exe'
-    - uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: mtfix51-server-candidate
-        path: build-legacy/tools/serverd/openads_serverd.exe
   posix-drain:
-    needs: proof
-    if: always()
+    needs: fixture
     strategy:
       matrix:
         os:
@@ -271,11 +58,10 @@ jobs:
       with:
         ref: merge/mtfix51-owner-tested
     - name: Test portable signal drain with real broken pipe
-      shell: bash
       run: 'set -euxo pipefail
 
-        c++ -std=c++17 -pthread -Isrc -Ithird_party/doctest tests/unit/doctest_main.cpp tests/unit/network_auth_signal_drain_test.cpp
-        -o signal-drain-tests
+        c++ -std=c++17 -pthread -Isrc -Ithird_party/doctest tests/unit/doctest_main.cpp
+        tests/unit/network_auth_signal_drain_test.cpp -o signal-drain-tests
 
         ./signal-drain-tests
 

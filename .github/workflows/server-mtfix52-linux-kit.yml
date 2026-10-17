@@ -1,0 +1,251 @@
+name: MTFIX52 Linux x64 server kit from merged main
+
+# Builds the Linux x86_64 server package (Ubuntu 24.04) from merged main
+# commit 650ab997 (mtfix49-51 milestone plus the mtfix52 mutual auth V2
+# work), proves it with the full ctest suite, verifies the archive, and
+# publishes it as a prerelease. Same build recipe as the mtfix51 Linux kit,
+# plus the mock V2 auth module and a run script for the EC2 mock test.
+# Runs once when this file lands on the test branch.
+
+on:
+  push:
+    branches: [test/mtfix52-linux-server-kit]
+    paths: [.github/workflows/server-mtfix52-linux-kit.yml]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mtfix52-linux-kit
+  cancel-in-progress: false
+
+env:
+  KIT_TAG: v1.09.74-mtfix52-linux-test
+  KIT_VERSION: 1.09.74-mtfix52-linux-test
+  PINNED_SOURCE: 650ab997f388794325032ae5a366b5697935404e
+
+jobs:
+  build-prove-release:
+    name: Build, test, package, verify, prerelease
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.PINNED_SOURCE }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify pinned source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PINNED_SOURCE"
+          git log -1 --oneline
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      # Same Harbour UDF SDK as release.yml's Linux leg, same cache key.
+      - name: Cache Harbour SDK (Linux)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harbour-udf
+          key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+
+      - name: Provision Harbour SDK (Linux)
+        shell: bash
+        env:
+          HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+        run: |
+          set -e
+          HB="$RUNNER_TEMP/harbour-udf"
+          echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+          if [ -f "$HB/install/include/hbvm.h" ] &&              [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] &&              [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+            echo "Harbour SDK cached at $HB/install"
+          else
+            sudo apt-get update
+            sudo apt-get install -y build-essential libncurses-dev libx11-dev
+            rm -rf "$HB"
+            mkdir -p "$HB"
+            git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+            git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+            git -C "$HB/src" checkout "$HARBOUR_REF"
+            cd "$HB/src"
+            make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+          fi
+          HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+          HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+          HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+          echo "Harbour SDK layout:"
+          echo "  include: ${HB_INC:-MISSING}"
+          echo "  libdir:  ${HB_LIBDIR:-MISSING}"
+          echo "  compiler:${HB_CC:-MISSING}"
+          if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+            echo "::error::Harbour SDK layout unexpected"
+            exit 1
+          fi
+          {
+            echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+            echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+            echo "HARBOUR_COMPILER=$HB_CC"
+          } >> "$GITHUB_ENV"
+
+      # warnings-as-errors off: test-only spike probe abi_probe.cpp trips
+      # clang's -Wshorten-64-to-32; product sources stay byte-identical to
+      # the pinned main commit (same precedent as the mtfix51 Linux kit).
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+
+      - name: Build
+        run: cmake --build build/ninja-clang --config Release
+
+      - name: Test (full suite)
+        timeout-minutes: 30
+        run: ctest --test-dir build/ninja-clang --output-on-failure -C Release
+
+      - name: Write install note
+        shell: bash
+        run: |
+          cat > MTFIX52_LINUX_SERVER_TEST.md <<'NOTE'
+          # 1.09.74-mtfix52-linux-test - Linux x64 server kit from merged main
+
+          Built from fork main commit 650ab997f388794325032ae5a366b5697935404e
+          (current main: the mtfix49-51 milestone plus the mtfix52 mutual
+          auth V2 work, merged 2026-10-17). The full ctest suite passed on
+          ubuntu-24.04.
+
+          Kit contents: openads_serverd, openads_auth_worker, openads_bench,
+          libace64.so / libopenace64.so, openads.ini.sample, headers, contrib,
+          mutual-test-only.hrb (mock V2 auth module), run-mock-test.sh,
+          source-commit.txt, ldd-server.txt, ldd-worker.txt, SHA256SUMS.
+
+          Fresh-box install (Ubuntu 24.04 x86_64):
+
+          1. sudo apt-get update && sudo apt-get install -y libncurses6
+          2. sudo mkdir -p /openads-server && cd /openads-server
+          3. Download the tar.gz and its .sha256, then
+             sha256sum -c the .sha256 file.
+          4. tar xzf the tar.gz and cd into the extracted folder.
+          5. Start the mock V2 test server: ./run-mock-test.sh
+             The banner must show OpenADS 1.09.74-mtfix52-linux-test
+             listening on 127.0.0.1:6262.
+          6. First run copies openads.ini.sample to openads.ini and sets
+             legacy_paths = 1 so Vouch URLs with C:/ roots resolve. To
+             reach the server from another machine, set host = 0.0.0.0 in
+             openads.ini and open TCP 6262 in the box firewall and the EC2
+             security group.
+          7. Vouch login, same call as the Windows mtfix52 mock test:
+             V2LoginMock("auth://BOX-IP:6262/C:/", "fixture-firm", "C:/", @s_hConn)
+             Use 127.0.0.1 as BOX-IP when testing on the box itself.
+
+          Nothing here touches the Lightsail box or any running server.
+          NOTE
+
+      - name: Write mock module and run script
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "wEhSQgIACAAAAEFVVEgABQFPQURTX0FVVEhfVjEAAQFPQURTX0FVVEhfU0VSVkVSX1YyAAEBTEVOAAACTEVGVAAAAkhCX0hNQUNfU0hBMjU2AAACT0FEU19BVVRIX1ZFUklGWV9WMgABAVNVQlNUUgAAAgQAAABBVVRIAAEAAAAHT0FEU19BVVRIX1YxABYAAAANAAMkBwBqDE9BVVRIAQAAAAAAAG4HT0FEU19BVVRIX1NFUlZFUl9WMgCIAAAADQADJAoAsAMAXwEMAVwgRR8isAQAXwJcEQwCahJPcGVuQURTLW11dHVhbC12MgBFHAokCwBqAQBuByQNAGoIU0VSVkVSOgCwBQBqCHNlcnZlcgAAXwJIailPcGVuQURTLXB1YmxpYy1tb2NrLXYyLU5PVC1BLUxJQ0VOU0UtS0VZAHgMA0huB09BRFNfQVVUSF9WRVJJRllfVjIA4wAAAA0DAyQPAGoIQ0xJRU5UOgCwBQBqCGNsaWVudAAAXwJIailPcGVuQURTLXB1YmxpYy1tb2NrLXYyLU5PVC1BLUxJQ0VOU0UtS0VZAHgMA0hQBCQQAHlQBSQRALADAF8BDAFcIEUfE7ADAF8DDAGwAwBfBAwBRRwLJBIAsAEAFAAHJBQAeqVQBhkoJBUAsAcAXwNfBnoMA7AHAF8EXwZ6DANFHAgkFgCuBQAkFACvBgCwAwBfBAwBDxzSJBkAXwV5RRwLJBoAsAEAFAAHJBwAahFPQVVUSAEBAwB1c3ICAHB3AG4H" | base64 -d > mutual-test-only.hrb
+          chmod 600 mutual-test-only.hrb
+          cat > run-mock-test.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          # Starts the mtfix52 test server with the mock V2 auth module,
+          # same drill as the Windows mtfix52 mock test: mock module plus
+          # the additive CLI user usr:pw on port 6262.
+          set -euo pipefail
+          cd "$(dirname "$0")"
+          chmod 600 mutual-test-only.hrb
+          if [ ! -f openads.ini ]; then
+            cp openads.ini.sample openads.ini
+            sed -i 's/^# legacy_paths = 0/legacy_paths = 1/' openads.ini
+          fi
+          ulimit -n 65535 2>/dev/null || true
+          exec ./openads_serverd --config ./openads.ini --http_port 0 --auth_module "$PWD/mutual-test-only.hrb" --auth_user usr:pw
+          SCRIPT
+          chmod 755 run-mock-test.sh
+
+      - name: Stage kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="openads-$KIT_VERSION-linux-x64"
+          B=build/ninja-clang
+          mkdir -p "$STAGE"
+          for f in "$B"/src/libopenace64.*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
+          cp "$B"/tools/serverd/openads_serverd "$STAGE/"
+          cp "$B"/tools/serverd/openads_auth_worker "$STAGE/"
+          cp "$B"/tools/bench/openads_bench "$STAGE/"
+          cp LICENSE NOTICE README.md openads.ini.sample MTFIX52_LINUX_SERVER_TEST.md "$STAGE/"
+          cp mutual-test-only.hrb run-mock-test.sh "$STAGE/"
+          mkdir -p "$STAGE/include/openads"
+          cp include/openads/ace.h "$STAGE/include/ace.h"
+          cp include/openads/ace.h include/openads/error.h include/openads/openads_sql.h include/openads/platform.h include/openads/version.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/oads_hb.c contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md "$STAGE/contrib/oads_hb/"
+          echo "$PINNED_SOURCE" > "$STAGE/source-commit.txt"
+          ldd "$STAGE/openads_serverd" > "$STAGE/ldd-server.txt"
+          ldd "$STAGE/openads_auth_worker" > "$STAGE/ldd-worker.txt"
+          (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
+          tar czf "$STAGE.tar.gz" "$STAGE"
+          sha256sum "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
+          cat "$STAGE.tar.gz.sha256"
+
+      - name: Verify package
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="openads-$KIT_VERSION-linux-x64"
+          tar tzf "$STAGE.tar.gz" > listing.txt
+          for req in openads_serverd openads_auth_worker openads_bench libace64.so libopenace64.so openads.ini.sample source-commit.txt MTFIX52_LINUX_SERVER_TEST.md mutual-test-only.hrb run-mock-test.sh SHA256SUMS LICENSE NOTICE README.md; do
+            grep -q "/$req$" listing.txt || { echo "::error::missing $req in archive"; exit 1; }
+          done
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar xzf "$STAGE.tar.gz" -C /tmp/verify
+          V="/tmp/verify/$STAGE"
+          (cd "$V" && sha256sum -c SHA256SUMS >/dev/null && echo "SHA256SUMS ok")
+          "$V/openads_serverd" --version | tee server-version.txt
+          grep -q "$KIT_VERSION" server-version.txt
+          grep -aq "$KIT_VERSION" "$V/libopenace64.so"
+          # Mock module byte check against the Windows mtfix52 kit module.
+          test "$(sha256sum "$V/mutual-test-only.hrb" | cut -d' ' -f1)" = "$(sha256sum mutual-test-only.hrb | cut -d' ' -f1)"
+          # Auth worker probe: one byte P must print READY (or READY2).
+          "$HARBOUR_COMPILER" -gh -o/tmp/test_only.hrb tests/hrb/auth-spike/test_only.prg
+          # Worker refuses a group/other-readable module by design; lock it.
+          chmod 600 /tmp/test_only.hrb
+          probe="$(printf 'P' | "$V/openads_auth_worker" /tmp/test_only.hrb)"
+          echo "worker probe: $probe"
+          [[ "$probe" == READY* ]]
+          # Record the glibc ceiling for the target (Ubuntu 24.04) platform.
+          echo "Max GLIBC referenced:"
+          for b in "$V/openads_serverd" "$V/openads_auth_worker" "$V/libopenace64.so"; do
+            echo "$b: $(objdump -T "$b" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)"
+          done
+
+      - name: Create tag and prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="openads-$KIT_VERSION-linux-x64"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          if ! git ls-remote --tags origin "refs/tags/$KIT_TAG" | grep -q .; then
+            git tag "$KIT_TAG" "$PINNED_SOURCE"
+            git push origin "refs/tags/$KIT_TAG"
+          fi
+          if gh release view "$KIT_TAG" >/dev/null 2>&1; then
+            gh release upload "$KIT_TAG" "$STAGE.tar.gz" "$STAGE.tar.gz.sha256" MTFIX52_LINUX_SERVER_TEST.md --clobber
+            gh release edit "$KIT_TAG" --notes-file MTFIX52_LINUX_SERVER_TEST.md
+          else
+            gh release create "$KIT_TAG" --target "$PINNED_SOURCE" --prerelease --latest=false               --title "$KIT_VERSION - Linux x64 server kit (merged main incl mtfix52 V2)"               --notes-file MTFIX52_LINUX_SERVER_TEST.md               "$STAGE.tar.gz" "$STAGE.tar.gz.sha256" MTFIX52_LINUX_SERVER_TEST.md
+          fi
+          gh release view "$KIT_TAG" --json tagName,isPrerelease,url,assets

@@ -1,0 +1,24 @@
+name: adsgetversion probe
+on:
+  push:
+    branches:
+      - test/adsgetversion-probe
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: download mtfix52 kit
+        shell: pwsh
+        run: |
+          curl -sL -o k.zip "https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix52-mutual-auth-test/mtfix52-mutual-auth-qt492-x86.zip"
+          Expand-Archive k.zip k -Force
+      - name: probe in 32-bit powershell
+        shell: pwsh
+        run: |
+          $dll = (Get-ChildItem -Recurse k -Filter openace32.dll | Select-Object -First 1).FullName
+          $dir = Split-Path $dll -Parent
+          Write-Host "DLL under test: $dll"
+          Write-Host ("sha256: " + (Get-FileHash $dll -Algorithm SHA256).Hash)
+          $ps32 = "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+          if (Test-Path $ps32) { & $ps32 -NoProfile -ExecutionPolicy Bypass -File tools\probe-adsgetversion.ps1 -DllDir $dir } else { Write-Host "NO 32-bit PowerShell on runner" }

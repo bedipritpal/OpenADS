@@ -3,7 +3,6 @@ $dll = (Get-ChildItem -Recurse k -Filter openace32.dll | Select-Object -First 1)
 $bin = Split-Path $dll
 Write-Host "DLL under test: $dll"
 Write-Host "sha256: $((Get-FileHash $dll -Algorithm SHA256).Hash)"
-# add bin dir to PATH so transitive deps resolve, set Win32 CWD, preload
 $env:PATH = "$bin;$env:PATH"
 [Environment]::CurrentDirectory = $bin
 $src = @"
@@ -11,34 +10,34 @@ using System;
 using System.Text;
 using System.Runtime.InteropServices;
 public static class AceProbe {
-  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-  static extern IntPtr LoadLibraryW(string lpFileName);
-  [DllImport("kernel32.dll", SetLastError=true)]
-  static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+  // REAL signature from include/openads/ace.h (cdecl in implementation TU):
+  // UNSIGNED32 AdsGetVersion(UNSIGNED32* pulMajor, UNSIGNED32* pulMinor,
+  //                          UNSIGNED8* pucLetter, UNSIGNED8* pucDesc,
+  //                          UNSIGNED16* pusDescLen)
   [DllImport("openace32.dll", EntryPoint="AdsGetVersion", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
-  static extern uint AdsGetVersion(StringBuilder desc, ref ushort usLen, ref ushort maj, ref ushort min, ref ushort letter);
+  static extern uint AdsGetVersion(ref uint maj, ref uint min, ref byte letter,
+                                   [MarshalAs(UnmanagedType.LPStr)] StringBuilder desc, ref ushort descLen);
   public static int Run() {
-    IntPtr h = LoadLibraryW("$($dll -replace '\\','\\')");
-    if (h == IntPtr.Zero) { Console.WriteLine("LoadLibrary FAILED err=" + Marshal.GetLastWin32Error()); return 2; }
-    Console.WriteLine("LoadLibrary OK handle=" + h.ToString("X"));
-    IntPtr p = GetProcAddress(h, "AdsGetVersion");
-    Console.WriteLine(p == IntPtr.Zero ? "GetProcAddress AdsGetVersion MISSING" : "GetProcAddress OK");
+    uint maj = 999, min = 999; byte letter = 0x3F; ushort descLen = 128;
     var sb = new StringBuilder(128);
-    ushort usLen = 128, maj = 99, min = 99, letter = 88;
-    uint rc = AdsGetVersion(sb, ref usLen, ref maj, ref min, ref letter);
+    uint rc = AdsGetVersion(ref maj, ref min, ref letter, sb, ref descLen);
     Console.WriteLine("RC=" + rc);
     Console.WriteLine("MAJ=" + maj + " MIN=" + min + " LETTER=" + letter + " (" + (char)letter + ")");
-    Console.WriteLine("USLEN=" + usLen);
-    Console.WriteLine("DESC=[" + sb.ToString() + "]");
-    if (maj == 0 && min == 0) { Console.WriteLine("WRAPPER-WOULD-RETURN=c1.9a (numbers zero, desc-parse fallback impossible? no: desc parse)"); }
+    Console.WriteLine("DESCLEN-AFTER=" + descLen);
+    string desc = sb.ToString();
+    Console.WriteLine("DESC=[" + desc + "]");
+    // exact wrapper emulation (oads_hb.c OADS_ADSVERSION)
+    if (desc.StartsWith("OpenADS ")) {
+      string tok = desc.Substring(8);
+      int sp = tok.IndexOf(' ');
+      if (sp > 0) tok = tok.Substring(0, sp);
+      Console.WriteLine("WRAPPER-WOULD-RETURN=[" + tok + "]");
+    } else {
+      Console.WriteLine("WRAPPER-WOULD-RETURN=[" + maj + "." + min + (char)letter + "]  (fallback path)");
+    }
     return 0;
   }
 }
 "@
 Add-Type -TypeDefinition $src -Language CSharp
 [AceProbe]::Run()
-# wrapper emulation: parse desc
-$dllBytes = [System.IO.File]::ReadAllBytes($dll)
-$txt = [System.Text.Encoding]::ASCII.GetString($dllBytes)
-$m = [regex]::Match($txt, 'OpenADS [0-9]+\.[0-9]+\.[0-9]+')
-Write-Host ("STRING-IN-DLL: " + $(if ($m.Success) { $m.Value } else { 'NONE' }))

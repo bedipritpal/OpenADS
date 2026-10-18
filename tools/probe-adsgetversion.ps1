@@ -1,5 +1,18 @@
 param([string]$DllDir = ".")
 Push-Location $DllDir
+Write-Host ("Is64BitProcess=" + [Environment]::Is64BitProcess)
+Write-Host ("cwd=" + (Get-Location).Path)
+Write-Host ("dll exists=" + (Test-Path ".\openace32.dll"))
+Add-Type -Namespace K -Name L -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern System.IntPtr LoadLibrary(string p); [DllImport("kernel32.dll")] public static extern bool FreeLibrary(System.IntPtr h);'
+$full = (Resolve-Path ".\openace32.dll").Path
+Write-Host ("full path=" + $full)
+$h = [K.L]::LoadLibrary($full)
+if ($h -eq [System.IntPtr]::Zero) {
+  Write-Host ("LoadLibrary FAILED err=" + [System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
+} else {
+  Write-Host "LoadLibrary OK"
+  [K.L]::FreeLibrary($h) | Out-Null
+}
 $src = @"
 using System;
 using System.Runtime.InteropServices;

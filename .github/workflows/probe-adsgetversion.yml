@@ -13,11 +13,18 @@ jobs:
         run: |
           curl -sL -o k.zip "https://github.com/bedipritpal/OpenADS/releases/download/v1.09.74-mtfix52-mutual-auth-test/mtfix52-mutual-auth-qt492-x86.zip"
           Expand-Archive k.zip k -Force
+      - name: fetch matching mingw runtime
+        shell: pwsh
+        run: |
+          Invoke-WebRequest 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+          if ((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907') { throw 'Winlibs hash mismatch' }
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y | Out-Null
       - name: probe in 32-bit powershell
         shell: pwsh
         run: |
           $dll = (Get-ChildItem -Recurse k -Filter openace32.dll | Select-Object -First 1).FullName
           $dir = Split-Path $dll -Parent
+          Copy-Item "$env:RUNNER_TEMP/winlibs/mingw32/bin/libgcc_s_dw2-1.dll" $dir
           Write-Host "DLL under test: $dll"
           Write-Host ("sha256: " + (Get-FileHash $dll -Algorithm SHA256).Hash)
           $ps32 = "$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"

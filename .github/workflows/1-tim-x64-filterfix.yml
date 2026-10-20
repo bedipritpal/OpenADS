@@ -1,0 +1,103 @@
+name: Tim x64 filter and SetField fix test kit
+'on':
+  push:
+    branches: [test/tim-set-filter-fixes]
+    paths: ['.github/workflows/*tim-x64-filterfix.yml']
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  x64kit:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: test/tim-set-filter-fixes
+    - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
+      shell: pwsh
+      run: |
+        Invoke-WebRequest 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z' -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs64.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs x64 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs64.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
+    - name: Build Harbour (x64) and the x64 engine, DLL, server and auth worker
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        gcc -dumpmachine
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-x64"
+        git -C "$RUNNER_TEMP/harbour-x64" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+        export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-x64" -j2
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-x64")"
+        ls "$HB/lib/win/" || true
+        HBLIB="$RUNNER_TEMP/harbour-x64/lib/win/mingw64"
+        HBBIN="$RUNNER_TEMP/harbour-x64/bin/win/mingw64"
+        test -f "$HBBIN/harbour.exe"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        cmake -S . -B build-x64 -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
+          -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+          -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON \
+          -DOPENADS_VERSION_FORCE=1.09.74-tim-x64-filterfix-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF \
+          -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$(cygpath -m "$HBBIN")/harbour.exe" \
+          -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$(cygpath -m "$HBLIB")" \
+          -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
+          -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-x64 --target openads_ace openads_serverd openads_auth_worker -j2
+        find build-x64 -name '*.dll' -o -name '*.exe' -o -name '*.dll.a' | sort
+    - name: Verify the binaries are 64-bit and the server starts
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        mkdir -p output
+        for f in build-x64/src/openace64.dll build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe; do
+          test -f "$f"
+          objdump -f "$f" | tee -a output/pe-check.txt
+          objdump -f "$f" | grep -q 'pei-x86-64'
+        done
+        build-x64/tools/serverd/openads_serverd.exe --help > output/serverd-help.txt 2>&1 || true
+        head -5 output/serverd-help.txt
+    - name: Package x64 test kit
+      shell: bash
+      run: |
+        set -euxo pipefail
+        D=delivery/tim-x64-filterfix
+        mkdir -p $D/bin $D/lib $D/include $D/docs
+        cp build-x64/src/openace64.dll build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe $D/bin/
+        cp build-x64/src/*.dll.a $D/lib/ 2>/dev/null || true
+        cp include/openads/ace.h $D/include/
+        cp output/pe-check.txt output/serverd-help.txt $D/docs/
+        git rev-parse HEAD > $D/docs/source-commit.txt
+        cat > $D/docs/README.txt <<'NOTES'
+        OPENADS X64 TEST KIT for Tim Stone (test branch test/tim-set-filter-fixes, not main).
+        Windows x64, built with Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit).
+        Contains: SetFilter / AOF fixes, and SetField now returns the real engine error
+        code instead of a fixed 5035 (wire format unchanged).
+        Server: bin/openads_serverd.exe (keep openads_auth_worker.exe beside it).
+        Client DLL: bin/openace64.dll. Not for production.
+        Linux unit suite was run on the same source; this Windows build runs no unit suite.
+        NOTES
+        find $D -type f -exec sha256sum {} \; > delivery/SHA256.txt
+        7z a -tzip tim-x64-filterfix-x64.zip ./delivery/*
+    - name: Publish prerelease
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euxo pipefail
+        sha=$(git rev-parse HEAD)
+        gh release create v1.09.74-tim-x64-filterfix-test tim-x64-filterfix-x64.zip --target "$sha" --prerelease --title 'OpenADS Tim x64 filter and SetField test' --notes 'Windows x64 test kit from branch test/tim-set-filter-fixes (SetFilter/AOF fixes, SetField returns the real engine error instead of fixed 5035). GCC 10.2 x86_64. Built, not unit-tested on Windows. Test only, not main.'
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        if-no-files-found: warn
+        name: tim-x64-proof
+        path: |
+          output/
+          tim-x64-filterfix-x64.zip
+        retention-days: 14

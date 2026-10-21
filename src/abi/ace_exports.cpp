@@ -12166,6 +12166,16 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         cli_trace_tbl(ri->parent, "AdsSkip(idx)", "rows=%d", (int)lRows);
         openads::network::RemoteTable* rt = ri->parent;
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
+        // A pair-certified GotoTop/GotoBottom moved only the client: the
+        // server cursor still sits at the boundary the pair was fetched
+        // from. Anchor it on the client-visible row first, as the natural
+        // Skip path does, or Skip(-1) after GoTop+GoBottom walks from the
+        // top and reports BOF.
+        if (rt != nullptr && rt->conn != nullptr && rt->pair_local_position &&
+            rt->row_valid && rt->current_recno != 0) {
+            auto ar = rt->conn->goto_record(rt, rt->current_recno);
+            if (!ar) return fail(ar.error());
+        }
         const std::uint32_t rec_before =
             (rt != nullptr && rt->row_valid) ? rt->current_recno : 0u;
         const bool row_valid_before = rt != nullptr && rt->row_valid;
@@ -12196,7 +12206,10 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         // Cached boundary landings/read-ahead can leave the physical server
         // cursor elsewhere. Clearing the order also drops their lag, so
         // anchor a direct natural Skip at the client-visible physical row.
-        if ((natural_transition || (rt->server_order_id == 0 && rt->pair_local_position)) &&
+        // pair_local_position alone is enough: server_order_id can still be
+        // kOrderUnknown here (table handle never given an explicit order),
+        // and GotoRecord repositions both the engine table and the twin.
+        if ((natural_transition || rt->pair_local_position) &&
             natural_anchor != 0) {
             auto r = rt->conn->goto_record(rt, natural_anchor);
             if (!r) return fail(r.error());
@@ -22366,8 +22379,7 @@ UNSIGNED32 ENTRYPOINT AdsClearFilter(ADSHANDLE hTable) {
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-    t->set_filter(nullptr);
-    t->set_filter_expr("");
+    t->clear_filter();   // also drops a filter-built bitmap / recno sequence
     return ok();
 }
 
@@ -39724,7 +39736,30 @@ UNSIGNED32 ENTRYPOINT AdsSetFilter(ADSHANDLE hTable, UNSIGNED8* pucFilter) {
     }
     Table* t = get_table(hTable);
     if (t == nullptr) return fail(openads::AE_INTERNAL_ERROR, "no table");
-    t->set_filter_expr(openads::abi::to_internal(pucFilter, 0));
+    const std::string fexpr = openads::abi::to_internal(pucFilter, 0);
+    t->set_filter_expr(fexpr);
+    // A non-empty filter must hide the rows it rejects (SET OPTIMIZE OFF
+    // path in rddads goes through here). Evaluate it once per record into a
+    // bitmap and install it like an AOF result, so goto_top / goto_bottom /
+    // skip honour it in natural and index order alike. Single filter slot:
+    // like AdsSetAOF, this replaces any filter already set on the table.
+    bool blank = true;
+    for (char ch : fexpr) if (ch != ' ' && ch != '\t') { blank = false; break; }
+    if (!blank) {
+        const std::uint32_t n = t->record_count();
+        const bool saved_pos = !t->bof() && !t->eof();
+        const std::uint32_t saved_recno = t->recno();
+        t->set_filter(nullptr);
+        t->clear_recno_sequence();
+        std::vector<bool> bm(n, false);
+        for (std::uint32_t r = 1; r <= n; ++r) {
+            if (!t->goto_record(r)) continue;
+            bm[r - 1] = openads::engine::evaluate_index_expr_truthy(*t, fexpr);
+        }
+        t->install_aof_bitmap(std::move(bm));
+        if (saved_pos && saved_recno != 0)
+            (void)t->goto_record(saved_recno);
+    }
     return ok();
 }
 UNSIGNED32 ENTRYPOINT AdsSetFilter100(ADSHANDLE hTable, void* pvFilter,

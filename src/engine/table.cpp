@@ -532,7 +532,57 @@ bool Table::key_in_bottom_scope_(const std::string& key) const {
     return key <= bottom;
 }
 
+// An AOF walks recno_sequence_, which install_aof_bitmap() builds in record
+// order. With an index order active the visible rows must come back in INDEX
+// order (SAP ADS behaviour). Re-sort the sequence on first navigation after
+// the AOF or the order changed, keeping the cursor on the current record.
+void Table::sync_aof_sequence_order_() {
+    if (!aof_active_ || !recno_sequence_active_) return;
+    const void* key = (order_ && order_->index())
+        ? static_cast<const void*>(order_->index()) : nullptr;
+    const bool desc = key != nullptr && order_->descending_traverse();
+    if (aof_seq_order_built_ && key == aof_seq_order_key_ &&
+        desc == aof_seq_order_desc_) return;
+    std::vector<std::uint32_t> seq;
+    if (key == nullptr) {
+        for (std::size_t i = 0; i < aof_bitmap_.size(); ++i)
+            if (aof_bitmap_[i]) seq.push_back(static_cast<std::uint32_t>(i + 1));
+    } else {
+        auto* idx = order_->index();
+        seq.reserve(recno_sequence_.size());
+        auto r = idx->seek_first();
+        while (r && r.value().positioned) {
+            const std::uint32_t rn = r.value().recno;
+            if (rn >= 1 && rn <= aof_bitmap_.size() && aof_bitmap_[rn - 1])
+                seq.push_back(rn);
+            r = idx->next();
+        }
+        if (!r) return;   // index unreadable: keep the record-order sequence
+        idx->invalidate_cursor();
+        if (desc) std::reverse(seq.begin(), seq.end());
+        // A conditional (FOR) or partial tag does not hold every row. The
+        // AOF set must not shrink because of the order: rows the index lacks
+        // follow the indexed ones, in record order.
+        std::vector<bool> seen(aof_bitmap_.size(), false);
+        for (auto rn : seq) seen[rn - 1] = true;
+        for (std::size_t i = 0; i < aof_bitmap_.size(); ++i)
+            if (aof_bitmap_[i] && !seen[i])
+                seq.push_back(static_cast<std::uint32_t>(i + 1));
+    }
+    recno_sequence_ = std::move(seq);
+    aof_seq_order_built_ = true;
+    aof_seq_order_key_   = key;
+    aof_seq_order_desc_  = desc;
+    sequence_idx_ = -1;
+    if (state_ == State::Positioned && recno_ != 0) {
+        auto it = std::find(recno_sequence_.begin(), recno_sequence_.end(), recno_);
+        if (it != recno_sequence_.end())
+            sequence_idx_ = static_cast<std::int64_t>(it - recno_sequence_.begin());
+    }
+}
+
 void Table::set_recno_sequence(std::vector<std::uint32_t> seq) {
+    aof_seq_order_built_ = false;
     recno_sequence_ = std::move(seq);
     sequence_idx_   = -1;
     // Installed, even when empty: an empty visible set means "no rows",
@@ -560,6 +610,7 @@ util::Result<void> Table::goto_top() {
     if (driver_->record_count() == 0) {
         state_ = State::Limbo; recno_ = 0; return {};
     }
+    sync_aof_sequence_order_();
     if (recno_sequence_active_) {
         if (recno_sequence_.empty()) {
             state_ = State::Limbo; recno_ = 0; return {};
@@ -679,6 +730,7 @@ util::Result<void> Table::goto_bottom() {
     if (driver_->record_count() == 0) {
         state_ = State::Limbo; recno_ = 0; return {};
     }
+    sync_aof_sequence_order_();
     if (recno_sequence_active_) {
         if (recno_sequence_.empty()) {
             state_ = State::Limbo; recno_ = 0; return {};
@@ -785,6 +837,24 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
     }
     auto r = load_record_(recno);
     if (!r) return r.error();
+    // A filter (AOF) or SQL result walks recno_sequence_ by
+    // sequence_idx_: re-anchor it on this row, or the next SKIP steps
+    // from wherever the last GoTop/GoBottom/Skip left it (GoTo(n) then
+    // Skip(-1) fell off the front to BOF). AOF sequences are ascending,
+    // so binary-search first; fall back to a linear find for SQL ones.
+    sync_aof_sequence_order_();
+    if (recno_sequence_active_ && !recno_sequence_.empty()) {
+        auto it = std::lower_bound(recno_sequence_.begin(),
+                                   recno_sequence_.end(), recno);
+        if (it == recno_sequence_.end() || *it != recno) {
+            it = std::find(recno_sequence_.begin(),
+                           recno_sequence_.end(), recno);
+        }
+        if (it != recno_sequence_.end()) {
+            sequence_idx_ = static_cast<std::int64_t>(
+                it - recno_sequence_.begin());
+        }
+    }
     // Re-position the active index cursor on this row's key so a
     // subsequent SKIP walks from here (and not from wherever the
     // index was left after a previous SEEK / SKIP-past-end). When
@@ -887,6 +957,7 @@ util::Result<void> Table::skip(std::int32_t delta) {
     //     cached EOF fence is about to fire (natural order) or when the
     //     index walk runs off the end (peer may have grown the bag).
     // SQL materialised sequences stay a frozen snapshot.
+    sync_aof_sequence_order_();
     if (recno_sequence_active_) {
         if (delta == 0) {
             if (state_ == State::Bof) sequence_idx_ = -1;

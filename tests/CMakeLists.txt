@@ -144,6 +144,7 @@ add_executable(openads_unit_tests
     unit/abi_scope_partial_key_test.cpp
     unit/abi_seek_last_partial_test.cpp
     unit/abi_aof_index_agreement_test.cpp
+    unit/abi_aof_index_order_test.cpp
     unit/abi_aof_empty_result_test.cpp
     unit/abi_adi_prefix_seek_multilevel_test.cpp
     unit/abi_prefix_seek_deleted_test.cpp

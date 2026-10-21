@@ -1,0 +1,53 @@
+name: mtfix58 release publish
+on:
+  push:
+    branches: [release/mtfix58-full]
+    paths: [.github/workflows/mtfix58-release.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    name: Publish mtfix58 prerelease from run 39620059270 artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kit-*
+          merge-multiple: true
+          repository: bedipritpal/OpenADS
+          run-id: 39620059270
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md <<'NOTES'
+          # OpenADS mtfix58 full test kit
+
+          One entry, three kits, all built from fork main 779343a7 (0ca61c3f plus the item 6 PR #17).
+
+          What sits on top of mtfix52 (650ab997), exactly:
+          - 3 docs-only commits: docs/mutual-auth-v2-main-record.md, docs/openads-v2-auth-test-2026-10-19.md, docs/vouch-as-a-service.md
+          - PR #16 (0ca61c3f): SET FILTER under REMOTE (AOF mirrored to the ABI twin, filtered walk in index order) and SetField returning the real engine error code instead of a hardcoded 5035.
+
+          Nothing else. The item 6 index-order fix (AdsGetIndexHandleByOrder past the last tag) IS in this build via PR #17.
+
+          Assets:
+          - mtfix58-full-qt492-x86.zip: Windows x86 (32-bit) kit, pinned Qt 4.9.2 / Winlibs GCC 10.2 i686. Full proof suite: B_BIG threaded fixtures, auth probes, batched unit regression, Vouch link-shape proof.
+          - mtfix58-full-x64.zip: Windows x64 kit, Winlibs GCC 10.2 x86_64. PE-checked on Windows; unit suite run on Linux only.
+          - openads-1.09.74-mtfix58-full-test-linux-x64.tar.gz (+ .sha256 + MTFIX58_LINUX_SERVER_TEST.md): Linux x64 server kit, full ctest suite passed on ubuntu-24.04.
+          - openads-1.09.74-mtfix58-full-test-macos-universal.tar.gz (+ .sha256): macOS universal (arm64 + x86_64) server kit, full ctest suite passed on macos-14.
+
+          Same mock-HRB auth test content as the mtfix52/56 kits. Public mock module only, not real auth. Test only, not for production.
+          NOTES
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: bedipritpal/OpenADS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la
+          sha256sum mtfix58-full-qt492-x86.zip mtfix58-full-x64.zip openads-1.09.74-mtfix58-full-test-linux-x64.tar.gz openads-1.09.74-mtfix58-full-test-macos-universal.tar.gz
+          gh release create v1.09.74-mtfix58-full-test --target 779343a70d43fd93d7ebab866baafa521a683332 --prerelease --latest=false --title "OpenADS mtfix58 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md mtfix58-full-qt492-x86.zip mtfix58-full-x64.zip openads-1.09.74-mtfix58-full-test-linux-x64.tar.gz openads-1.09.74-mtfix58-full-test-linux-x64.tar.gz.sha256 MTFIX58_LINUX_SERVER_TEST.md openads-1.09.74-mtfix58-full-test-macos-universal.tar.gz openads-1.09.74-mtfix58-full-test-macos-universal.tar.gz.sha256
+          gh release view v1.09.74-mtfix58-full-test --json tagName,isPrerelease,url,assets

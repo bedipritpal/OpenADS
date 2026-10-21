@@ -21009,7 +21009,13 @@ UNSIGNED32 ENTRYPOINT AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOr
         if (handles.empty()) {
             return fail(openads::AE_INTERNAL_ERROR, "no remote index");
         }
-        std::size_t idx = (usOrder == 0 || usOrder > handles.size())
+        // An ordinal past the last tag is an error, not tag 1: rddads
+        // answers IndexKey(n)/OrdName(n) with "" only when this call fails,
+        // and while !Empty(IndexKey(j)) loops rely on that to stop.
+        if (usOrder > handles.size()) {
+            return fail(openads::AE_INTERNAL_ERROR, "index order out of range");
+        }
+        std::size_t idx = (usOrder == 0)
                               ? 0 : static_cast<std::size_t>(usOrder - 1);
         *phIndex = static_cast<ADSHANDLE>(handles[idx]);
         return ok();
@@ -21022,9 +21028,12 @@ UNSIGNED32 ENTRYPOINT AdsGetIndexHandleByOrder(ADSHANDLE hTable, UNSIGNED16 usOr
     if (ordered.empty()) {
         return fail(openads::AE_INTERNAL_ERROR, "no active index");
     }
-    if (usOrder == 0 || usOrder > ordered.size()) {
-        // Fall back to first entry on out-of-range ordinal so legacy
-        // callers that pass 0 or 1 still resolve to *some* index.
+    if (usOrder > ordered.size()) {
+        // Past the last tag: fail, so IndexKey(n)/OrdName(n) loops end.
+        return fail(openads::AE_INTERNAL_ERROR, "index order out of range");
+    }
+    if (usOrder == 0) {
+        // Order 0 keeps resolving to the first entry for legacy callers.
         *phIndex = ordered.front();
     } else {
         *phIndex = ordered[usOrder - 1];

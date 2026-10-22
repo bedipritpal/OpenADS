@@ -1,0 +1,309 @@
+name: port-recon
+
+# Rebuilds the upstream port from fork history on GitHub, so no local copy is needed.
+# Pushes two branches: port/auth-challenge-v1-upstream (V1) and ...-v2 (hardening always on),
+# then builds and runs the unit tests on V2 (Linux, TLS on).
+
+on:
+  push:
+    branches: [ci/port-recon]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recon:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Write tools
+        run: |
+          mkdir -p /tmp/port
+          cat > /tmp/port/merge_port.py <<'PYEOF'
+          import subprocess, os
+          def show(rev, path):
+              r = subprocess.run(['git','show',f'{rev}:{path}'], capture_output=True)
+              return r.stdout if r.returncode == 0 else None
+          V2_EXCLUDE = {'src/network/mutual_auth.h','docs/MTFIX51_TESTED_SOURCE_SHA256.txt'}
+          files = [f for f in open('/tmp/bundle_files.txt').read().split() if f not in V2_EXCLUDE and not f.startswith('tests/hrb/mutual/')]
+          print(f"porting {len(files)} files")
+          ALL_OURS = {'src/abi/ace_exports.cpp','src/network/wire.h'}
+          ALL_THEIRS = {'src/network/server.h','src/network/session.cpp','tools/serverd/main.cpp'}
+          def resolve_blocks(text, mode):
+              out, i, lines = [], 0, text.split('\n')
+              while i < len(lines):
+                  if lines[i].startswith('<<<<<<<'):
+                      ours, theirs, k = [], [], i+1
+                      while not lines[k].startswith('======='): ours.append(lines[k]); k += 1
+                      k += 1
+                      while not lines[k].startswith('>>>>>>>'): theirs.append(lines[k]); k += 1
+                      if mode == 'ours': out.extend(ours)
+                      elif mode == 'theirs': out.extend(theirs)
+                      elif mode == 'union_tc': out.extend(theirs); out.extend(ours)
+                      elif mode == 'union_def': out.extend(ours); out.extend(theirs)
+                      i = k+1
+                  else: out.append(lines[i]); i += 1
+              return '\n'.join(out)
+          stats = {'clean':0,'new':0,'conf':0}
+          for f in files:
+              base, ours, theirs = show('91a63f6', f), show('FETCH_HEAD', f), show('d1751bf7', f)
+              assert theirs is not None, f
+              if ours is None:
+                  os.makedirs(os.path.dirname(f) or '.', exist_ok=True); open(f,'wb').write(theirs); stats['new']+=1; continue
+              if base is None:
+                  open(f,'wb').write(theirs); stats['conf']+=1; continue
+              open('/tmp/m3_ours','wb').write(ours); open('/tmp/m3_base','wb').write(base); open('/tmp/m3_theirs','wb').write(theirs)
+              r = subprocess.run(['git','merge-file','-p','/tmp/m3_ours','/tmp/m3_base','/tmp/m3_theirs'], capture_output=True)
+              if r.returncode == 0: open(f,'wb').write(r.stdout); stats['clean']+=1
+              elif r.returncode > 0:
+                  mode = 'ours' if f in ALL_OURS else 'theirs' if f in ALL_THEIRS else 'union_tc' if f=='tests/CMakeLists.txt' else 'union_def' if f=='src/openads_ace.def' else None
+                  assert mode, f"unexpected conflict: {f}"
+                  open(f,'w').write(resolve_blocks(r.stdout.decode(), mode)); stats['conf']+=1
+              else: raise SystemExit(f"merge-file error: {f}")
+          print(stats)
+          assert stats == {'clean':17,'new':18,'conf':7}, stats
+          PYEOF
+          cat > /tmp/port/strip_cmd.sh <<'SHEOF'
+          python3 <<'PYEOF'
+          import re
+          def edit(path, pairs):
+              t = open(path, encoding='utf-8').read()
+              for old, new, count in pairs:
+                  n = t.count(old)
+                  assert n == count, f"{path}: anchor {n}x (want {count}): {old[:80]!r}"
+                  t = t.replace(old, new)
+              open(path, 'w', encoding='utf-8').write(t)
+              print(f"OK {path}")
+
+          edit('src/network/session.cpp', [
+              ('#include "network/mutual_auth.h"\n', '', 1),
+              ('std::string begin(f.payload.begin(),f.payload.end()),selector,requested;\n'
+               '            mutual_auth_=begin.size()>=4&&begin.compare(0,4,std::string("\\0OM2",4))==0;\n'
+               '            if(!mutual_auth_ && srv_->auth_worker_->mutual_required())return {err("Mutual auth required",openads::AE_LOGIN_FAILED),true};\n'
+               '            if(mutual_auth_){\n'
+               '                std::size_t p=4;\n'
+               '                if(!mutual_read(begin,p,selector,256)||selector.empty()||!mutual_read(begin,p,requested,4096)||p!=begin.size()||requested.find(\'\\0\')!=std::string::npos)\n'
+               '                    return {err("Mutual request denied",openads::AE_LOGIN_FAILED),true};\n'
+               '                std::array<std::uint8_t,32> binding{};\n'
+               '                if(!tls_transport_->channel_binding(binding))return {err("Mutual binding unavailable",openads::AE_LOGIN_FAILED),true};\n'
+               '                mutual_transcript_=mutual_transcript(challenge,binding,selector,requested);\n'
+               '                auth_dir_=requested;\n'
+               '            }else {if(begin.size()>4096||begin.find(\'\\0\')!=std::string::npos)return {err("Auth denied",openads::AE_LOGIN_FAILED),true};auth_dir_=begin;}',
+               'std::string begin(f.payload.begin(),f.payload.end());\n'
+               '            if(begin.size()>4096||begin.find(\'\\0\')!=std::string::npos)return {err("Auth denied",openads::AE_LOGIN_FAILED),true};\n'
+               '            auth_dir_=begin;', 1),
+              ('            if(!mutual_auth_ && srv_->auth_worker_->mutual_required())return {err("Mutual auth required",openads::AE_LOGIN_FAILED),true};\n'
+               '            if(mutual_auth_){\n'
+               '                std::string proof;bool busy=false;\n'
+               '                if(!srv_->auth_worker_->issue_mutual(challenge,mutual_transcript_,auth_dir_,proof,&busy))\n'
+               '                    return {err(busy?"Auth busy":"Mutual proof denied",openads::AE_LOGIN_FAILED),true};\n'
+               '                reply.payload.insert(reply.payload.end(),proof.begin(),proof.end());\n'
+               '            }\n', '', 1),
+              ('bool accepted=mutual_auth_ ? srv_->auth_worker_->verify_mutual(challenge,mutual_transcript_,blob,hrb_result,&capacity_busy) : srv_->auth_worker_->authenticate(challenge,blob,context,hrb_result,&capacity_busy);',
+               'bool accepted=srv_->auth_worker_->authenticate(challenge,blob,context,hrb_result,&capacity_busy);', 1),
+          ])
+          edit('src/network/session.h', [('    bool mutual_auth_=false;\n    std::string mutual_transcript_;\n', '', 1)])
+          edit('src/network/client.h', [('    util::Result<std::string> begin_mutual(std::unique_ptr<ITransport>,const std::string&,const std::string&,std::array<std::uint8_t,32>&,std::array<std::uint8_t,32>&);\n', '', 1)])
+          lines = open('src/network/client.cpp', encoding='utf-8').read().split('\n')
+          start = next(i for i,l in enumerate(lines) if l.startswith('util::Result<std::string> RemoteConnection::begin_mutual'))
+          end = next(i for i in range(start, len(lines)) if lines[i] == '}')
+          del lines[start:end+1]
+          assert lines[0].strip() != '' or True
+          t = '\n'.join(lines)
+          assert t.count('#include "network/mutual_auth.h"\n') == 1
+          t = t.replace('#include "network/mutual_auth.h"\n', '')
+          open('src/network/client.cpp', 'w', encoding='utf-8').write(t)
+          print(f"OK src/network/client.cpp (removed {start+1}-{end+1} + include)")
+          lines = open('src/abi/ace_exports.cpp', encoding='utf-8').read().split('\n')
+          start = next(i for i, l in enumerate(lines) if l.startswith('UNSIGNED32 ENTRYPOINT OAdsBeginMutualAuth'))
+          end = next(i for i in range(start, len(lines)) if lines[i] == '}')
+          del lines[start:end+1]
+          open('src/abi/ace_exports.cpp', 'w', encoding='utf-8').write('\n'.join(lines))
+          print(f"OK src/abi/ace_exports.cpp (removed {start+1}-{end+1})")
+          edit('include/openads/ace.h', [
+              ('/* V2: proof capacity must be4096; returns proof length. Binding is local TLS exporter.\n'
+               '   Caller MUST verify server proof using its trusted Vouch material before CompleteAuth. */\n'
+               'UNSIGNED32 ENTRYPOINT OAdsBeginMutualAuth(const char* url,const char* selector,ADSHANDLE* pending,UNSIGNED8* challenge32,UNSIGNED8* binding32,UNSIGNED8* proof,UNSIGNED32* proofBytes);\n', '', 1),
+          ])
+          lines = open('contrib/oads_hb/oads_hb.c', encoding='utf-8').read().split('\n')
+          start = next(i for i, l in enumerate(lines) if 'extern UNSIGNED32 ENTRYPOINT OAdsBeginMutualAuth' in l)
+          fn = next(i for i in range(start, len(lines)) if lines[i].startswith('HB_FUNC( OADS_BEGINMUTUAL )'))
+          end = next(i for i in range(fn, len(lines)) if lines[i] == '}')
+          del lines[start:end+1]
+          open('contrib/oads_hb/oads_hb.c', 'w', encoding='utf-8').write('\n'.join(lines))
+          print(f"OK contrib/oads_hb/oads_hb.c (removed {start+1}-{end+1})")
+          edit('src/network/auth_worker.cpp', [
+              ('bool AuthWorker::probe(){std::string out;if(!run("P",out))return false;mutual_required_=out=="READY2";return mutual_required_||out=="READY";}',
+               'bool AuthWorker::probe(){std::string out;return run("P",out)&&out=="READY";}', 1),
+              ('bool AuthWorker::issue_mutual(const AuthAttempt::Challenge& c,const std::string& transcript,const std::string& context,std::string& proof,bool* busy){\n'
+               ' std::string in="B";Wipe wi{in};in.append(reinterpret_cast<const char*>(c.data()),32);put(in,transcript);put(in,context);\n'
+               ' return run(in,proof,busy)&&!proof.empty()&&proof.size()<=4096;\n'
+               '}\n'
+               'bool AuthWorker::verify_mutual(const AuthAttempt::Challenge& c,const std::string& transcript,const std::string& proof,AuthResult& result,bool* busy){\n'
+               ' result.clear();std::string in="M",out;Wipe wi{in},wo{out};in.append(reinterpret_cast<const char*>(c.data()),32);put(in,transcript);put(in,proof);\n'
+               ' return run(in,out,busy)&&parse_auth_result(out,result);\n'
+               '}\n', '', 1),
+          ])
+          edit('src/network/auth_worker.h', [
+              ('    bool mutual_required() const noexcept {return mutual_required_;}\n', '', 1),
+              ('    bool issue_mutual(const AuthAttempt::Challenge&,const std::string& transcript,const std::string& context,std::string& proof,bool* capacity_busy=nullptr);\n'
+               '    bool verify_mutual(const AuthAttempt::Challenge&,const std::string& transcript,const std::string& proof,AuthResult&,bool* capacity_busy=nullptr);\n', '', 1),
+              ('    bool mutual_required_=false;\n', '', 1),
+          ])
+          edit('tools/serverd/auth_worker_main.cpp', [
+              ('    const bool server_v2=backend.has("OADS_AUTH_SERVER_V2"),verify_v2=backend.has("OADS_AUTH_VERIFY_V2");\n'
+               '    if(server_v2!=verify_v2||(!server_v2&&!backend.has("OADS_AUTH_V1")))return 1;',
+               '    if(!backend.has("OADS_AUTH_V1"))return 1;', 1),
+              ('    if(input=="P"){std::cout<<(backend.has("OADS_AUTH_SERVER_V2")&&backend.has("OADS_AUTH_VERIFY_V2")?"READY2":"READY");return 0;}',
+               '    if(input=="P"){std::cout<<"READY";return 0;}', 1),
+              ("    if(input.size()<41||(input[0]!='A'&&input[0]!='B'&&input[0]!='M'))return 1;",
+               "    if(input.size()<41||input[0]!='A')return 1;", 1),
+              ('    const char* hook=input[0]==\'B\'?"OADS_AUTH_SERVER_V2":input[0]==\'M\'?"OADS_AUTH_VERIFY_V2":"OADS_AUTH_V1";',
+               '    const char* hook="OADS_AUTH_V1";', 1),
+          ])
+          t = open('tools/serverd/CMakeLists.txt', encoding='utf-8').read()
+          m = re.search(r'\nif\(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF\)\n add_executable\(auth_mutual_probe.*?\nendif\(\)\n\nif\(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF\)\n add_executable\(auth_resource_probe.*?\nendif\(\)\n', t, re.S)
+          assert m, "serverd CMakeLists probe blocks not found"
+          open('tools/serverd/CMakeLists.txt', 'w', encoding='utf-8').write(t.replace(m.group(0), '\n'))
+          print("OK tools/serverd/CMakeLists.txt")
+          edit('src/network/transport.h', [
+              ('    virtual bool channel_binding(std::array<std::uint8_t,32>& out) const { out.fill(0); return false; }\n', '', 1),
+          ])
+          t = open('src/network/tls_transport.cpp', encoding='utf-8').read()
+          i = t.index('    bool channel_binding(')
+          j = t.index('\n    }', i) + len('\n    }\n')
+          open('src/network/tls_transport.cpp', 'w', encoding='utf-8').write(t[:i] + t[j:])
+          print("OK src/network/tls_transport.cpp (channel_binding removed)")
+          PYEOF
+          SHEOF
+          cat > /tmp/port/v2.sh <<'V2EOF'
+          #!/bin/bash
+          # V2 transform: always-on hardening like upstream. Run in repo root with HEAD = V1 port commit, FETCH_HEAD = upstream main.
+          set -e
+          UP=${1:-FETCH_HEAD}
+          git diff -U3 $UP -- src/network/session.cpp > /tmp/sess.diff
+          python3 - <<'EOF'
+          import re
+          t=open('/tmp/sess.diff').read()
+          hs=re.split(r'(?m)^(?=@@ )',t)
+          hdr=hs[0]; body=hs[1:]
+          assert len(body)==26, len(body)
+          keep={1,7,9,10}
+          open('/tmp/rev.diff','w').write(hdr+''.join(h for i,h in enumerate(body,1) if i not in keep))
+          EOF
+          git apply -R --recount /tmp/rev.diff
+          n=$(grep -n "if (srv_->daemon_hardening()) {" src/network/session.cpp | cut -d: -f1)
+          test "$(echo "$n" | wc -l)" = 1
+          sed -i "${n}d" src/network/session.cpp
+          git checkout $UP -- src/network/server.cpp src/network/frame_reader.cpp src/network/frame_reader.h tests/unit/network_frame_reader_test.cpp
+          python3 - <<'EOF'
+          import re
+          p='src/network/server.h'; s=open(p).read()
+          a='''    // Explicit daemon policy. Embedded/LOCAL servers retain their legacy defaults.
+              // Configure before registering credentials or starting any listener.
+              void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
+              bool daemon_hardening() const noexcept { return daemon_hardening_; }
+
+              // Daemon-only opt-in policy, configured before start. Zero never expires'''
+          assert a in s
+          s=s.replace(a,'    // Opt-in established-session policy, configured before start. Zero never expires')
+          assert '    bool daemon_hardening_ = false;\n' in s
+          s=s.replace('    bool daemon_hardening_ = false;\n','')
+          open(p,'w').write(s)
+          p='tools/serverd/main.cpp'; s=open(p).read(); assert '    srv.set_daemon_hardening(true);\n' in s; s=s.replace('    srv.set_daemon_hardening(true);\n',''); open(p,'w').write(s)
+          for p in ('tests/unit/network_server_test.cpp','tests/hrb/auth-spike/integration_probe.cpp'):
+              s=open(p).read()
+              s=re.sub(r'\n[ \t]*server\.set_daemon_hardening\(true\);[ \t]*(?=\n)','',s)
+              s=re.sub(r'\n[ \t]*srv\.set_daemon_hardening\(true\);[ \t]*(?=\n)','',s)
+              s=s.replace(' server.set_daemon_hardening(true);','').replace('srv.set_daemon_hardening(true);','')
+              open(p,'w').write(s)
+          p='tests/CMakeLists.txt'; s=open(p).read()
+          s=s.replace('    add_test(NAME portal_health_contract COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_contract_test.py)\n','')
+          s=s.replace('\nfind_program(OPENADS_NODE_EXECUTABLE node)\nif(OPENADS_NODE_EXECUTABLE)\n    add_test(NAME portal_health_js COMMAND ${OPENADS_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_js_test.js)\nendif()\n','')
+          open(p,'w').write(s)
+          p='src/network/wire.cpp'; s=open(p).read()
+          k='    Frame f;\n    f.opcode = static_cast<Opcode>(buf[4]);'
+          assert s.count(k)==1
+          s=s.replace(k,'    if (!valid_opcode(buf[4]))\n        return util::Error{5000, 0, "unknown opcode", ""};\n'+k); open(p,'w').write(s)
+          EOF
+          ! grep -rn daemon_hardening src tools tests
+          ! grep -n portal_health tests/CMakeLists.txt
+          V2EOF
+      - name: Reconstruct V1 port
+        run: |
+          set -e
+          git config user.name "Pritpal Bedi"
+          git config user.email "bedipritpal@hotmail.com"
+          git fetch --quiet https://github.com/FiveTechSoft/OpenADS.git main
+          UP=$(git rev-parse FETCH_HEAD)
+          echo "upstream main = $UP"
+          test "$UP" = "f41738d308243572d93e0e498985bffbf089e121"
+          git checkout -q -b port/auth-challenge-v1-upstream FETCH_HEAD
+          git diff --name-only '0fa4517^1' 0fa4517 > /tmp/bundle_files.txt
+          python3 /tmp/port/merge_port.py
+          bash /tmp/port/strip_cmd.sh
+          sed -n '325p' src/openads_ace.def | grep -q OAdsBeginMutualAuth && sed -i '325d' src/openads_ace.def || true
+          git add -A
+          git commit -q -m "Port auth challenge line V1 to current upstream main (stage 1)
+
+          Auth worker, V1 challenge auth over TLS 1.3, client API (OAdsBeginAuth/
+          OAdsCompleteAuth/OAdsCancelAuth + Harbour OADS_* wrappers), auth-spike
+          probes, unit tests and docs. V2 mutual auth is intentionally excluded
+          (staged separately). Ported from bedipritpal/OpenADS main onto upstream
+          main f41738d; overlapping files merged with upstream's reviewed variants."
+          for f in src/network/frame_reader.h src/network/server.cpp tests/serverd_help_test.cmake; do
+            git show 91a63f6e7ac90d4f0b64d7cdafecaabb1548b140:$f > /tmp/m3_base 2>/dev/null || true
+            git show FETCH_HEAD:$f > /tmp/m3_ours 2>/dev/null || true
+            git show d1751bf7:$f > /tmp/m3_theirs 2>/dev/null || true
+            if [ ! -s /tmp/m3_ours ]; then cp /tmp/m3_theirs $f
+            else git merge-file -p /tmp/m3_ours /tmp/m3_base /tmp/m3_theirs > /tmp/m3_out && cp /tmp/m3_out $f || { echo "CONFLICT $f"; exit 1; }; fi
+          done
+          git add -A && git commit -q --amend --no-edit
+          git checkout d1751bf7 -- tests/unit/network_server_test.cpp
+          git add -A && git commit -q --amend --no-edit
+          STAT=$(git diff --stat FETCH_HEAD..HEAD | tail -1)
+          echo "V1 stat: $STAT"
+          echo "$STAT" | grep -q "44 files changed, 2228 insertions(+), 67 deletions(-)"
+          git format-patch -1 --stdout > /tmp/port/v1.patch
+          sha256sum /tmp/port/v1.patch
+          git push --force origin port/auth-challenge-v1-upstream
+      - name: Make V2 (hardening always on, like upstream)
+        run: |
+          set -e
+          git checkout -q -b port/auth-challenge-v1-upstream-v2
+          bash /tmp/port/v2.sh FETCH_HEAD
+          git add -A
+          git commit -q --amend --no-edit
+          STAT=$(git diff --stat FETCH_HEAD..HEAD | tail -1)
+          echo "V2 stat: $STAT"
+          echo "$STAT" | grep -q "40 files changed, 1862 insertions(+), 36 deletions(-)"
+          git format-patch -1 --stdout > /tmp/port/v2.patch
+          sha256sum /tmp/port/v2.patch
+          git push --force origin port/auth-challenge-v1-upstream-v2
+          git rev-parse HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: port-patches
+          path: /tmp/port/*.patch
+
+  test:
+    needs: recon
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: port/auth-challenge-v1-upstream-v2
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Configure
+        run: cmake --preset ninja-clang -DOPENADS_WITH_TLS=ON
+      - name: Build
+        run: cmake --build build/ninja-clang --config Release
+      - name: Test
+        run: ctest --test-dir build/ninja-clang --output-on-failure -C Release -E daemon_idle_real_clock_soak

@@ -5,6 +5,7 @@
 #include "network/socket.h"
 #include "network/transport.h"
 #include "network/tls_transport.h"
+#include "network/auth_worker.h"
 #include "network/wire.h"
 #include "util/result.h"
 
@@ -61,11 +62,15 @@ class Server {
     std::optional<TlsConfig> tls_;
 #endif
     friend class Session;
+    std::shared_ptr<AuthWorker> auth_worker_;
 
 public:
     // Out-of-line ctor/dtor: the unique_ptr<WorkerPool> member is an
     // incomplete type in this header, so the special members that would
     // destroy it must be defined in server.cpp (which sees the full type).
+    // Dedicated auth mode. Configured before start, required for every DB login.
+    void set_auth_worker(std::shared_ptr<AuthWorker> worker) { auth_worker_ = std::move(worker); }
+    bool auth_required() const noexcept { return bool(auth_worker_); }
     Server();
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
@@ -81,7 +86,12 @@ public:
     bool               running() const noexcept { return running_.load(); }
     void               stop() noexcept;
 
-    // Opt-in established-session policy, configured before start. Zero never expires
+    // Explicit daemon policy. Embedded/LOCAL servers retain their legacy defaults.
+    // Configure before registering credentials or starting any listener.
+    void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
+    bool daemon_hardening() const noexcept { return daemon_hardening_; }
+
+    // Daemon-only opt-in policy, configured before start. Zero never expires
     // established DBF sessions for application inactivity.
     void set_established_session_idle_seconds(std::uint32_t seconds) noexcept {
         established_session_idle_seconds_ = seconds;
@@ -232,6 +242,7 @@ private:
     // sessions_mu_ (this takes it).
     void reap_finished_threads_();
 
+    bool daemon_hardening_ = false;
     SessionClock session_clock_ = nullptr;
     std::uint32_t established_session_idle_seconds_ = 0;
     Socket                   listener_;

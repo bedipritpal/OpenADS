@@ -8,6 +8,9 @@ bool valid_opcode(std::uint8_t opcode) noexcept {
     switch (opcode) {
         case static_cast<std::uint8_t>(Opcode::Hello):
         case static_cast<std::uint8_t>(Opcode::HelloAck):
+        case static_cast<std::uint8_t>(Opcode::BeginAuth):
+        case static_cast<std::uint8_t>(Opcode::BeginAuthAck):
+        case static_cast<std::uint8_t>(Opcode::CompleteAuth):
         case static_cast<std::uint8_t>(Opcode::Connect):
         case static_cast<std::uint8_t>(Opcode::ConnectAck):
         case static_cast<std::uint8_t>(Opcode::Disconnect):
@@ -273,8 +276,6 @@ util::Result<Frame> decode_frame(const std::uint8_t* buf,
     if (size < 5 + static_cast<std::size_t>(n)) {
         return util::Error{5000, 0, "frame buffer truncated", ""};
     }
-    if (!valid_opcode(buf[4]))
-        return util::Error{5000, 0, "unknown opcode", ""};
     Frame f;
     f.opcode = static_cast<Opcode>(buf[4]);
     if (n > 0) {

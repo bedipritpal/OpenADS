@@ -71,7 +71,7 @@ void create_no_ext_adt(ADSHANDLE hConn, const fs::path& dir) {
 void sql_create_bracketed_adt(ADSHANDLE hConn, const fs::path& dir) {
     ADSHANDLE hStmt = 0;
     REQUIRE(AdsCreateSQLStatement(hConn, &hStmt) == 0);
-    REQUIRE(AdsStmtSetTableType(hStmt, ADS_ADT) == 0);
+    // Harbour rddads does not call AdsStmtSetTableType for ADT, so neither do we.
     auto sql = cbuf("CREATE TABLE [t2.adt] (a NUMERIC(9,4), b CHAR(10), m MEMO)");
     ADSHANDLE hCur = 0;
     REQUIRE(AdsExecuteSQLDirect(hStmt, sql.data(), &hCur) == 0);
@@ -196,4 +196,42 @@ TEST_CASE("tim item 4: generic anonymous login stays open with hardening on and 
         AdsDisconnect(h1);
     }
     if (h2 != 0) AdsDisconnect(h2);
+}
+
+// Others must not change: names without .adt and non-ADT creates keep their format.
+TEST_CASE("tim item 1 and 2 guard: non-ADT creates are unchanged") {
+    auto dir = fresh_dir("openads_tim_guard");
+    ADSHANDLE h = connect_local(dir);
+    {   // CDX create without extension still makes .dbf
+        auto name = cbuf("plain1");
+        auto fields = cbuf("Id,Numeric,4,0");
+        ADSHANDLE ht = 0;
+        REQUIRE(AdsCreateTable(h, name.data(), nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0, fields.data(), &ht) == 0);
+        AdsCloseTable(ht);
+        CHECK(fs::exists(dir / "plain1.dbf"));
+        CHECK_FALSE(fs::exists(dir / "plain1.adt"));
+    }
+    {   // SQL CREATE TABLE without .adt still makes .dbf
+        ADSHANDLE hStmt = 0;
+        REQUIRE(AdsCreateSQLStatement(h, &hStmt) == 0);
+        auto sql = cbuf("CREATE TABLE plain2 (a NUMERIC(9,4), b CHAR(10))");
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql.data(), &hCur) == 0);
+        if (hCur != 0) AdsCloseTable(hCur);
+        AdsCloseSQLStatement(hStmt);
+        CHECK(fs::exists(dir / "plain2.dbf"));
+        CHECK_FALSE(fs::exists(dir / "plain2.adt"));
+    }
+    {   // SQL CREATE TABLE with an explicit CDX statement type and .adt name: caller's choice wins
+        ADSHANDLE hStmt = 0;
+        REQUIRE(AdsCreateSQLStatement(h, &hStmt) == 0);
+        REQUIRE(AdsStmtSetTableType(hStmt, ADS_CDX) == 0);
+        auto sql = cbuf("CREATE TABLE [explicit.dbf] (a NUMERIC(9,4))");
+        ADSHANDLE hCur = 0;
+        REQUIRE(AdsExecuteSQLDirect(hStmt, sql.data(), &hCur) == 0);
+        if (hCur != 0) AdsCloseTable(hCur);
+        AdsCloseSQLStatement(hStmt);
+        CHECK(fs::exists(dir / "explicit.dbf"));
+    }
+    AdsDisconnect(h);
 }

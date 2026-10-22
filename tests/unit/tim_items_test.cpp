@@ -147,3 +147,53 @@ TEST_CASE("tim item 3: REMOTE ADT with memo, N(9,4) reads back what was written 
     AdsCloseTable(hT);
     AdsDisconnect(h);
 }
+
+// Rule from Pritpal: a client that does not use auth:// must stay unrestricted
+// on a server that has no auth module and no users. Hardening is on, as
+// openads_serverd always sets it.
+TEST_CASE("tim item 4: generic anonymous login stays open with hardening on and no auth module") {
+    auto dir = fresh_dir("openads_tim_item4_anon");
+    {
+        // seed a table through a plain local connection
+        ADSHANDLE hl = connect_local(dir);
+        auto name   = cbuf("anon.dbf");
+        auto fields = cbuf("Id,Numeric,4,0;Nome,Character,10");
+        ADSHANDLE ht = 0;
+        REQUIRE(AdsCreateTable(hl, name.data(), nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0, fields.data(), &ht) == 0);
+        REQUIRE(AdsAppendRecord(ht) == 0);
+        auto fNome = cbuf("Nome");
+        auto val = cbuf("aberto");
+        REQUIRE(AdsSetString(ht, fNome.data(), val.data(), 6) == 0);
+        REQUIRE(AdsWriteRecord(ht) == 0);
+        AdsCloseTable(ht);
+        AdsDisconnect(hl);
+    }
+    openads::network::Server srv;
+    srv.set_daemon_hardening(true);
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    const std::string uri = "tcp://127.0.0.1:" + std::to_string(srv.port()) + "/" + dir.generic_string();
+    auto u = cbuf(uri);
+
+    // 1) no user, no password
+    ADSHANDLE h1 = 0;
+    CHECK(AdsConnect60(u.data(), ADS_REMOTE_SERVER, nullptr, nullptr, 0, &h1) == 0);
+    // 2) any user and password: server has no users, so nothing to check
+    auto usr = cbuf("anyone");
+    auto pwd = cbuf("whatever");
+    ADSHANDLE h2 = 0;
+    CHECK(AdsConnect60(u.data(), ADS_REMOTE_SERVER, usr.data(), pwd.data(), 0, &h2) == 0);
+    // 3) and the connection is fully usable
+    if (h1 != 0) {
+        auto name = cbuf("anon.dbf");
+        ADSHANDLE ht = 0;
+        CHECK(AdsOpenTable(h1, name.data(), nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0, &ht) == 0);
+        UNSIGNED32 n = 0;
+        if (ht != 0) {
+            CHECK(AdsGetRecordCount(ht, ADS_IGNOREFILTERS, &n) == 0);
+            CHECK(n == 1u);
+            AdsCloseTable(ht);
+        }
+        AdsDisconnect(h1);
+    }
+    if (h2 != 0) AdsDisconnect(h2);
+}

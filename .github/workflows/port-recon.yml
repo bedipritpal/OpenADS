@@ -264,10 +264,12 @@ jobs:
           done
           git add -A && git commit -q --amend --no-edit
           git checkout d1751bf7 -- tests/unit/network_server_test.cpp
-          git add -A && git commit -q --amend --no-edit
+          git add -A
+          git add -f tests/serverd_help_test.cmake
+          git commit -q --amend --no-edit
           STAT=$(git diff --stat FETCH_HEAD..HEAD | tail -1)
           echo "V1 stat: $STAT"
-          echo "$STAT" | grep -q "44 files changed, 2228 insertions(+), 67 deletions(-)"
+          echo "$STAT" | grep -q "45 files changed, 2241 insertions(+), 67 deletions(-)"
           git format-patch -1 --stdout > /tmp/port/v1.patch
           sha256sum /tmp/port/v1.patch
           git push --force origin port/auth-challenge-v1-upstream
@@ -277,10 +279,11 @@ jobs:
           git checkout -q -b port/auth-challenge-v1-upstream-v2
           bash /tmp/port/v2.sh FETCH_HEAD
           git add -A
+          git add -f tests/serverd_help_test.cmake
           git commit -q --amend --no-edit
           STAT=$(git diff --stat FETCH_HEAD..HEAD | tail -1)
           echo "V2 stat: $STAT"
-          echo "$STAT" | grep -q "40 files changed, 1862 insertions(+), 36 deletions(-)"
+          echo "$STAT" | grep -q "41 files changed, 1875 insertions(+), 36 deletions(-)"
           git format-patch -1 --stdout > /tmp/port/v2.patch
           sha256sum /tmp/port/v2.patch
           git push --force origin port/auth-challenge-v1-upstream-v2

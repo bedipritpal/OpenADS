@@ -1,0 +1,33 @@
+name: tim items 1-3 tests (failing tests first)
+
+on:
+  push:
+    branches: [test/tim-items-1-3]
+    paths: [.github/workflows/tim-tests.yml]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Linux build, run only the tim item tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v5
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+      - name: Build unit tests
+        run: cmake --build build --target openads_unit_tests
+      - name: Run tim item tests (failures expected until fixes exist)
+        continue-on-error: true
+        run: |
+          T=$(find build -name openads_unit_tests -type f | head -1)
+          echo "binary: $T"
+          "$T" -tc="tim item*" 2>&1 | tee tim-out.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tim-test-output
+          path: tim-out.txt

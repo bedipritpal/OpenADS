@@ -87,18 +87,22 @@ std::string resolve_case_insensitive(const std::string& path) {
     return path;
 }
 
-namespace {
 
-bool path_has_prefix(const std::string& path, const std::string& root) {
+bool path_has_prefix(const std::string& path, const std::string& root,
+                     bool ignore_case) {
     if (root.empty()) return true;
     if (path.size() < root.size()) return false;
-    if (path.compare(0, root.size(), root) != 0) return false;
+    for (std::size_t i = 0; i < root.size(); ++i) {
+        unsigned char a = static_cast<unsigned char>(path[i]);
+        unsigned char b = static_cast<unsigned char>(root[i]);
+        if (ignore_case) { a = static_cast<unsigned char>(std::tolower(a));
+                           b = static_cast<unsigned char>(std::tolower(b)); }
+        if (a != b) return false;
+    }
     if (path.size() == root.size()) return true;
     const char next = path[root.size()];
     return next == '/' || next == '\\';
 }
-
-} // namespace
 
 std::optional<std::string> resolve_under_root(const std::string& root,
                                               const std::string& client_path) {
@@ -135,7 +139,12 @@ std::optional<std::string> resolve_under_root(const std::string& root,
     // strips to empty, which path_has_prefix treats as accept-all —
     // exactly what "--data /" means.
     while (!root_s.empty() && root_s.back() == '/') root_s.pop_back();
-    if (!path_has_prefix(canon_s, root_s)) return std::nullopt;
+    #ifdef _WIN32
+    const bool fold = true;   // Windows paths are case-insensitive
+#else
+    const bool fold = false;
+#endif
+    if (!path_has_prefix(canon_s, root_s, fold)) return std::nullopt;
     // Server-only no-follow policy must see the original components.
     // Returning the canonical spelling would erase an in-root symlink
     // before File::open can refuse it (including legacy-path remounts).

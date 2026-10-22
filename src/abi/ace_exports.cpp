@@ -9681,7 +9681,9 @@ AdtFieldSpec adt_spec_for(const FieldOut& f) {
         case 'Q': return { 6, 9,          0,     true };  // BINARY (9-byte ref)
         case 'I': return { 7, 9,          0,     true };  // IMAGE  (9-byte ref)
         case 'N':
-            if (f.dec > 0) return {10, 8, f.dec, false}; // DOUBLE
+            // ADT type 2 (NUMERIC, ASCII digits with the declared scale), as
+            // ADS itself stores it. A binary DOUBLE lost the declared decimals.
+            if (f.dec > 0) return { 2, static_cast<std::uint16_t>(f.length ? f.length : 10u), f.dec, false};
             // INTEGER is a 4-byte int32, so it only holds up to 2,147,483,647.
             // Mapping every decimal-less numeric to it silently destroyed any
             // wider value: a DBF N(19,0) holding 5,000,000,000 read back as 0

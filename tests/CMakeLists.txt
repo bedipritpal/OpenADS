@@ -187,6 +187,7 @@ add_executable(openads_unit_tests
     unit/abi_cdx_issue131_test.cpp
     unit/abi_ordnumber_test.cpp
     unit/abi_index_handle_out_of_range_test.cpp
+    unit/dbf_numeric_text_write_test.cpp
     unit/abi_server_info_test.cpp
     unit/abi_unicode_test.cpp
     unit/abi_lock_retry_test.cpp

@@ -928,12 +928,13 @@ TEST_CASE("mtfix34 ordered relative-position reads do not fetch unused physical 
     }
     CHECK(nb_op(kOpGetRecordCount) == before);
     REQUIRE(AdsSetRelKeyPos(t, 0.5) == AE_SUCCESS);
-    // Existing physical-count-based target math gets one fresh snapshot;
-    // nested ordered navigation must not fetch a second unused one.
-    CHECK(nb_op(kOpGetRecordCount) == before + 1);
+    // Target math scales by the scoped key count (mtfix34 principle:
+    // ordered position uses the key count, not the physical count), so
+    // no physical record count is fetched at all here.
+    CHECK(nb_op(kOpGetRecordCount) == before);
     CHECK(nb_recno(t) == 3u);
     CHECK(nb_reccount(t) == 3u);
-    CHECK(nb_op(kOpGetRecordCount) == before + 2);
+    CHECK(nb_op(kOpGetRecordCount) == before + 1);
     REQUIRE(AdsCloseTable(t) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(c) == AE_SUCCESS);
     s.stop();

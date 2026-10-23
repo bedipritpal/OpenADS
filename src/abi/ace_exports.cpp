@@ -22063,7 +22063,7 @@ UNSIGNED32 ENTRYPOINT AdsCopyTable(ADSHANDLE   hHandle,
 // SAP / rddads signature: 3 args.
 //   AdsCopyTableContents(hSrc, hDst, usFilterOption)
 //
-// usFilterOption : ADS_IGNOREFILTERS (0) / ADS_RESPECTFILTERS (1).
+// usFilterOption : ADS_RESPECTFILTERS (1) / ADS_IGNOREFILTERS (2) (SAP numbering).
 // We iterate raw records and skip the DBF tombstone byte -- that
 // matches IGNOREFILTERS (the default Harbour passes). RESPECT
 // will land alongside AOF-aware copy in a follow-up; until then
@@ -38756,7 +38756,7 @@ UNSIGNED32 ENTRYPOINT AdsGetKeyLength(ADSHANDLE hIndex, UNSIGNED16* p) {
 // sequence (== the record number when no order is active). FWH's
 // xBrowse uses this (via Harbour rddads' AdsKeyNo()) as its scrollbar
 // position; a stubbed 0 left the browse unable to paint any row.
-UNSIGNED32 ENTRYPOINT AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/,
+UNSIGNED32 ENTRYPOINT AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 usFilterOption,
                         UNSIGNED32* pulKeyNum) {
     arc2_trace("AdsGetKeyNum");
     if (pulKeyNum == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
@@ -38783,6 +38783,32 @@ UNSIGNED32 ENTRYPOINT AdsGetKeyNum(ADSHANDLE hObj, UNSIGNED16 /*usFilterOption*/
     auto*         idx = ord->index();
     // CDX: O(1) via the cached ordered-recno walk.
     if (auto* cdx = dynamic_cast<openads::drivers::cdx::CdxIndex*>(idx)) {
+        // Under a scope the key number is the position INSIDE the scope
+        // (1..OrdKeyCount), as SAP ADS and DBFCDX report it. The absolute
+        // index position (e.g. 99365 for row 5 of a 9-row scope) made
+        // TXBrowse:CalcRowSelPos compute nLen - KeyNo < 0 and throw the
+        // highlight off after every mouse click. Counted like
+        // AdsGetKeyCount (SET DELETED aware) so the two always agree.
+        // Also covers the server's GetKeyNum handler, which calls this
+        // with filter option 0. ADT is included when its .adi bag runs
+        // through this CDX engine (adt_cdx_index).
+        auto& sc = ord->scope();
+        if (usFilterOption != ADS_IGNOREFILTERS &&
+            (sc.top.has_value() || sc.bottom.has_value())) {
+            std::function<bool(std::uint32_t)> live;
+            const std::function<bool(std::uint32_t)>* live_p = nullptr;
+            if (!t->show_deleted_records()) {
+                live = [t](std::uint32_t r) {
+                    auto del = t->deleted_at(r);
+                    return del && !del.value();
+                };
+                live_p = &live;
+            }
+            *pulKeyNum = cdx->scoped_key_number(sc.top.value_or(""),
+                                                sc.bottom.value_or(""),
+                                                rn, live_p);
+            return ok();
+        }
         std::uint32_t pos = cdx->pos_of_recno_cached(rn);
         *pulKeyNum = (pos == 0xFFFFFFFFu) ? 0u : (pos + 1u);
         return ok();
@@ -39834,30 +39860,38 @@ UNSIGNED32 ENTRYPOINT AdsSetRelKeyPos(ADSHANDLE h, double pos) {
         openads::network::RemoteTable* rt = ri->parent;
         auto act = openads::network::remote_activate_index(ri);
         if (!act) return fail(act.error());
-        remote_ensure_rec_count(rt);
-        const std::uint32_t rc =
-            rt->rec_count_cached ? rt->cached_rec_count : 0u;
-        if (rc <= 1u) return ok();
+        // The target is a position in the active order's key walk, so
+        // scale by the scoped key count -- the same denominator
+        // remote_query_rel_key_pos uses. Scaling by the physical record
+        // count sent every position past the first to the last scoped key
+        // (TXBrowse mouse click on a scoped browse jumped to the last row).
+        const std::uint32_t kc = remote_ensure_key_count(rt);
+        if (kc == 0u) return ok();
         if (pos < 0.0) pos = 0.0;
         if (pos > 1.0) pos = 1.0;
         std::uint32_t target = static_cast<std::uint32_t>(
-            pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
-        if (target > rc) target = rc;
-        return remote_goto_key_num(rt, ri, target, &rc);
+            pos * static_cast<double>(kc - 1u) + 0.5) + 1u;
+        if (target > kc) target = kc;
+        return remote_goto_key_num(rt, ri, target);
     }
     if (auto* rt = get_remote_table(h)) {
+        if (remote_table_has_index(rt)) {
+            // Scoped key count, as in the index-handle branch above.
+            const std::uint32_t kc = remote_ensure_key_count(rt);
+            if (kc == 0u) return ok();
+            if (pos < 0.0) pos = 0.0;
+            if (pos > 1.0) pos = 1.0;
+            std::uint32_t target = static_cast<std::uint32_t>(
+                pos * static_cast<double>(kc - 1u) + 0.5) + 1u;
+            if (target > kc) target = kc;
+            return remote_goto_key_num(rt, nullptr, target);
+        }
         remote_ensure_rec_count(rt);
         const std::uint32_t rc =
             rt->rec_count_cached ? rt->cached_rec_count : 0u;
         if (rc <= 1u) return ok();
         if (pos < 0.0) pos = 0.0;
         if (pos > 1.0) pos = 1.0;
-        if (remote_table_has_index(rt)) {
-            std::uint32_t target = static_cast<std::uint32_t>(
-                pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
-            if (target > rc) target = rc;
-            return remote_goto_key_num(rt, nullptr, target, &rc);
-        }
         std::uint32_t rn = static_cast<std::uint32_t>(
             pos * static_cast<double>(rc - 1u) + 0.5) + 1u;
         if (rn < 1u) rn = 1u;

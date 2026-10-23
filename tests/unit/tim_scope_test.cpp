@@ -183,10 +183,11 @@ TEST_CASE("tim relkeypos: REMOTE AdsSetRelKeyPos scales by the scoped key count"
     REQUIRE(AdsSetRelKeyPos(hN, 1.0) == 0);
     CHECK(key_num(hN) == 10u);
     REQUIRE(AdsSetRelKeyPos(hN, 0.5) == 0);
-    // 0.5 * (10 - 1) + 1 -> 5. Before the fix the target was scaled by the
-    // physical 300 and clamped, so every position past 0 landed on row 10.
-    CHECK_MESSAGE(key_num(hN) == 5u,
-                  "SetRelKeyPos(0.5) on a 10-row scope must land on row 5, "
+    // uint32(0.5 * 9 + 0.5) + 1 -> 6 (the pinned SetRelKeyPos rounding,
+    // unchanged). Before the fix the target was scaled by the physical
+    // 300 and clamped, so every position past 0 landed on row 10.
+    CHECK_MESSAGE(key_num(hN) == 6u,
+                  "SetRelKeyPos(0.5) on a 10-row scope must land on row 6, "
                   "not the last scoped row (10)");
     REQUIRE(AdsCloseTable(hT) == 0);
     AdsDisconnect(h);
@@ -200,7 +201,7 @@ TEST_CASE("tim relkeypos guard: without a scope REMOTE AdsSetRelKeyPos is unchan
     ADSHANDLE hT = 0, hN = 0;
     make_keyed_table(h, dir, "scrg", ADS_CDX, 300, &hT, &hN);
     REQUIRE(AdsSetRelKeyPos(hN, 0.5) == 0);
-    CHECK(key_num(hN) == 150u);             // 0.5 * 299 + 1 (rounded)
+    CHECK(key_num(hN) == 151u);             // uint32(0.5 * 299 + 0.5) + 1
     REQUIRE(AdsCloseTable(hT) == 0);
     AdsDisconnect(h);
 }

@@ -1,8 +1,8 @@
-name: tim items 1-4 tests (failing tests first)
+name: tim items and scope tests (failing tests first)
 
 on:
   push:
-    branches: [test/tim-items-1-3]
+    branches: [test/tim-items-1-3, test/tim-scope-fixes]
     paths: [.github/workflows/tim-tests.yml]
   workflow_dispatch: {}
 
@@ -26,7 +26,7 @@ jobs:
         run: |
           T=$(find build -name openads_unit_tests -type f | head -1)
           echo "binary: $T"
-          "$T" -tc="tim item*" 2>&1 | tee tim-out.txt
+          "$T" -tc="tim item*,tim scope*,tim relkeypos*,tim ace*" 2>&1 | tee tim-out.txt
       - uses: actions/upload-artifact@v4
         with:
           name: tim-test-output

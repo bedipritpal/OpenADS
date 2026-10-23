@@ -23,6 +23,26 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// Sets an env var for the test's lifetime and clears it on exit (same
+// idiom as abi_adi_estaelec_compound_test.cpp; MSVC has no setenv).
+struct EnvGuard {
+    const char* name_;
+    EnvGuard(const char* n, const char* v) : name_(n) {
+#ifdef _WIN32
+        _putenv_s(n, v);
+#else
+        setenv(n, v, 1);
+#endif
+    }
+    ~EnvGuard() {
+#ifdef _WIN32
+        _putenv_s(name_, "");
+#else
+        unsetenv(name_);
+#endif
+    }
+};
+
 std::vector<UNSIGNED8> cbuf(const std::string& s) {
     std::vector<UNSIGNED8> v(s.begin(), s.end());
     v.push_back(0);
@@ -138,12 +158,11 @@ TEST_CASE("tim scope: LOCAL CDX OrdKeyNo is the position inside the scope") {
 TEST_CASE("tim scope: LOCAL ADT (CDX-format adi) OrdKeyNo is the position inside the scope") {
     // Tim runs ADT with CDX-format .adi bags (adt_cdx_index=1), which is the
     // configuration this fix covers. The native AdiIndex reader is not in scope.
-    setenv("OPENADS_ADT_CDX_INDEX", "1", 1);
+    EnvGuard env("OPENADS_ADT_CDX_INDEX", "1");
     auto dir = fresh_dir("openads_tim_scope_local_adt");
     ADSHANDLE h = connect_local(dir);
     scoped_keynum_checks(h, dir, "scda", ADS_ADT);
     AdsDisconnect(h);
-    unsetenv("OPENADS_ADT_CDX_INDEX");
 }
 
 TEST_CASE("tim scope: REMOTE OrdKeyNo after a record jump is the position inside the scope") {

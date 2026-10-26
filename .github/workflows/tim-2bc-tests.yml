@@ -1,0 +1,29 @@
+name: Tim 2b 2c regressions (tests first)
+on:
+  push:
+    branches: [test/tim-2bc-regressions]
+    paths: [.github/workflows/tim-2bc-tests.yml]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WARNINGS_AS_ERRORS=OFF
+      - name: Build
+        run: cmake --build build --target openads_unit_tests --parallel 2
+      - name: Tim 2b 2c tests
+        shell: bash
+        run: |
+          set -o pipefail
+          build/tests/openads_unit_tests -tc='Tim 2b*,Tim 2c*' 2>&1 | tee tim-2bc-results.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tim-2bc-test-output
+          path: tim-2bc-results.txt

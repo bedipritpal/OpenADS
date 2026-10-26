@@ -362,6 +362,7 @@ add_executable(openads_unit_tests
     unit/abi_remote_lock_introspection_test.cpp
     unit/network_exclusive_open_test.cpp
     unit/network_append_lock_ledger_test.cpp
+    unit/tim_2bc_test.cpp
     unit/backend_tier1_test.cpp
     unit/abi_oads_file_funcs_test.cpp
     unit/abi_create_index_path_test.cpp

@@ -75,6 +75,9 @@ TEST_CASE("Tim 2b new tags attach immediately on an exclusive open table") {
             std::string bag = (dir / "rows.cdx").string(), expr = "NAME";
             unsigned expected = 0;
             for (std::string tag : {std::string("FIRST"), std::string("SECOND")}) {
+                // Stock rddads adsOrderCreate clears the order list first
+                // when no additive order condition is active.
+                REQUIRE(AdsCloseAllIndexes(t) == 0);
                 ADSHANDLE idx = 0;
                 if (legacy) REQUIRE(AdsCreateIndex(t, bc_bytes(bag), bc_bytes(tag), bc_bytes(expr), nullptr, ADS_COMPOUND, ADS_STRINGKEY, &idx) == 0);
                 else REQUIRE(AdsCreateIndex61(t, bc_bytes(bag), bc_bytes(tag), bc_bytes(expr), nullptr, nullptr, ADS_COMPOUND, 512, &idx) == 0);

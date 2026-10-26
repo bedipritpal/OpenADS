@@ -1,0 +1,35 @@
+name: Stage 1 V1 TLS review on current parent
+on:
+  push:
+    branches: [port/auth-v1-current-parent]
+    paths: [.github/workflows/stage1-review.yml]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Configure TLS without Harbour probes
+        run: cmake --preset ninja-clang -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF
+      - name: Build
+        run: cmake --build build/ninja-clang --parallel 2
+      - name: List tests
+        run: ctest --test-dir build/ninja-clang -N
+      - name: Unit suite and integration tests, soak excluded
+        run: ctest --test-dir build/ninja-clang --output-on-failure -E soak
+      - name: Explicit auth and login tests
+        shell: bash
+        run: |
+          set -o pipefail
+          build/ninja-clang/tests/openads_unit_tests -tc='*auth*,*Auth*,*login*,*Login*,*onnect*,*serverd*' -tce='*[slow]*,*flaky*' | tee stage1-login.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stage1-test-logs
+          path: |
+            stage1-login.txt
+            build/ninja-clang/Testing/Temporary/LastTest.log

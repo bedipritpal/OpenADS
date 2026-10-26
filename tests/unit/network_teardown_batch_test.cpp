@@ -231,7 +231,9 @@ TEST_CASE("Teardown batching: create settles flush and close before new bindings
     REQUIRE(AdsGotoTop(hTable) == AE_SUCCESS);
     CHECK(tb_op(kOpFlushFile) == fl0);
     CHECK(tb_op(kOpCloseAllIdx) == ca0);
-    CHECK(tb_numidx(hTable) == 2u);
+    UNSIGNED16 attached_count = 0;
+    REQUIRE(AdsGetNumIndexes(hTable, &attached_count) == AE_SUCCESS);
+    CHECK(attached_count == 2u);
 
     REQUIRE(AdsCloseTable(hTable) == AE_SUCCESS);
     REQUIRE(AdsDisconnect(hConn) == AE_SUCCESS);

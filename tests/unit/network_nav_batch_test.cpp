@@ -1023,3 +1023,101 @@ TEST_CASE("mtfix37 default compatibility reuses count and fresh opt-in sees peer
     REQUIRE(AdsDisconnect(connection) == AE_SUCCESS);
     server.stop();
 }
+
+namespace {
+// Test-only cache invalidation isolates count traffic without adding a client
+// freshness policy or changing production invalidation paths.
+void nb_uncache_physical(ADSHANDLE table) {
+    auto* rt = openads::abi::detail::state().registry.lookup<
+        openads::network::RemoteTable>(table,
+        openads::session::HandleKind::RemoteTable);
+    REQUIRE(rt != nullptr);
+    rt->rec_count_cached = false;
+    rt->count_bound_ok = false;
+}
+}
+
+TEST_CASE("Position count: ordered reads skip unused physical count") {
+    nb_wipe();
+    const auto dir = nb_tmp_dir();
+    nb_seed_ord(dir);
+    openads::network::Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    const auto connection = nb_connect_remote(dir, server.port());
+    const auto table = nb_open(connection, "ord.dbf");
+    UNSIGNED8 tag[] = "BYID";
+    ADSHANDLE index = 0;
+    REQUIRE(AdsGetIndexHandle(table, tag, &index) == AE_SUCCESS);
+    REQUIRE(AdsSetIndexOrderByHandle(table, index) == AE_SUCCESS);
+    REQUIRE(AdsGotoBottom(table) == AE_SUCCESS);
+    double position = 0;
+    nb_uncache_physical(table);
+    auto before = nb_op(kOpGetRecordCount);
+    REQUIRE(AdsGetRelKeyPos(table, &position) == AE_SUCCESS);
+    CHECK(position == doctest::Approx(1.0));
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    nb_uncache_physical(table);
+    REQUIRE(AdsGetRelKeyPos(index, &position) == AE_SUCCESS);
+    CHECK(position == doctest::Approx(1.0));
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    // Tim's scoped setter uses the key count, not a physical snapshot.
+    // Preserve the parent's forced-cache-invalidation coverage while
+    // retaining that newer fork behavior.
+    before = nb_op(kOpGetRecordCount);
+    nb_uncache_physical(table);
+    REQUIRE(AdsSetRelKeyPos(table, 0.5) == AE_SUCCESS);
+    CHECK(nb_recno(table) == 3);
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    nb_uncache_physical(table);
+    REQUIRE(AdsSetRelKeyPos(index, 0.5) == AE_SUCCESS);
+    CHECK(nb_recno(table) == 3);
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    // A scoped order has fewer keys than physical records. The getter must
+    // use the scoped denominator; setter targets must still clamp to it.
+    double low = 10.0, high = 20.0;
+    REQUIRE(AdsSetScope(index, ADS_TOP, reinterpret_cast<UNSIGNED8*>(&low),
+                        sizeof(low), ADS_DOUBLEKEY) == AE_SUCCESS);
+    REQUIRE(AdsSetScope(index, ADS_BOTTOM, reinterpret_cast<UNSIGNED8*>(&high),
+                        sizeof(high), ADS_DOUBLEKEY) == AE_SUCCESS);
+    REQUIRE(AdsGotoBottom(index) == AE_SUCCESS);
+    CHECK(nb_recno(table) == 3);
+    nb_uncache_physical(table);
+    before = nb_op(kOpGetRecordCount);
+    REQUIRE(AdsGetRelKeyPos(index, &position) == AE_SUCCESS);
+    CHECK(position == doctest::Approx(1.0));
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    before = nb_op(kOpGetRecordCount);
+    nb_uncache_physical(table);
+    REQUIRE(AdsSetRelKeyPos(index, 1.0) == AE_SUCCESS);
+    CHECK(nb_recno(table) == 3);
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    REQUIRE(AdsClearScope(index, ADS_TOP) == AE_SUCCESS);
+    REQUIRE(AdsClearScope(index, ADS_BOTTOM) == AE_SUCCESS);
+    REQUIRE(AdsCloseTable(table) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(connection) == AE_SUCCESS);
+    server.stop();
+}
+
+TEST_CASE("Position count: natural order uses one physical snapshot per uncached operation") {
+    nb_wipe();
+    const auto dir = nb_tmp_dir();
+    nb_seed(dir, "natural.dbf", 3);
+    openads::network::Server server;
+    REQUIRE(server.start("127.0.0.1", 0).has_value());
+    const auto connection = nb_connect_remote(dir, server.port());
+    const auto table = nb_open(connection, "natural.dbf");
+    REQUIRE(AdsGotoBottom(table) == AE_SUCCESS);
+    nb_uncache_physical(table);
+    auto before = nb_op(kOpGetRecordCount);
+    double position = 0;
+    REQUIRE(AdsGetRelKeyPos(table, &position) == AE_SUCCESS);
+    CHECK(position == doctest::Approx(1.0));
+    CHECK(nb_op(kOpGetRecordCount) == before);
+    nb_uncache_physical(table);
+    REQUIRE(AdsSetRelKeyPos(table, 0.5) == AE_SUCCESS);
+    CHECK(nb_recno(table) == 2);
+    CHECK(nb_op(kOpGetRecordCount) == before + 2);
+    REQUIRE(AdsCloseTable(table) == AE_SUCCESS);
+    REQUIRE(AdsDisconnect(connection) == AE_SUCCESS);
+    server.stop();
+}

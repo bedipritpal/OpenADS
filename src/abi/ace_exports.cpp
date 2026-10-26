@@ -17009,8 +17009,8 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
         rt->invalidate_prefetch();
         // Structural change: the bag gained a tag, so a parked snapshot
         // predates it — drop the park (the maps above were rebuilt fresh
-        // from the server). The pending flag stays: the next flush sends
-        // a real close, since parked validity no longer holds.
+        // from the server). Any old pending close was settled before
+        // create, so later navigation cannot close these new bindings.
         rt->indexes_parked = false;
         rt->parked_by_tag.clear();
         rt->parked_handles.clear();

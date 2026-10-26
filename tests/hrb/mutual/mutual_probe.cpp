@@ -3,6 +3,7 @@
 #include "network/tls_transport.h"
 #include "network/mutual_auth.h"
 #include "openads/ace.h"
+#include "openads/version.h"
 #include <mbedtls/md.h>
 #include <cassert>
 #include <algorithm>
@@ -47,7 +48,7 @@ int main(int argc,char**argv){
  assert(std::string(reinterpret_cast<char*>(proof),n)==mac("server",transcript));auto response=mac("client",transcript);
  assert(OAdsCompleteAuth(pending,reinterpret_cast<const unsigned char*>(response.data()),static_cast<UNSIGNED32>(response.size()),&connection)==0&&connection);
  UNSIGNED8 desc[256]{};UNSIGNED16 len=sizeof(desc);
- assert(AdsGetServerVersion(connection,desc,&len)==0&&std::string(reinterpret_cast<char*>(desc)).find("1.09.74")==0);
+ assert(AdsGetServerVersion(connection,desc,&len)==0&&std::string(reinterpret_cast<char*>(desc)).find(OPENADS_VERSION_STRING)==0);
  assert(AdsDisconnect(connection)==0);
  assert(OAdsCompleteAuth(pending,reinterpret_cast<const unsigned char*>(response.data()),static_cast<UNSIGNED32>(response.size()),&connection)!=0&&connection==0);
  }

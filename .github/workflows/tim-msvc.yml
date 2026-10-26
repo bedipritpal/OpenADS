@@ -1,0 +1,125 @@
+name: timfix2a MSVC kit for Tim (Windows x64 + x86)
+
+# Tim-only MSVC build of 3bc1c245: timfix67 plus the 2a append-lock fix.
+# Existing toolchain and flags retained. Prerelease, not latest.
+
+on:
+  push:
+    branches: [release/timfix2a-tim-msvc]
+    paths: [.github/workflows/tim-msvc.yml]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: timfix2a-tim-msvc
+  cancel-in-progress: false
+
+env:
+  KIT_TAG: v1.09.74-timfix2a-msvc-tim
+  PINNED_SOURCE: 3bc1c245cb348c0264e06ef2254509be2188edaa
+
+jobs:
+  msvc:
+    name: MSVC ${{ matrix.arch }}
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: x64
+            bits: 64
+          - arch: x86
+            platform: Win32
+            bits: 32
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.PINNED_SOURCE }}
+      - name: Show source
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "$PINNED_SOURCE"
+      - name: Configure (Tim's flags)
+        shell: pwsh
+        run: |
+          cmake -S . -B build\mls-${{ matrix.arch }} -G "Visual Studio 17 2022" -A ${{ matrix.platform }} -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=ON -DOPENADS_WITH_SQLITE=ON
+          Select-String -Path build\mls-${{ matrix.arch }}\CMakeCache.txt -Pattern 'OPENADS_WITH_HTTP|OPENADS_WITH_SQLITE|OPENADS_WITH_TLS|OPENADS_BUILD_TESTS|CMAKE_GENERATOR:|CMAKE_GENERATOR_PLATFORM'
+      - name: Build
+        shell: pwsh
+        run: cmake --build build\mls-${{ matrix.arch }} --config Release
+      - name: Stage
+        shell: pwsh
+        run: |
+          $s = "timfix2a-msvc-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force $s | Out-Null
+          Get-ChildItem build\mls-${{ matrix.arch }} -Recurse -File | Where-Object { $_.FullName -match '\\Release\\' -and $_.Name -match '^(openace(32|64)\.(dll|lib)|openads_serverd\.exe|openads_auth_worker\.exe)$' } | ForEach-Object { Copy-Item $_.FullName $s; Write-Host "staged $($_.FullName)" }
+          foreach ($required in @("openace${{ matrix.bits }}.dll", "openace${{ matrix.bits }}.lib", "openads_serverd.exe")) {
+            if (-not (Test-Path "$s\$required")) { throw "missing $required" }
+          }
+          Get-ChildItem $s | Format-Table Name, Length
+          "built from $env:PINNED_SOURCE with VS 2022, ${{ matrix.platform }}, HTTP on, SQLite on, tests off" | Out-File "$s\BUILD.txt" -Encoding ascii
+      - name: Smoke test, server answers on both ports (HTTP on)
+        shell: pwsh
+        run: |
+          $s = "timfix2a-msvc-${{ matrix.arch }}"
+          $d = Join-Path $env:RUNNER_TEMP "smoke-data"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          $p = Start-Process -FilePath "$s\openads_serverd.exe" -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','6264','--http-port','6265','--data',$d) -PassThru -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+          Start-Sleep -Seconds 6
+          $tcp = Test-NetConnection -ComputerName 127.0.0.1 -Port 6264 -WarningAction SilentlyContinue
+          $http = Test-NetConnection -ComputerName 127.0.0.1 -Port 6265 -WarningAction SilentlyContinue
+          Write-Host "port 6264 open: $($tcp.TcpTestSucceeded)  port 6265 open: $($http.TcpTestSucceeded)"
+          Get-Content out.txt, err.txt -ErrorAction SilentlyContinue
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $tcp.TcpTestSucceeded) { throw "tcp port 6264 not open" }
+          if (-not $http.TcpTestSucceeded) { throw "http port 6265 not open" }
+      - name: Zip and hash
+        shell: pwsh
+        run: |
+          $s = "timfix2a-msvc-${{ matrix.arch }}"
+          Compress-Archive -Path "$s\*" -DestinationPath "$s.zip" -Force
+          (Get-FileHash "$s.zip" -Algorithm SHA256).Hash.ToLower() + "  $s.zip" | Out-File "$s.zip.sha256" -Encoding ascii
+          Get-Content "$s.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kit-${{ matrix.arch }}
+          path: |
+            timfix2a-msvc-${{ matrix.arch }}.zip
+            timfix2a-msvc-${{ matrix.arch }}.zip.sha256
+
+  publish:
+    name: Publish prerelease (not latest)
+    runs-on: ubuntu-24.04
+    needs: [msvc]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kit-*
+          merge-multiple: true
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > NOTES.md <<'NOTES'
+          # OpenADS timfix2a MSVC kit (for Tim)
+
+          Pritpal Bedi. Fork: bedipritpal/OpenADS, from FiveTechSoft/OpenADS.
+
+          Source is commit 3bc1c245, on top of timfix67 (44a16fe0). All earlier fixes remain. Adds Tim finding 2a: exclusive and FLocked appends no longer accumulate unused record locks or stop at 4096. Shared non-FLocked appends retain their automatic lock and cap. Findings 2b, 2c and 2d remain open. Fork CI run 40365942420 passed all 11 legs across attempts, including MSVC x64 and x86.
+          Configure line: -G "Visual Studio 17 2022" -A x64 (and Win32) -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=ON -DOPENADS_WITH_SQLITE=ON.
+          Windows only. Each zip holds openace DLL and import lib, openads_serverd.exe, and openads_auth_worker.exe when the build makes it.
+          The unit tests were not run on these MSVC builds in this workflow. A start check confirms the server opens its TCP port and its HTTP port.
+          Test only, for one tester. Not the Windows kit for production use.
+          NOTES
+          sha256sum -c timfix2a-msvc-x64.zip.sha256
+          sha256sum -c timfix2a-msvc-x86.zip.sha256
+          gh release create "$KIT_TAG" --target "$PINNED_SOURCE" --prerelease --latest=false --title "OpenADS timfix2a MSVC kit (Windows x64 + x86), test only" --notes-file NOTES.md timfix2a-msvc-x64.zip timfix2a-msvc-x64.zip.sha256 timfix2a-msvc-x86.zip timfix2a-msvc-x86.zip.sha256
+          gh release view "$KIT_TAG" --json tagName,isPrerelease,url,assets

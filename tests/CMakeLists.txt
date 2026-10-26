@@ -111,6 +111,7 @@ add_executable(openads_unit_tests
     unit/abi_create_outside_datadir_test.cpp
     unit/abi_remote_create_table_test.cpp
     unit/tim_items_test.cpp
+    unit/tim_2bc_test.cpp
     unit/tim_scope_test.cpp
     unit/abi_remote_logical_write_test.cpp
     unit/abi_create_concurrent_test.cpp

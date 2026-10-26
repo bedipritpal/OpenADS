@@ -16881,6 +16881,14 @@ UNSIGNED32 ENTRYPOINT AdsCreateIndex61(ADSHANDLE   hTable,
     }
 #endif
     if (auto* rt = get_remote_table(hTable)) {
+        // RDD OrderCreate clears the old orders before creating a tag.
+        // Settle that teardown before the new server bindings exist, or
+        // the final GoTop can flush the old CloseAll against the new bag.
+        // A parked snapshot cannot be reused across a mutating create.
+        if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
+        if (rt->indexes_parked) {
+            if (UNSIGNED32 frc = remote_emit_close_all(rt); frc != 0) return frc;
+        }
         create_index_diag("61 ROUTE remote h=%llu table_id=%u", static_cast<unsigned long long>(hTable), static_cast<unsigned>(rt->id));
         std::string path = openads::abi::to_internal(pucFileName, 0);
         path = normalize_index_path(std::move(path));

@@ -94,6 +94,9 @@ TEST_CASE("Tim 2b new tags attach immediately on an exclusive open table") {
                 REQUIRE(AdsGotoTop(idx) == 0);
                 REQUIRE(AdsGetNumIndexes(t, &count) == 0);
                 CHECK(count == expected);
+                REQUIRE(AdsGetIndexHandle(t, bc_bytes(tag), &named) == 0);
+                REQUIRE(AdsSeek(named, bc_bytes(key), 8, ADS_STRINGKEY, ADS_HARDSEEK, &found) == 0);
+                CHECK(found == 1);
             }
             REQUIRE(AdsCloseTable(t) == 0);
             REQUIRE(AdsDisconnect(c) == 0);

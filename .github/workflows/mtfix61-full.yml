@@ -1,7 +1,7 @@
 name: mtfix61 full kit (x86 + x64 + linux + macos)
 
 # One prerelease entry carrying all kits, built from fork branch
-# test/parent-1ef469ae-cumulative (18f2f464): mtfix60 plus parent 1ef469ae and the tested Tim 2b fix.
+# test/parent-1ef469ae-cumulative (fb9a96c9): mtfix60 plus parent 1ef469ae and the tested Tim 2b fix.
 
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
 
 env:
   KIT_VERSION: 1.09.75-mtfix61-full-test
-  PINNED_SOURCE: 18f2f4640df35e8d52d63175311aa15806868a1c
+  PINNED_SOURCE: fb9a96c9daadc4e61bb354224877f33cddef4ec5
 
 jobs:
   x86kit:
@@ -29,7 +29,7 @@ jobs:
         fetch-depth: 0
         ref: release/mtfix61-full
     - name: Verify clean main-based source
-      run: "set -euxo pipefail\ntest \"$GITHUB_REF\" = refs/heads/release/mtfix61-full\ngit merge-base --is-ancestor 18f2f4640df35e8d52d63175311aa15806868a1c HEAD\ntest -z \"$(git diff --name-only 18f2f4640df35e8d52d63175311aa15806868a1c HEAD -- . ':!.github/workflows')\"\n"
+      run: "set -euxo pipefail\ntest \"$GITHUB_REF\" = refs/heads/release/mtfix61-full\ngit merge-base --is-ancestor fb9a96c9daadc4e61bb354224877f33cddef4ec5 HEAD\ntest -z \"$(git diff --name-only fb9a96c9daadc4e61bb354224877f33cddef4ec5 HEAD -- . ':!.github/workflows')\"\n"
       shell: bash
     - name: Download exact historical Qt compiler
       run: 'Invoke-WebRequest ''https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z''
@@ -386,7 +386,7 @@ jobs:
       run: "set -euxo pipefail\nmkdir -p delivery/mtfix61-full/{bin,lib,include,docs}\ncp output/openace32.dll\
         \ delivery/mtfix61-full/bin/\ncp kit/libopenace32.dll.a kit/librddads.a delivery/mtfix61-full/lib/\n\
         cp include/openads/ace.h \"$RUNNER_TEMP/harbour-old/contrib/rddads/ads.ch\" delivery/mtfix61-full/include/\n\
-        cat > delivery/mtfix61-full/docs/README.txt <<'NOTES'\nMTFIX61 FULL TEST KIT, WINDOWS X86\nBuilt from 18f2f464: mtfix60 plus parent 1ef469ae (1.09.75 metadata/portal fixes) and Tim 2b deferred-close/new-tag fix. All earlier Tim and auth fixes retained. Shared non-FLocked append locking is unchanged. Includes the V2 mutual auth test content, HRB crypto toolbox, worker resource limits.\n\n After-auth Hello adds one application\
+        cat > delivery/mtfix61-full/docs/README.txt <<'NOTES'\nMTFIX61 FULL TEST KIT, WINDOWS X86\nBuilt from fb9a96c9: mtfix60 plus parent 1ef469ae (1.09.75 metadata/portal fixes) and Tim 2b deferred-close/new-tag fix. All earlier Tim and auth fixes retained. Shared non-FLocked append locking is unchanged. Includes the V2 mutual auth test content, HRB crypto toolbox, worker resource limits.\n\n After-auth Hello adds one application\
         \ RTT (auth two becomes three).\n\n MD5/Blowfish legacy only; not identity proof/signatures.\n\n V2 mutual\
         \ auth opt-in. Public mock HRB only; replace with your real module. Not for production servers.\nRead MUTUAL-V2.txt and ACL-SETUP.txt\
         \ before use.\nZIP extraction loses the protected HRB ACL. Apply that step before server startup.\nExtract\
@@ -448,8 +448,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix61-full
-        git merge-base --is-ancestor 18f2f4640df35e8d52d63175311aa15806868a1c HEAD
-        test -z "$(git diff --name-only 18f2f4640df35e8d52d63175311aa15806868a1c HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor fb9a96c9daadc4e61bb354224877f33cddef4ec5 HEAD
+        test -z "$(git diff --name-only fb9a96c9daadc4e61bb354224877f33cddef4ec5 HEAD -- . ':!.github/workflows')"
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
       shell: pwsh
       run: |
@@ -512,7 +512,7 @@ jobs:
         OPENADS MTFIX61 FULL TEST KIT, WINDOWS X64.
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
         Windows x64, built with Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit).
-        Built from 18f2f464: mtfix60 plus parent 1ef469ae and the Tim 2b deferred-close/new-tag fix.
+        Built from fb9a96c9: mtfix60 plus parent 1ef469ae and the Tim 2b deferred-close/new-tag fix.
         All earlier ADT, scope, constants, 2a and auth fixes retained. Shared append locking is unchanged.
         Server: bin/openads_serverd.exe (keep openads_auth_worker.exe beside it).
         Client DLL: bin/openace64.dll. Not for production.
@@ -623,7 +623,7 @@ jobs:
 
           Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-          Built from fork branch test/parent-1ef469ae-cumulative, commit 18f2f4640df35e8d52d63175311aa15806868a1c
+          Built from fork branch test/parent-1ef469ae-cumulative, commit fb9a96c9daadc4e61bb354224877f33cddef4ec5
           (mtfix59 plus ADT create-name/type fixes, scoped OrdKeyNo and REMOTE
           RelKeyPos fixes, SAP filter constants, and the exclusive/FLock
           append-lock fix).
@@ -769,8 +769,8 @@ jobs:
         run: |
           set -euxo pipefail
           test "$GITHUB_REF" = refs/heads/release/mtfix61-full
-          git merge-base --is-ancestor 18f2f4640df35e8d52d63175311aa15806868a1c HEAD
-          test -z "$(git diff --name-only 18f2f4640df35e8d52d63175311aa15806868a1c HEAD -- . ':!.github/workflows')"
+          git merge-base --is-ancestor fb9a96c9daadc4e61bb354224877f33cddef4ec5 HEAD
+          test -z "$(git diff --name-only fb9a96c9daadc4e61bb354224877f33cddef4ec5 HEAD -- . ':!.github/workflows')"
       - name: Set up Ninja
         uses: seanmiddleditch/gha-setup-ninja@v6
       - name: Configure
@@ -844,7 +844,7 @@ jobs:
 
           Pritpal Bedi. Fork: bedipritpal/OpenADS, from FiveTechSoft/OpenADS.
 
-          One entry, all kits, built from fork branch test/parent-1ef469ae-cumulative at 18f2f464.
+          One entry, all kits, built from fork branch test/parent-1ef469ae-cumulative at fb9a96c9.
 
           Cumulative contents, including every verified earlier Tim fix:
           - ADT create without extension uses .adt; SQL CREATE TABLE with a .adt name creates ADT.
@@ -874,5 +874,5 @@ jobs:
           ls -la
           sha256sum mtfix61-full-qt492-x86.zip mtfix61-full-x64.zip openads-1.09.75-mtfix61-full-test-linux-x64.tar.gz openads-1.09.75-mtfix61-full-test-macos-universal.tar.gz
           sha256sum mtfix61-full-qt492-x86.zip mtfix61-full-x64.zip > WINDOWS_SHA256SUMS.txt
-          gh release create v1.09.75-mtfix61-full-test --target 18f2f4640df35e8d52d63175311aa15806868a1c --prerelease --latest=false --title "OpenADS mtfix61 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix61-full-qt492-x86.zip mtfix61-full-x64.zip openads-1.09.75-mtfix61-full-test-linux-x64.tar.gz openads-1.09.75-mtfix61-full-test-linux-x64.tar.gz.sha256 MTFIX61_LINUX_SERVER_TEST.md openads-1.09.75-mtfix61-full-test-macos-universal.tar.gz openads-1.09.75-mtfix61-full-test-macos-universal.tar.gz.sha256
+          gh release create v1.09.75-mtfix61-full-test --target fb9a96c9daadc4e61bb354224877f33cddef4ec5 --prerelease --latest=false --title "OpenADS mtfix61 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix61-full-qt492-x86.zip mtfix61-full-x64.zip openads-1.09.75-mtfix61-full-test-linux-x64.tar.gz openads-1.09.75-mtfix61-full-test-linux-x64.tar.gz.sha256 MTFIX61_LINUX_SERVER_TEST.md openads-1.09.75-mtfix61-full-test-macos-universal.tar.gz openads-1.09.75-mtfix61-full-test-macos-universal.tar.gz.sha256
           gh release view v1.09.75-mtfix61-full-test --json tagName,isPrerelease,url,assets

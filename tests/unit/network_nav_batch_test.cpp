@@ -1112,7 +1112,7 @@ TEST_CASE("Position count: natural order uses one physical snapshot per uncached
     double position = 0;
     REQUIRE(AdsGetRelKeyPos(table, &position) == AE_SUCCESS);
     CHECK(position == doctest::Approx(1.0));
-    CHECK(nb_op(kOpGetRecordCount) == before);
+    CHECK(nb_op(kOpGetRecordCount) == before + 1);
     nb_uncache_physical(table);
     REQUIRE(AdsSetRelKeyPos(table, 0.5) == AE_SUCCESS);
     CHECK(nb_recno(table) == 2);

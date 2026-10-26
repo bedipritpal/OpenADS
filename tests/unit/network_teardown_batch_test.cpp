@@ -224,7 +224,8 @@ TEST_CASE("Teardown batching: create settles flush and close before new bindings
     const std::uint64_t ca_before_create = tb_op(kOpCloseAllIdx);
     REQUIRE(AdsCreateIndex61(hTable, bag, tag, exp, nullptr, nullptr,
                              ADS_COMPOUND, 512, &hI) == AE_SUCCESS);
-    CHECK(tb_op(kOpFlushFile) == fl_before_create + 1);
+    // With no live park, CloseAll absorbs the owed flush on capable peers.
+    CHECK(tb_op(kOpFlushFile) == fl_before_create);
     CHECK(tb_op(kOpCloseAllIdx) == ca_before_create + 1);
     const std::uint64_t fl0 = tb_op(kOpFlushFile);
     const std::uint64_t ca0 = tb_op(kOpCloseAllIdx);

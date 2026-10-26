@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: seanmiddleditch/gha-setup-ninja@v6
       - name: Configure TLS without Harbour probes
         run: cmake --preset ninja-clang -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF

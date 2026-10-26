@@ -1,0 +1,877 @@
+name: mtfix60 full kit (x86 + x64 + linux + macos)
+
+# One prerelease entry carrying all kits, built from fork branch
+# test/tim-2a-append-lock-ledger (3bc1c245): mtfix59 plus the tested Tim fixes and 2a.
+
+on:
+  push:
+    branches: [release/mtfix60-full]
+    paths: [.github/workflows/mtfix60-full.yml]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mtfix60-full-kit
+  cancel-in-progress: false
+
+env:
+  KIT_VERSION: 1.09.74-mtfix60-full-test
+  PINNED_SOURCE: 3bc1c245cb348c0264e06ef2254509be2188edaa
+
+jobs:
+  x86kit:
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix60-full
+    - name: Verify clean main-based source
+      run: "set -euxo pipefail\ntest \"$GITHUB_REF\" = refs/heads/release/mtfix60-full\ngit merge-base --is-ancestor 3bc1c245cb348c0264e06ef2254509be2188edaa HEAD\ntest -z \"$(git diff --name-only 3bc1c245cb348c0264e06ef2254509be2188edaa HEAD -- . ':!.github/workflows')\"\n"
+      shell: bash
+    - name: Download exact historical Qt compiler
+      run: 'Invoke-WebRequest ''https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z''
+        -OutFile "$env:RUNNER_TEMP/qt492.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/qt492.7z" -Algorithm SHA256).Hash.ToLower() -ne ''f6de32350a28f4b6c30eec26dbfee65f112300d51e37e4d2007b0598bef9bb79''){throw
+        ''Qt compiler hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/qt492.7z" "-o$env:RUNNER_TEMP/qt492" -y
+
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne ''019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907''){throw
+        ''Winlibs hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+
+        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r4nvptx/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r4nvptx.7z''
+        -OutFile "$env:RUNNER_TEMP/owner2351.7z"
+
+        if((Get-FileHash "$env:RUNNER_TEMP/owner2351.7z" -Algorithm SHA256).Hash.ToLower() -ne ''5e18f786047c52b40392fe57f966bcb1a8acbc95d61da10796b13df63b9a1d95''){throw
+        ''Owner2351 compiler hash mismatch''}
+
+        & 7z x "$env:RUNNER_TEMP/owner2351.7z" "-o$env:RUNNER_TEMP/owner2351" -y
+
+        '
+      shell: pwsh
+    - name: Build TLS auth daemon and raw static kit with pinned GCC10.2
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/winlibs/mingw32/bin\"):$PATH\"\ntest \"\
+        $(gcc -dumpversion)\" = 10.2.0\nfind \"$RUNNER_TEMP/winlibs\" -iname '*copying*' -o -iname '*license*' |\
+        \ sort\ngit clone https://github.com/harbour/core.git \"$RUNNER_TEMP/harbour-server\"\ngit -C \"$RUNNER_TEMP/harbour-server\"\
+        \ checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d\nexport HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no\
+        \ HB_BUILD_DYN=no\nmingw32-make -C \"$RUNNER_TEMP/harbour-server\" -j2\nHB=\"$(cygpath -m \"$RUNNER_TEMP/harbour-server\"\
+        )\"\nprintf '\\nif(WIN32 AND MINGW)\\n set_target_properties(openads_ace PROPERTIES PREFIX \"\")\\nendif()\\\
+        n' >> src/CMakeLists.txt\npython - <<'PYHARNESS'\nimport pathlib,re,base64\nroot=pathlib.Path('.')\nheader=root/'tests/legacy-native-temp.h'\n\
+        header.write_bytes(base64.b64decode('I3ByYWdtYSBvbmNlCiNpbmNsdWRlIDxmaWxlc3lzdGVtPgojaW5jbHVkZSA8c3lzdGVtX2Vycm9yPgojaW5jbHVkZSA8d2luZG93cy5oPgojaW5jbHVkZSA8dmVjdG9yPgpuYW1lc3BhY2Ugb3BlbmFkc190ZXN0IHsKaW5saW5lIHN0ZDo6ZmlsZXN5c3RlbTo6cGF0aCB0ZW1wX2RpcmVjdG9yeV9wYXRoKHN0ZDo6ZXJyb3JfY29kZSYgZWMpIHsKIHN0ZDo6dmVjdG9yPHdjaGFyX3Q+IGIoMzI3NjgpO0RXT1JEIG49R2V0VGVtcFBhdGhXKHN0YXRpY19jYXN0PERXT1JEPihiLnNpemUoKSksYi5kYXRhKCkpOwogaWYoIW4gfHwgbj49Yi5zaXplKCkpe2VjPXN0ZDo6ZXJyb3JfY29kZShHZXRMYXN0RXJyb3IoKSxzdGQ6OnN5c3RlbV9jYXRlZ29yeSgpKTtyZXR1cm4ge307fQogc3RkOjpmaWxlc3lzdGVtOjpwYXRoIHAoc3RkOjp3c3RyaW5nKGIuZGF0YSgpLG4pKTsKIC8vIFBpbm5lZCBNaW5HVzggc3RhdCByZWplY3RzIGRpcmVjdG9yeVxcIGJ1dCBhY2NlcHRzIGRpcmVjdG9yeS4gS2VlcCBkcml2ZSByb290Lgogd2hpbGUocCE9cC5yb290X3BhdGgoKSAmJiAhcC5oYXNfZmlsZW5hbWUoKSkgcD1wLnBhcmVudF9wYXRoKCk7CiBhdXRvIHN0PXN0ZDo6ZmlsZXN5c3RlbTo6c3RhdHVzKHAsZWMpOwogaWYoIWVjJiYhc3RkOjpmaWxlc3lzdGVtOjppc19kaXJlY3Rvcnkoc3QpKWVjPXN0ZDo6bWFrZV9lcnJvcl9jb2RlKHN0ZDo6ZXJyYzo6bm90X2FfZGlyZWN0b3J5KTsKIHJldHVybiBlYz9zdGQ6OmZpbGVzeXN0ZW06OnBhdGh7fTpwOwp9CmlubGluZSBzdGQ6OmZpbGVzeXN0ZW06OnBhdGggdGVtcF9kaXJlY3RvcnlfcGF0aCgpe3N0ZDo6ZXJyb3JfY29kZSBlYzthdXRvIHA9dGVtcF9kaXJlY3RvcnlfcGF0aChlYyk7CiBpZihlYyl0aHJvdyBzdGQ6OmZpbGVzeXN0ZW06OmZpbGVzeXN0ZW1fZXJyb3IoInRlc3QgbmF0aXZlIHRlbXBfZGlyZWN0b3J5X3BhdGgiLGVjKTtyZXR1cm4gcDt9Cn0K'))\n\
+        changes=[]\nfor p in (root/'tests').rglob('*.cpp'):\n s=p.read_text(encoding='utf-8',errors='strict')\n\
+        \ n=re.sub(r'\\b(?:std::filesystem|fs)::temp_directory_path\\b','openads_test::temp_directory_path',s)\n\
+        \ if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))\nwith open(root/'tests/CMakeLists.txt','a')\
+        \ as f:f.write('\\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\\ntarget_compile_options(openads_unit_tests\
+        \ PRIVATE -include \"${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h\")\\n')\nprint('Test-only native temp\
+        \ helper applied:',len(changes),'test files')\npathlib.Path('unit-harness-changes.txt').write_text('\\n'.join(changes))\n\
+        \nPYHARNESS\n\ncmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release\
+        \ -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS=\"\
+        -static -static-libgcc -static-libstdc++\" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON\
+        \ -DOPENADS_VERSION_FORCE=1.09.74-mtfix60-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON\
+        \ -DHARBOUR_COMPILER=\"$HB/bin/win/mingw/harbour.exe\" -DHARBOUR_INCLUDE_DIR=\"$HB/include\" -DHARBOUR_LIB_DIR=\"\
+        $HB/lib/win/mingw\" -DOPENADS_HARBOUR_LIBS=\"hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon\"\
+        \ -DOPENADS_WARNINGS_AS_ERRORS=OFF\ncmake --build build-legacy --target openads_ace_static openads_ace openads_serverd\
+        \ openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe auth_spike_abi_probe auth_spike_transport_probe\
+        \ auth_mutual_probe auth_resource_probe openads_unit_tests -j2\n"
+      shell: bash
+    - name: Build Harbour with unchanged Qt4.9.2
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+
+        test "$(gcc -dumpversion)" = 4.9.2
+
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-old"
+
+        git -C "$RUNNER_TEMP/harbour-old" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+
+        mingw32-make -C "$RUNNER_TEMP/harbour-old" -j2
+
+        '
+      shell: bash
+    - name: Exact GCC10.2 and mingw-w64 8 runtime notices (Winlibs omits them)
+      run: 'set -euxo pipefail
+
+        W="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32")"
+
+        mkdir -p "$W/share/licenses/gcc" "$W/share/licenses/crt" "$W/share/licenses/winpthreads"
+
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING3
+        -o "$W/share/licenses/gcc/COPYING3"
+
+        echo ''8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  ''"$W/share/licenses/gcc/COPYING3"
+        | sha256sum -c -
+
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING.RUNTIME
+        -o "$W/share/licenses/gcc/COPYING.RUNTIME"
+
+        echo ''9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74  ''"$W/share/licenses/gcc/COPYING.RUNTIME"
+        | sha256sum -c -
+
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt
+        -o "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt"
+
+        echo ''e9b2dc02451ea29092a1f25fa0f3c07207ed421f1807dffb0c4e6dce69dee7bd  ''"$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt"
+        | sha256sum -c -
+
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/mingw-w64-libraries/winpthreads/COPYING
+        -o "$W/share/licenses/winpthreads/COPYING"
+
+        echo ''63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177  ''"$W/share/licenses/winpthreads/COPYING"
+        | sha256sum -c -
+
+
+        mkdir -p kit/runtime-notices
+
+        cp "$W/share/licenses/gcc/COPYING3" kit/runtime-notices/gcc-COPYING3.txt
+
+        cp "$W/share/licenses/gcc/COPYING.RUNTIME" kit/runtime-notices/gcc-COPYING.RUNTIME.txt
+
+        cp "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt" kit/runtime-notices/MinGW-w64-runtime.txt
+
+        cp "$W/share/licenses/winpthreads/COPYING" kit/runtime-notices/winpthreads-COPYING.txt
+
+        '
+      shell: bash
+    - name: Build DLL import RDDADS and B_BIG threaded fixtures
+      run: "set -euxo pipefail\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/qt492/mingw32/bin\"):$PATH\"\nHB=\"$(cygpath\
+        \ -u \"$RUNNER_TEMP/harbour-old\")\"\nmkdir -p srv mtdata output kit\ncp build-legacy/src/*.dll build-legacy/tools/serverd/openads_serverd.exe\
+        \ build-legacy/tools/serverd/openads_auth_worker.exe srv/\ncat > output/local_create.prg <<'PRG'\n#include\
+        \ \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main( cDir )\n   LOCAL cDbf := cDir + \"/TestIndex.dbf\", cIdx\
+        \ := cDir + \"/TestIndex.cdx\"\n   FIELD NAME,CITY,INS\n   OAds_SetLogging( .F. )\n   AdsSetServerType(\
+        \ ADS_LOCAL_SERVER )\n   AdsConnect( \".\" )\n   AdsSetFileType( ADS_CDX )\n   RddSetDefault( \"ADSCDX\"\
+        \ )\n   DbCreate( cDbf, { { \"NAME\", \"C\", 19, 0 }, { \"CITY\", \"C\", 15, 0 }, { \"AGE\", \"N\", 3, 0\
+        \ }, { \"TS\", \"C\", 23, 0 }, { \"THD\", \"N\", 3, 0 }, { \"INS\", \"N\", 4, 0 }, { \"RDD\", \"C\", 3,\
+        \ 0 } }, \"ADSCDX\" )\n   dbCloseArea()\n   USE ( cDbf ) VIA \"ADSCDX\" ALIAS _STG SHARED NEW\n   INDEX\
+        \ ON NAME TAG \"IDX01\" TO ( cIdx )\n   INDEX ON CITY TAG \"IDX02\" TO ( cIdx )\n   INDEX ON INS TAG \"\
+        IDX03\" TO ( cIdx )\n   dbCloseArea()\n   OutStd( \"exact fixture ready\" + hb_eol() )\nRETURN\n\nPRG\n\
+        cat > output/probe_mt.prg <<'PRG'\n#include \"ads.ch\"\n#define __HLP__(s) .T.\nREQUEST ADS, ADSCDX\nSTATIC\
+        \ s_hConn := 0\nSTATIC s_cRdd := \"ADSCDX\"\nSTATIC s_nRandom := 1\nPROCEDURE Main( cUri, cDir )\n   LOCAL\
+        \ cChallenge, hPending := 0, i, x, aThreads := {}, cErr := Space(512)\n   ErrorBlock( {| e | OutStd( \"\
+        ERROR \" + hb_ValToExp(e) + hb_eol() ), Break(e) } )\n   AdsSetFileType( ADS_CDX )\n   AdsSetServerType(\
+        \ ADS_REMOTE_SERVER )\n   RddSetDefault( s_cRdd )\n   s_hConn := AdsConnect( cUri )\n   IF Empty( s_hConn\
+        \ )\n      OutStd( \"CONNECT-FAIL\" + hb_eol() )\n      ErrorLevel(3) ; QUIT\n   ENDIF\n   FOR i := 1 TO\
+        \ 9\n      AAdd(aThreads,hb_threadStart({|| StageExact(cDir)}))\n   NEXT\n   StageExact(cDir)\n   OutStd(\
+        \ \"MAIN-STAGE-PASS\" + hb_eol() )\n   dbGoTop()\n   OutStd( \"MAIN-GOTOP-PASS lastrec=\" + hb_ntos(LastRec())\
+        \ + hb_eol() )\n   FOR EACH x IN aThreads\n      hb_threadJoin(x)\n   NEXT\n   OutStd( \"EXACT-THREADS-JOINED\
+        \ lastrec=\" + hb_ntos(LastRec()) + hb_eol() )\n   dbCloseArea()\nRETURN\nPROCEDURE StageExact(cDir)\n \
+        \  BEGIN SEQUENCE\n      IF HeyAddRecords(cDir+\"/TestIndex.dbf\",cDir+\"/TestIndex.cdx\")\n         dbGoTop()\n\
+        \      ENDIF\n      Mark(\"stage done\")\n   RECOVER\n      Mark(\"RECOVER\")\n      ErrorLevel(4)\n   END\
+        \ SEQUENCE\nRETURN\nPROCEDURE Mark(c)\n   OutStd(\"t\"+hb_ntos(hb_threadId())+\" \"+c+hb_eol())\nRETURN\n\
+        PROCEDURE LogEvents(c)\n   Mark(c)\nRETURN\nFUNCTION HeyAddRecords( cDbf, cIdx )\n   LOCAL aRec, aData,\
+        \ lAppended\n   LOCAL lAdded := .T.\n\n   IF .T.\n      Mark( \"before USE\" )\n      USE ( cDbf ) VIA (\
+        \ s_cRdd ) ALIAS _STG SHARED NEW\n   ENDIF\n   Mark( \"after USE\" )\n   IF ! Alias() == \"_STG\"\n    \
+        \  lAdded := .F.\n      ? \"Could not Open: \", cDbf\n   ELSE\n      IF __HLP__( \"__Switching it ON do\
+        \ not display records in the browser as well as referencing them__\" )\n         Mark( \"before dbSetIndex\"\
+        \ )\n         dbSetIndex( cIdx )\n         Mark( \"after dbSetIndex\" )\n         dbSetOrder( 0 )\n    \
+        \  ENDIF\n      aData := { { \"Alice\"  , \"Madrid\"    }, ;\n                 { \"Bob\"    , \"Barcelona\"\
+        \ }, ;\n                 { \"Phillip\", \"Panipat\"   }, ;\n                 { \"Charlie\", \"Valencia\"\
+        \  }, ;\n                 { \"Linda\"  , \"Iris\"      }, ;\n                 { \"Finland\", \"Dallas\"\
+        \    }, ;\n                 { \"Diana\"  , \"Sevilla\"   }, ;\n                 { \"Lucy\"   , \"Sevilla\"\
+        \   }, ;\n                 { \"Jony\"   , \"Walker\"    }, ;\n                 { \"Edward\" , \"Bilbao\"\
+        \    } }\n      FOR EACH aRec IN aData\n         Mark( \"before append \" + hb_ntos( aRec:__enumIndex()\
+        \ ) )\n#if 0\n         IF aRec:__enumIndex() > 1\n            EXIT\n         ENDIF\n#endif\n         IF\
+        \ ! lAppended := _STG->( DbAppend() )\n            hb_idleSleep()\n            lAppended := _STG->( DbAppend()\
+        \ )\n         ENDIF\n         Mark( \"after append ok=\" + hb_ValToExp(lAppended) + \" neterr=\" + hb_ValToExp(NetErr())\
+        \ + \" recno=\" + hb_ntos(RecNo()) )\n         IF lAppended\n            REPLACE _STG->NAME WITH aRec[ 1\
+        \ ]\n            REPLACE _STG->CITY WITH aRec[ 2 ]\n            REPLACE _STG->AGE  WITH hb_randInt( 20,\
+        \ 120 )\n            REPLACE _STG->TS   WITH hb_TSToStr( hb_DateTime() )\n            REPLACE _STG->THD\
+        \  WITH hb_threadId()\n            REPLACE _STG->INS  WITH s_nRandom\n            REPLACE _STG->RDD  WITH\
+        \ s_cRdd\n            //\n            Mark( \"before commit\" )\n            _STG->( DbCommit() ) ; _STG->(\
+        \ dbUnlock() )\n            Mark( \"after commit/unlock\" )  /* a must for networked applications */\n \
+        \        ELSE\n            LogEvents( \"Could not APPEND \" + aRec[ 1 ] )\n         ENDIF\n      NEXT\n\
+        \   ENDIF\n   RETURN lAdded\n\n\nPRG\n\n# DLL import library only. Never place a combined archive in kit.\n\
+        cp build-legacy/src/libopenace32.dll.a kit/libopenace32.dll.a\ncp build-legacy/src/openace32.dll output/openace32.dll\n\
+        objdump -p output/openace32.dll > output/dll-pe.txt\nif grep -Ei 'DLL Name:.*(libstdc|libgcc|libwinpthread|libssl|libcrypto|mbedtls|zlib).*\\\
+        .dll' output/dll-pe.txt;then exit 1;fi\nfor unit in ads1 adsfunc adsmgmnt adsx;do\n gcc -c \"$HB/contrib/rddads/$unit.c\"\
+        \ -I\"$HB/include\" -I\"$HB/contrib/rddads\" -Iinclude/openads -o \"output/$unit.o\"\ndone\ngcc -c contrib/oads_hb/oads_hb.c\
+        \ -I\"$HB/include\" -Iinclude/openads -o output/oads_hb.o\nar rcs kit/librddads.a output/ads1.o output/adsfunc.o\
+        \ output/adsmgmnt.o output/adsx.o output/oads_hb.o\nfor name in local_create probe_mt;do\n \"$HB/bin/win/mingw/hbmk2.exe\"\
+        \ \"output/$name.prg\" -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd\
+        \ -o\"output/$name.exe\"\ndone\ncp output/probe_mt.exe output/probe_mt_dll.exe\ncat > output/check_rows.prg\
+        \ <<'CHECKROWS'\n#include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main(cDir)\n LOCAL nRows:=0, nEmpty:=0\n\
+        \ FIELD NAME,CITY\n AdsSetServerType(ADS_LOCAL_SERVER)\n AdsSetFileType(ADS_CDX)\n RddSetDefault(\"ADSCDX\"\
+        )\n USE (cDir+\"/TestIndex.dbf\") VIA \"ADSCDX\" SHARED NEW\n dbGoTop()\n DO WHILE !Eof()\n   nRows++\n\
+        \   IF Empty(NAME) .OR. Empty(CITY)\n      nEmpty++\n   ENDIF\n   dbSkip()\n ENDDO\n OutStd(\"STORED rows=\"\
+        +hb_ntos(nRows)+\" lastrec=\"+hb_ntos(LastRec())+\" empty=\"+hb_ntos(nEmpty)+hb_eol())\n dbCloseAll()\n\
+        RETURN\nCHECKROWS\n\"$HB/bin/win/mingw/hbmk2.exe\" output/check_rows.prg -Lkit -lrddads -lopenace32 -iinclude/openads\
+        \ -i\"$HB/contrib/rddads\" -mt -gtstd  -lws2_32 -lbcrypt -lpsapi -ooutput/check_rows.exe\n\ncat > output/auth_static.prg\
+        \ <<'PRG'\n#include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main(cUrl)\n LOCAL cChallenge,hPending:=0,hConn:=0,cBlob\n\
+        \ cChallenge:=OAds_BeginAuth(cUrl,@hPending)\n IF Len(cChallenge)!=32\n  OutStd(\"AUTH-BEGIN-FAIL\"+hb_eol())\n\
+        \  ErrorLevel(3);QUIT\n ENDIF\n cBlob:=cChallenge+\"test-only\"\n hConn:=OAds_CompleteAuth(hPending,cBlob)\n\
+        \ IF Empty(hConn)\n  OutStd(\"AUTH-COMPLETE-FAIL\"+hb_eol())\n  ErrorLevel(4);QUIT\n ENDIF\n OAds_SetConnection(hConn)\n\
+        \ dbUseArea(.T.,\"ADSCDX\",\"TestIndex.dbf\",\"TRACEPROBE\",.T.,.F.)\n IF !Used()\n  ErrorLevel(5);QUIT\n\
+        \ ENDIF\n dbCloseAll()\n AdsDisconnect(hConn)\n OutStd(\"STATIC-AUTH-PASS\"+hb_eol())\nRETURN\nPRG\n\"$HB/bin/win/mingw/hbmk2.exe\"\
+        \ output/auth_static.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd\
+        \  -lws2_32 -lbcrypt -lpsapi -ooutput/auth_static.exe\nobjdump -p output/auth_static.exe > output/static-auth-pe.txt\n\
+        grep -qi 'DLL Name: openace32.dll' output/static-auth-pe.txt\n\n\n# Same generated Harbour objects, link\
+        \ under owner's exact pinned ld2.35.1.\nexport PATH=\"$(cygpath -u \"$RUNNER_TEMP/owner2351/mingw32/bin\"\
+        ):$PATH\"\ntest \"$(gcc -dumpversion)\" = 10.2.0\nld --version | tee output/owner-ld-version.txt\ngrep -q\
+        \ '2.35.1' output/owner-ld-version.txt\n\"$HB/bin/win/mingw/hbmk2.exe\" output/probe_mt.prg -Lkit -lrddads\
+        \ -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd -ooutput/probe_mt_owner.exe -workdir=output/vouchobjs\
+        \ -inc -trace > output/owner-link.txt 2>&1\nobjdump -p output/probe_mt_owner.exe > output/owner-client-pe.txt\n\
+        grep -qi 'DLL Name: openace32.dll' output/owner-client-pe.txt\ngit rev-parse HEAD > output/source-commit.txt\n\
+        \nobjdump -p output/openace32.dll | sed -n '/\\[Ordinal\\/Name Pointer\\] Table/,$p' > output/dll-exports.txt\n\
+        if grep -E '^.*\\][[:space:]]+(_Z|\\?)[^[:space:]]+' output/dll-exports.txt;then exit 1;fi\n\n# Vouch link-shape\
+        \ proof: preserve every library position, use empty stand-in\n# archives ONLY for unavailable third-party\
+        \ libs. Real Harbour GUI/MT/system libs.\npython - <<'PYPROOF'\nimport pathlib,subprocess\nHB=pathlib.Path(__import__('os').environ['RUNNER_TEMP'])/'harbour-old'\n\
+        libs=\"gtwvg v32lib gtnet hbnf hbmxml mxml hbhpdf libhpdf png hbzebra hbssl ssl crypto crypt32 hbtip hbziparc\
+        \ hbmzip minizip hbnetio hbmemio hbwin hbjrpc hbzsock hbcurls curl ssh2 hbjrpc dbrmap hbcloud hbtelegram\
+        \ xhb freewin eztwain3 hbct wininet mapi32 rasapi32 tapi32 comctl32 Image2PDF crypto ssl ssh2 nghttp2 brotlicommon-static\
+        \ brotlidec-static brotlienc-static zstd wldap32 bcrypt rddads openace32 ws2_32 bcrypt psapi hbextern hbdebug\
+        \ hbvmmt hbrtl hblang hbcpage gtcgi gtpca gtstd gtwin gtwvt gtgui hbrdd hbuddall hbusrrdd rddntx rddcdx\
+        \ rddnsx rddfpt hbrdd hbhsx hbsix hbmacro hbcplr hbpp hbcommon hbmainwin winmm kernel32 user32 gdi32 advapi32\
+        \ ws2_32 iphlpapi winspool comctl32 comdlg32 shell32 uuid ole32 oleaut32 mpr mapi32 imm32 msimg32 wininet\
+        \ hbpcre hbzlib\".split()\npathlib.Path('output/standins').mkdir(exist_ok=True)\nfor n in libs:\n if n in\
+        \ ('rddads','openace32'):continue\n r=subprocess.check_output(['gcc','-print-file-name=lib'+n+'.a'],text=True).strip()\n\
+        \ if pathlib.Path(r).is_file() or (HB/'lib/win/mingw'/('lib'+n+'.a')).is_file():continue\n subprocess.run(['ar','rcs','output/standins/lib'+n+'.a'],check=True)\n\
+        objs=list(pathlib.Path('output/vouchobjs').glob('*.o'))\nassert objs, 'No hbmk2 retained objects'\ncmd=['gcc',*map(str,objs),'-mwindows','-Wl,--start-group',*['-l'+n\
+        \ for n in libs],'-Wl,--end-group','-Lkit','-L'+str(HB/'lib/win/mingw'),'-Loutput/standins','-o','output/vouch-shaped.exe']\n\
+        pathlib.Path('output/vouch-shaped-command.txt').write_text(' '.join(cmd))\nsubprocess.run(cmd,check=True)\n\
+        PYPROOF\nobjdump -p output/vouch-shaped.exe > output/vouch-shaped-pe.txt\ngrep -qi 'DLL Name: openace32.dll'\
+        \ output/vouch-shaped-pe.txt\n"
+      shell: bash
+    - name: Run twenty DLL and owner-GCC B_BIG integrity fixtures
+      run: "$data=(Resolve-Path mtdata).Path\n$srv=(Resolve-Path srv/openads_serverd.exe).Path\n& $srv --help |\
+        \ Out-File srv/help.txt\n& $srv --version | Out-File srv/version.txt\n$p=Start-Process -FilePath $srv -ArgumentList\
+        \ ('--port 16262 --data '+$data) -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput srv/stdout.log\
+        \ -RedirectStandardError srv/stderr.log -PassThru\n$ok=$false\nfor($i=0;$i -lt 60;$i++){ $c=Test-NetConnection\
+        \ -ComputerName 127.0.0.1 -Port 16262 -WarningAction SilentlyContinue; if($c.TcpTestSucceeded){$ok=$true;break};\
+        \ Start-Sleep -Milliseconds 500 }\nif(-not $ok){throw 'server did not listen'}\n$env:Path = (Resolve-Path\
+        \ srv).Path + ';' + $env:Path\nfor($trial=1;$trial -le 20;$trial++) {\n foreach($mode in @('dll','owner'))\
+        \ {\n  $trialDir=Join-Path (Get-Location) \"mtdata/$mode$trial\"\n  New-Item -ItemType Directory -Path $trialDir\
+        \ -Force | Out-Null\n  $trialDir=$trialDir.Replace('\\','/')\n  & output/local_create.exe $trialDir | Out-File\
+        \ \"output/$mode$trial-fixture.txt\"\n  $trialUrl=\"tcp://127.0.0.1:16262/$trialDir\"\n  $exe='output/probe_mt_dll.exe';if($mode\
+        \ -eq 'owner'){$exe='output/probe_mt_owner.exe'}\n  $clock=[System.Diagnostics.Stopwatch]::StartNew()\n\
+        \  $p=Start-Process -FilePath (Resolve-Path $exe).Path -ArgumentList @($trialUrl,$trialDir) -RedirectStandardOutput\
+        \ \"output/$mode$trial-stdout.txt\" -RedirectStandardError \"output/$mode$trial-stderr.txt\" -PassThru\n\
+        \  if(-not $p.WaitForExit(45000)){$p.Kill();throw \"$mode trial $trial hung\"}\n  if($p.ExitCode -ne 0){throw\
+        \ \"$mode trial $trial failed exit $($p.ExitCode)\"}\n  $clock.Stop()\n  $elapsed=$clock.Elapsed.TotalMilliseconds\n\
+        \  $end=Select-String -Path \"output/$mode$trial-stdout.txt\" -Pattern 'EXACT-THREADS-JOINED'\n  $fails=@(Select-String\
+        \ -Path \"output/$mode$trial-stdout.txt\" -Pattern 'Could not APPEND').Count\n  $stored=& output/check_rows.exe\
+        \ $trialDir\n  $bytes=[System.IO.File]::ReadAllBytes(\"$trialDir/TestIndex.dbf\")\n  $disk=[BitConverter]::ToUInt32($bytes,4)\n\
+        \  \"$mode TRIAL $trial PASS $end elapsed_ms=$elapsed failed_appends=$fails disk_header=$disk $stored\"\
+        \ | Tee-Object -FilePath output/repeat-summary.txt -Append\n  if(-not $end){throw \"$mode trial $trial incomplete\"\
+        }\n  if($fails -ne 0 -or $disk -ne 100 -or $stored -notmatch 'rows=100 lastrec=100 empty=0'){throw \"$mode\
+        \ integrity mismatch\"}\n }\n}\nGet-Content output/dll-pe.txt\n\n"
+      shell: pwsh
+    - name: Native worker and encrypted auth regression
+      run: "set -euxo pipefail\nHB=\"$(cygpath -u \"$RUNNER_TEMP/harbour-server\")\"\n\"$HB/bin/win/mingw/harbour.exe\"\
+        \ tests/hrb/auth-spike/test_only.prg -gh -oauth-probe.hrb\nMSYS_NO_PATHCONV=1 icacls.exe auth-probe.hrb\
+        \ /inheritance:r /grant \"$USERNAME:R\" /grant 'SYSTEM:R' /grant 'Administrators:R'\nfor p in worker_probe\
+        \ integration_probe;do\n build-legacy/tools/serverd/auth_spike_$p.exe \"$(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_auth_worker.exe\"\
+        )\" \"$(cygpath -m \"$PWD/auth-probe.hrb\")\" | tee \"output/auth-$p.txt\"\ndone\nbuild-legacy/tools/serverd/openads_serverd.exe\
+        \ --version | tee output/auth-version.txt\nbuild-legacy/tools/serverd/auth_spike_transport_probe.exe | tee\
+        \ output/transport-plain.txt\nbuild-legacy/tools/serverd/auth_spike_transport_probe.exe tls | tee output/transport-tls.txt\n"
+      shell: bash
+    - name: DLL Harbour BeginAuth CompleteAuth native smoke
+      run: "$env:OPENADS_WIRE_TRACE=\"1\"\n$env:OPENADS_WIRE_TRACE_FILE=(Join-Path $PWD \"output/auth-wire-trace.txt\"\
+        )\n$data=(Resolve-Path mtdata).Path\n& output/local_create.exe $data | Out-File output/auth-trace-fixture.txt\n\
+        if($LASTEXITCODE -ne 0){throw \"auth trace fixture create failed\"}\n$mod=(Resolve-Path auth-probe.hrb).Path\n\
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path\n$args='--port 17262 --data \"'+$data+'\" --auth_user usr:pw\
+        \ --auth_module \"'+$mod+'\"'\n$p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path\
+        \ $srv) -RedirectStandardOutput output/auth-server-stdout.txt -RedirectStandardError output/auth-server-stderr.txt\
+        \ -PassThru\ntry {\n $ok=$false\n for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1\
+        \ -Port 17262 -WarningAction SilentlyContinue;if($c.TcpTestSucceeded){$ok=$true;break};Start-Sleep -Milliseconds\
+        \ 500 }\n if(-not $ok){throw 'auth server did not listen'}\n $uri='auth://127.0.0.1:17262/'+$data.Replace('\\\
+        ','/')\n $q=Start-Process -FilePath (Resolve-Path output/auth_static.exe).Path -ArgumentList $uri -RedirectStandardOutput\
+        \ output/static-auth-stdout.txt -RedirectStandardError output/static-auth-stderr.txt -PassThru\n if(-not\
+        \ $q.WaitForExit(45000)){$q.Kill();throw 'static auth hung'}\n if($q.ExitCode -ne 0){throw \"static auth\
+        \ failed $($q.ExitCode)\"}\n if(-not (Select-String output/static-auth-stdout.txt -Pattern STATIC-AUTH-PASS)){throw\
+        \ 'static auth proof missing'}\n} finally {if(-not $p.HasExited){$p.Kill()}}\n\nif(-not (Select-String output/auth-wire-trace.txt\
+        \ -Pattern \"wire op=\")){throw \"auth wire trace missing\"}\nif(Select-String output/auth-wire-trace.txt\
+        \ -Pattern \"wire op=0x(3D|3F) \"){throw \"auth handshake leaked to wire trace\"}\n\nGet-Content output/static-auth-stdout.txt\n"
+      shell: pwsh
+    - name: Actual worker HRB timestamp and UTC calls
+      run: 'set -euxo pipefail
+
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-server")"
+
+        "$HB/bin/win/mingw/harbour.exe" tests/hrb/mutual/time_probe.prg -gh -otime-probe.hrb
+
+        MSYS_NO_PATHCONV=1 icacls.exe time-probe.hrb /inheritance:r /grant "$USERNAME:R" /grant ''SYSTEM:R'' /grant
+        ''Administrators:R''
+
+        python tests/hrb/mutual/time_probe.py "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")"
+        "$(cygpath -m "$PWD/time-probe.hrb")" | tee output/hrb-time-proof.txt
+
+        '
+      shell: bash
+    - name: Mutual V2 native relay and ABI proof
+      run: 'set -euxo pipefail
+
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-server")"
+
+        "$HB/bin/win/mingw/harbour.exe" tests/hrb/mutual/auth.prg -gh -omutual-test-only.hrb
+
+        MSYS_NO_PATHCONV=1 icacls.exe mutual-test-only.hrb /inheritance:r /grant "$USERNAME:R" /grant ''SYSTEM:R''
+        /grant ''Administrators:R''
+
+        build-legacy/tools/serverd/auth_mutual_probe.exe "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")"
+        "$(cygpath -m "$PWD/mutual-test-only.hrb")" | tee output/mutual-native-proof.txt
+
+        '
+      shell: bash
+    - name: Compile mutual Vouch glue with unchanged Qt4.9.2
+      run: 'set -euxo pipefail
+
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-old")"
+
+        "$HB/bin/win/mingw/hbmk2.exe" tests/hrb/mutual/client.prg -Lkit -lrddads -lopenace32 -iinclude/openads -mt
+        -ooutput/mutual_client.exe
+
+        test -f output/openace32.dll
+
+        '
+      shell: bash
+    - name: Run mutual Harbour DLL smoke
+      run: "$data=(Resolve-Path mtdata).Path.Replace('\\','/')\n$mod=(Resolve-Path mutual-test-only.hrb).Path\n\
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path\n$args='--port 17263 --data \"'+$data+'\" --auth_user usr:pw\
+        \ --auth_module \"'+$mod+'\"'\n$p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path\
+        \ $srv) -RedirectStandardOutput output/mutual-server.txt -RedirectStandardError output/mutual-server-error.txt\
+        \ -PassThru\ntry {\n $ok=$false\n for($i=0;$i -lt 60;$i++){try{$c=New-Object System.Net.Sockets.TcpClient;$c.Connect('127.0.0.1',17263);$c.Close();$ok=$true;break}catch{Start-Sleep\
+        \ -Milliseconds 500}}\n if(-not $ok){throw 'mutual server not listening'}\n & output/mutual_client.exe ('auth://127.0.0.1:17263/'+$data)\
+        \ $data | Tee-Object output/mutual-harbour-proof.txt\n if($LASTEXITCODE -ne 0){throw 'mutual Harbour failed'}\n\
+        \ if(-not(Select-String output/mutual-harbour-proof.txt -Pattern MUTUAL-HARBOUR-PASS)){throw 'mutual proof\
+        \ missing'}\n} finally {if(-not $p.HasExited){$p.Kill()}}\n"
+      shell: pwsh
+    - name: Actual worker crypto and Windows Job containment release gate
+      shell: bash
+      run: "set -euxo pipefail\nHB=\"$(cygpath -u \"$RUNNER_TEMP/harbour-server\")\"\nfor name in crypto_probe resource_probe;\
+        \ do\n \"$HB/bin/win/mingw/harbour.exe\" tests/hrb/mutual/$name.prg -gh -o$name.hrb\n MSYS_NO_PATHCONV=1\
+        \ icacls.exe $name.hrb /inheritance:r /grant \"$USERNAME:R\" /grant 'SYSTEM:R' /grant 'Administrators:R'\n\
+        done\npython tests/hrb/mutual/crypto_probe.py \"$(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_auth_worker.exe\"\
+        )\" \"$(cygpath -m \"$PWD/crypto_probe.hrb\")\" | tee output/hrb-crypto-proof.txt\nbuild-legacy/tools/serverd/auth_resource_probe.exe\
+        \ \"$(cygpath -m \"$PWD/build-legacy/tools/serverd/openads_auth_worker.exe\")\" \"$(cygpath -m \"$PWD/resource_probe.hrb\"\
+        )\" | tee output/hrb-resource-proof.txt\n"
+    - name: Full repository default unit regression in bounded batches
+      shell: bash
+      run: "set -euxo pipefail\npython - <<'PYBATCH'\nimport pathlib,subprocess,os,re,json,xml.etree.ElementTree\
+        \ as ET\nimport sys\nsys.stdout.reconfigure(encoding=\"utf-8\")\nout=pathlib.Path('output');out.mkdir(exist_ok=True)\n\
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)\nfor key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)\n\
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())\nos.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())\n\
+        listing=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)\n(out/'unit-count.txt').write_text(listing);print(listing,flush=True)\n\
+        match=re.search(r'test cases passing the current filters: (\\d+)',listing);assert match,listing\ncount=int(match.group(1));assert\
+        \ count>1000\nseen={};errors=[]\nfor first in range(1,count+1,25):\n xml=out/('unit-'+str(first)+'.xml');log=out/('unit-'+str(first)+'.txt')\n\
+        \ args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24),'--reporters=xml','--out='+str(xml.resolve())]\n\
+        \ try:\n  with log.open('w',encoding='utf-8') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)\n\
+        \  doc=ET.parse(xml)\n  cases=[c for c in doc.iter('TestCase') if c.get('skipped')!='true']\n  assert cases,(first,'No\
+        \ executed cases')\n  for c in cases:\n   result=c.find('OverallResultsAsserts');ok=result is not None and\
+        \ result.get('test_case_success')=='true'\n   name=c.get('name');assert name not in seen,(first,'duplicate',name)\n\
+        \   seen[name]={'passed':ok,'assertions':dict(result.attrib) if result is not None else {},'file':pathlib.Path(c.get('filename')).name}\n\
+        \  if r.returncode and all(v['passed'] for c in cases for v in [seen[c.get('name')]]):errors.append('Nonzero\
+        \ batch exit '+str(first))\n except Exception as e:errors.append(str(first)+': '+repr(e))\n print('Batch',first,'complete;\
+        \ cases',len(seen),'errors',len(errors),flush=True)\nsummary={'count':count,'executed':len(seen),'failed':sorted(n\
+        \ for n,v in seen.items() if not v['passed']),'errors':errors,'cases':seen}\nif len(seen)!=count:summary['errors'].append('Coverage\
+        \ mismatch')\n(out/'unit-summary.json').write_text(json.dumps(summary,indent=2))\n(out/'unit-batch-summary.txt').write_text('registered='+str(count)+'\
+        \ executed='+str(len(seen))+' failed='+str(len(summary['failed']))+' harness_errors='+str(len(summary['errors']))+'\\\
+        n'+'\\n'.join(summary['failed'])+'\\n'+'\\n'.join(summary['errors']),encoding='utf-8')\nprint((out/'unit-batch-summary.txt').read_text(encoding='utf-8'),flush=True)\n\
+        \nPYBATCH\n"
+    - name: Package DLL-only Vouch test kit
+      run: "set -euxo pipefail\nmkdir -p delivery/mtfix60-full/{bin,lib,include,docs}\ncp output/openace32.dll\
+        \ delivery/mtfix60-full/bin/\ncp kit/libopenace32.dll.a kit/librddads.a delivery/mtfix60-full/lib/\n\
+        cp include/openads/ace.h \"$RUNNER_TEMP/harbour-old/contrib/rddads/ads.ch\" delivery/mtfix60-full/include/\n\
+        cat > delivery/mtfix60-full/docs/README.txt <<'NOTES'\nMTFIX60 FULL TEST KIT, WINDOWS X86\nBuilt from 3bc1c245: mtfix59 plus ADT create-name/type fixes, scoped OrdKeyNo and REMOTE RelKeyPos fixes, SAP filter constants, and the 2a exclusive/FLock append-lock fix. Shared non-FLocked append locking is unchanged. Includes the V2 mutual auth test content, HRB crypto toolbox, worker resource limits.\n\n After-auth Hello adds one application\
+        \ RTT (auth two becomes three).\n\n MD5/Blowfish legacy only; not identity proof/signatures.\n\n V2 mutual\
+        \ auth opt-in. Public mock HRB only; replace with your real module. Not for production servers.\nRead MUTUAL-V2.txt and ACL-SETUP.txt\
+        \ before use.\nZIP extraction loses the protected HRB ACL. Apply that step before server startup.\nExtract\
+        \ into a new folder C:/OpenADS_mtfix60.\nUse include/ace.h and ads.ch. Keep this kit's import lib and RDD\
+        \ together.\nLink additions: -LC:/OpenADS_mtfix60/lib -lrddads -lopenace32\nRemove -fullstatic. Copy bin/openace32.dll\
+        \ beside VouchADS.exe.\nDo not copy the old combined libopenace32.a into this lib folder.\nHarbour searches\
+        \ its own lib folder first: rename stale libopenace32.a,\nlibopenace32.dll.a and librddads.a there, and\
+        \ disable scripts that re-copy them.\nThe import archive contains C function import thunks, not the C++\
+        \ engine/runtime.\nDLL ABI: 32-bit Windows cdecl C exports. No Qt runtime required.\nMatch x86 architecture,\
+        \ cdecl declarations and Harbour/RDD ABI, not GCC10.2 C++ ABI.\nStatic RDDADS/glue still needs the caller's\
+        \ compatible Harbour C API.\nDLL's GCC C++/gcc/winpthread runtime is static; Windows system DLLs remain\
+        \ required.\nLocal Windows proofs use Qt4.9.2 and Winlibs GCC10.2/binutils2.35.1.\nB_BIG threaded fixture\
+        \ is a headless exact100-row stand-in, not full Vouch.\nNOTES\ncp output/source-commit.txt output/dll-pe.txt\
+        \ output/owner-ld-version.txt output/repeat-summary.txt output/static-auth-stdout.txt delivery/mtfix60-full/docs/\n\
+        cp -r kit/runtime-notices delivery/mtfix60-full/\ncp build-legacy/tools/serverd/openads_serverd.exe\
+        \ build-legacy/tools/serverd/openads_auth_worker.exe delivery/mtfix60-full/bin/\ncp mutual-test-only.hrb\
+        \ delivery/mtfix60-full/bin/\ncp tests/hrb/mutual/README.txt delivery/mtfix60-full/docs/MUTUAL-V2.txt\n\
+        cp tests/hrb/mutual/ACL-SETUP.txt delivery/mtfix60-full/docs/\ncp output/unit-summary.json output/hrb-crypto-proof.txt output/hrb-resource-proof.txt output/unit-batch-summary.txt\
+        \ docs/auth-hrb-pure-functions.txt delivery/mtfix60-full/docs/\n\n cp output/hrb-time-proof.txt delivery/mtfix60-full/docs/\n\
+        cp tests/hrb/mutual/time_probe.py delivery/mtfix60-full/docs/\ncp tests/hrb/mutual/*.prg delivery/mtfix60-full/docs/\n\
+        cp output/mutual-harbour-proof.txt delivery/mtfix60-full/docs/\ncp output/mutual-native-proof.txt\
+        \ delivery/mtfix60-full/docs/\ngit diff 6d5c59f4f91e9603c10231db14691d636f747faf HEAD > delivery/mtfix60-full/docs/source.patch\n\
+        find delivery/mtfix60-full -type f -exec sha256sum {} \\; > delivery/SHA256.txt\n7z a -tzip mtfix60-full-qt492-x86.zip\
+        \ ./delivery/*\n"
+      shell: bash
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        if-no-files-found: warn
+        name: mtfix60-x86-proof
+        path: 'output/
+
+          delivery/
+
+          mtfix60-full-qt492-x86.zip
+
+          srv/*.log
+
+          srv/*.txt
+
+          '
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-x86
+        path: mtfix60-full-qt492-x86.zip
+        retention-days: 14
+    timeout-minutes: 140
+  x64kit:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix60-full
+    - name: Verify clean main-based source
+      shell: bash
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/release/mtfix60-full
+        git merge-base --is-ancestor 3bc1c245cb348c0264e06ef2254509be2188edaa HEAD
+        test -z "$(git diff --name-only 3bc1c245cb348c0264e06ef2254509be2188edaa HEAD -- . ':!.github/workflows')"
+    - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
+      shell: pwsh
+      run: |
+        Invoke-WebRequest 'https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z' -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs64.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs x64 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs64.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
+    - name: Build Harbour (x64) and the x64 engine, DLL, server and auth worker
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        gcc -dumpmachine
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-x64"
+        git -C "$RUNNER_TEMP/harbour-x64" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+        export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-x64" -j2
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-x64")"
+        ls "$HB/lib/win/" || true
+        HBLIB="$RUNNER_TEMP/harbour-x64/lib/win/mingw64"
+        HBBIN="$RUNNER_TEMP/harbour-x64/bin/win/mingw64"
+        test -f "$HBBIN/harbour.exe"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        cmake -S . -B build-x64 -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
+          -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+          -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON \
+          -DOPENADS_VERSION_FORCE=1.09.74-mtfix60-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF \
+          -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$(cygpath -m "$HBBIN")/harbour.exe" \
+          -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$(cygpath -m "$HBLIB")" \
+          -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
+          -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-x64 --target openads_ace openads_serverd openads_auth_worker -j2
+        find build-x64 -name '*.dll' -o -name '*.exe' -o -name '*.dll.a' | sort
+    - name: Verify the binaries are 64-bit and the server starts
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        mkdir -p output
+        for f in build-x64/src/openace64.dll build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe; do
+          test -f "$f"
+          objdump -f "$f" | tee -a output/pe-check.txt
+          objdump -f "$f" | grep -q 'pei-x86-64'
+        done
+        build-x64/tools/serverd/openads_serverd.exe --help > output/serverd-help.txt 2>&1 || true
+        head -5 output/serverd-help.txt
+    - name: Package x64 test kit
+      shell: bash
+      run: |
+        set -euxo pipefail
+        D=delivery/mtfix60-x64
+        mkdir -p $D/bin $D/lib $D/include $D/docs
+        cp build-x64/src/openace64.dll build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe $D/bin/
+        cp build-x64/src/*.dll.a $D/lib/ 2>/dev/null || true
+        cp include/openads/ace.h $D/include/
+        cp output/pe-check.txt output/serverd-help.txt $D/docs/
+        echo "$PINNED_SOURCE" > $D/docs/source-commit.txt
+        cat > $D/docs/README.txt <<'NOTES'
+        OPENADS MTFIX60 FULL TEST KIT, WINDOWS X64.
+        Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
+        Windows x64, built with Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit).
+        Built from 3bc1c245: mtfix59 plus ADT create-name/type fixes, scoped
+        OrdKeyNo and REMOTE RelKeyPos fixes, SAP filter constants, and the
+        2a exclusive/FLock append-lock fix. Shared append locking is unchanged.
+        Server: bin/openads_serverd.exe (keep openads_auth_worker.exe beside it).
+        Client DLL: bin/openace64.dll. Not for production.
+        Linux unit suite was run on the same source; this Windows build runs no unit suite.
+        NOTES
+        find $D -type f -exec sha256sum {} \; > delivery/SHA256.txt
+        7z a -tzip mtfix60-full-x64.zip ./delivery/*
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        if-no-files-found: warn
+        name: mtfix60-x64-proof
+        path: |
+          output/
+          mtfix60-full-x64.zip
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-x64
+        path: mtfix60-full-x64.zip
+        retention-days: 14
+  linuxkit:
+    name: Build, test, package, verify, prerelease
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.PINNED_SOURCE }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Verify pinned source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PINNED_SOURCE"
+          git log -1 --oneline
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      # Same Harbour UDF SDK as release.yml's Linux leg, same cache key.
+      - name: Cache Harbour SDK (Linux)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harbour-udf
+          key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+
+      - name: Provision Harbour SDK (Linux)
+        shell: bash
+        env:
+          HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+        run: |
+          set -e
+          HB="$RUNNER_TEMP/harbour-udf"
+          echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+          if [ -f "$HB/install/include/hbvm.h" ] &&              [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] &&              [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+            echo "Harbour SDK cached at $HB/install"
+          else
+            sudo apt-get update
+            sudo apt-get install -y build-essential libncurses-dev libx11-dev
+            rm -rf "$HB"
+            mkdir -p "$HB"
+            git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+            git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+            git -C "$HB/src" checkout "$HARBOUR_REF"
+            cd "$HB/src"
+            make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+          fi
+          HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+          HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+          HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+          echo "Harbour SDK layout:"
+          echo "  include: ${HB_INC:-MISSING}"
+          echo "  libdir:  ${HB_LIBDIR:-MISSING}"
+          echo "  compiler:${HB_CC:-MISSING}"
+          if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+            echo "::error::Harbour SDK layout unexpected"
+            exit 1
+          fi
+          {
+            echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+            echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+            echo "HARBOUR_COMPILER=$HB_CC"
+          } >> "$GITHUB_ENV"
+
+      # warnings-as-errors off: test-only spike probe abi_probe.cpp trips
+      # clang's -Wshorten-64-to-32; product sources stay byte-identical to
+      # the pinned main commit (same precedent as the mtfix51 Linux kit).
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+
+      - name: Build
+        run: cmake --build build/ninja-clang --config Release
+
+      - name: Test (full suite)
+        timeout-minutes: 30
+        run: ctest --test-dir build/ninja-clang --output-on-failure -C Release
+
+      - name: Write install note
+        shell: bash
+        run: |
+          cat > MTFIX60_LINUX_SERVER_TEST.md <<'NOTE'
+          # 1.09.74-mtfix60-full-test - Linux x64 server test kit
+
+          Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
+
+          Built from fork branch test/tim-2a-append-lock-ledger, commit 3bc1c245cb348c0264e06ef2254509be2188edaa
+          (mtfix59 plus ADT create-name/type fixes, scoped OrdKeyNo and REMOTE
+          RelKeyPos fixes, SAP filter constants, and the exclusive/FLock
+          append-lock fix).
+          The full ctest suite passed on
+          ubuntu-24.04.
+
+          Kit contents: openads_serverd, openads_auth_worker, openads_bench,
+          libace64.so / libopenace64.so, openads.ini.sample, headers, contrib,
+          mutual-test-only.hrb (mock V2 auth module), run-mock-test.sh,
+          source-commit.txt, ldd-server.txt, ldd-worker.txt, SHA256SUMS.
+
+          Fresh-box install (Ubuntu 24.04 x86_64):
+
+          1. sudo apt-get update && sudo apt-get install -y libncurses6
+          2. sudo mkdir -p /openads-server && cd /openads-server
+          3. Download the tar.gz and its .sha256, then
+             sha256sum -c the .sha256 file.
+          4. tar xzf the tar.gz and cd into the extracted folder.
+          5. Start the mock V2 test server: ./run-mock-test.sh
+             The banner must show OpenADS 1.09.74-mtfix60-full-test
+             listening on 127.0.0.1:6262.
+          6. First run copies openads.ini.sample to openads.ini, sets
+             legacy_paths = 1 so Vouch URLs with C:/ roots resolve, and
+             sets data to the kit folder as an absolute path (a relative
+             data root breaks the login path resolution on Linux), and
+             sets enable_file_func = 1 so Vouch can create its data
+             dictionary and log files inside the data folder. To
+             reach the server from another machine, set host = 0.0.0.0 in
+             openads.ini and open TCP 6262 in the box firewall and the EC2
+             security group.
+          7. Vouch login, same call as the Windows mtfix52 mock test:
+             V2LoginMock("auth://BOX-IP:6262/C:/", "fixture-firm", "C:/", @s_hConn)
+             Use 127.0.0.1 as BOX-IP when testing on the box itself.
+
+          Nothing here touches the Lightsail box or any running server.
+          NOTE
+
+      - name: Write mock module and run script
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "wEhSQgIACAAAAEFVVEgABQFPQURTX0FVVEhfVjEAAQFPQURTX0FVVEhfU0VSVkVSX1YyAAEBTEVOAAACTEVGVAAAAkhCX0hNQUNfU0hBMjU2AAACT0FEU19BVVRIX1ZFUklGWV9WMgABAVNVQlNUUgAAAgQAAABBVVRIAAEAAAAHT0FEU19BVVRIX1YxABYAAAANAAMkBwBqDE9BVVRIAQAAAAAAAG4HT0FEU19BVVRIX1NFUlZFUl9WMgCIAAAADQADJAoAsAMAXwEMAVwgRR8isAQAXwJcEQwCahJPcGVuQURTLW11dHVhbC12MgBFHAokCwBqAQBuByQNAGoIU0VSVkVSOgCwBQBqCHNlcnZlcgAAXwJIailPcGVuQURTLXB1YmxpYy1tb2NrLXYyLU5PVC1BLUxJQ0VOU0UtS0VZAHgMA0huB09BRFNfQVVUSF9WRVJJRllfVjIA4wAAAA0DAyQPAGoIQ0xJRU5UOgCwBQBqCGNsaWVudAAAXwJIailPcGVuQURTLXB1YmxpYy1tb2NrLXYyLU5PVC1BLUxJQ0VOU0UtS0VZAHgMA0hQBCQQAHlQBSQRALADAF8BDAFcIEUfE7ADAF8DDAGwAwBfBAwBRRwLJBIAsAEAFAAHJBQAeqVQBhkoJBUAsAcAXwNfBnoMA7AHAF8EXwZ6DANFHAgkFgCuBQAkFACvBgCwAwBfBAwBDxzSJBkAXwV5RRwLJBoAsAEAFAAHJBwAahFPQVVUSAEBAwB1c3ICAHB3AG4H" | base64 -d > mutual-test-only.hrb
+          chmod 600 mutual-test-only.hrb
+          cat > run-mock-test.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          # Starts the mtfix60 test server with the mock V2 auth module,
+          # same drill as the Windows mtfix52 mock test: mock module plus
+          # the additive CLI user usr:pw on port 6262.
+          set -euo pipefail
+          cd "$(dirname "$0")"
+          chmod 600 mutual-test-only.hrb
+          if [ ! -f openads.ini ]; then
+            cp openads.ini.sample openads.ini
+            sed -i 's/^# legacy_paths = 0/legacy_paths = 1/' openads.ini
+            sed -i "s|^data = \.$|data = $PWD|" openads.ini
+            sed -i 's|^# enable_file_func = 0|enable_file_func = 1|' openads.ini
+          fi
+          ulimit -n 65535 2>/dev/null || true
+          exec ./openads_serverd --config ./openads.ini --http_port 0 --auth_module "$PWD/mutual-test-only.hrb" --auth_user usr:pw
+          SCRIPT
+          chmod 755 run-mock-test.sh
+
+      - name: Stage kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="openads-$KIT_VERSION-linux-x64"
+          B=build/ninja-clang
+          mkdir -p "$STAGE"
+          for f in "$B"/src/libopenace64.*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
+          cp "$B"/tools/serverd/openads_serverd "$STAGE/"
+          cp "$B"/tools/serverd/openads_auth_worker "$STAGE/"
+          cp "$B"/tools/bench/openads_bench "$STAGE/"
+          cp LICENSE NOTICE README.md openads.ini.sample MTFIX60_LINUX_SERVER_TEST.md "$STAGE/"
+          cp mutual-test-only.hrb run-mock-test.sh "$STAGE/"
+          mkdir -p "$STAGE/include/openads"
+          cp include/openads/ace.h "$STAGE/include/ace.h"
+          cp include/openads/ace.h include/openads/error.h include/openads/openads_sql.h include/openads/platform.h include/openads/version.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/oads_hb.c contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md "$STAGE/contrib/oads_hb/"
+          echo "$PINNED_SOURCE" > "$STAGE/source-commit.txt"
+          ldd "$STAGE/openads_serverd" > "$STAGE/ldd-server.txt"
+          ldd "$STAGE/openads_auth_worker" > "$STAGE/ldd-worker.txt"
+          (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
+          tar czf "$STAGE.tar.gz" "$STAGE"
+          sha256sum "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
+          cat "$STAGE.tar.gz.sha256"
+
+      - name: Verify package
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="openads-$KIT_VERSION-linux-x64"
+          tar tzf "$STAGE.tar.gz" > listing.txt
+          for req in openads_serverd openads_auth_worker openads_bench libace64.so libopenace64.so openads.ini.sample source-commit.txt MTFIX60_LINUX_SERVER_TEST.md mutual-test-only.hrb run-mock-test.sh SHA256SUMS LICENSE NOTICE README.md; do
+            grep -q "/$req$" listing.txt || { echo "::error::missing $req in archive"; exit 1; }
+          done
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          tar xzf "$STAGE.tar.gz" -C /tmp/verify
+          V="/tmp/verify/$STAGE"
+          (cd "$V" && sha256sum -c SHA256SUMS >/dev/null && echo "SHA256SUMS ok")
+          "$V/openads_serverd" --version | tee server-version.txt
+          grep -q "$KIT_VERSION" server-version.txt
+          grep -aq "$KIT_VERSION" "$V/libopenace64.so"
+          # Mock module byte check against the Windows mtfix52 kit module.
+          test "$(sha256sum "$V/mutual-test-only.hrb" | cut -d' ' -f1)" = "$(sha256sum mutual-test-only.hrb | cut -d' ' -f1)"
+          # Auth worker probe: one byte P must print READY (or READY2).
+          "$HARBOUR_COMPILER" -gh -o/tmp/test_only.hrb tests/hrb/auth-spike/test_only.prg
+          # Worker refuses a group/other-readable module by design; lock it.
+          chmod 600 /tmp/test_only.hrb
+          probe="$(printf 'P' | "$V/openads_auth_worker" /tmp/test_only.hrb)"
+          echo "worker probe: $probe"
+          [[ "$probe" == READY* ]]
+          # Record the glibc ceiling for the target (Ubuntu 24.04) platform.
+          echo "Max GLIBC referenced:"
+          for b in "$V/openads_serverd" "$V/openads_auth_worker" "$V/libopenace64.so"; do
+            echo "$b: $(objdump -T "$b" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kit-linux
+          path: |
+            openads-1.09.74-mtfix60-full-test-linux-x64.tar.gz
+            openads-1.09.74-mtfix60-full-test-linux-x64.tar.gz.sha256
+            MTFIX60_LINUX_SERVER_TEST.md
+          retention-days: 14
+  mackit:
+    name: Build macOS universal server kit
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: release/mtfix60-full
+      - name: Verify clean main-based source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$GITHUB_REF" = refs/heads/release/mtfix60-full
+          git merge-base --is-ancestor 3bc1c245cb348c0264e06ef2254509be2188edaa HEAD
+          test -z "$(git diff --name-only 3bc1c245cb348c0264e06ef2254509be2188edaa HEAD -- . ':!.github/workflows')"
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Configure
+        shell: bash
+        run: |
+          cmake --preset default \
+                -DOPENADS_WITH_TLS=ON \
+                -DOPENADS_WITH_HTTP=ON \
+                -DOPENADS_VERSION_FORCE=$KIT_VERSION \
+                -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+      - name: Build
+        shell: bash
+        run: cmake --build build/default --config Release
+      - name: Test
+        timeout-minutes: 25
+        shell: bash
+        run: ctest --test-dir build/default --output-on-failure -C Release
+      - name: Stage and verify macOS kit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          STAGE="openads-$KIT_VERSION-macos-universal"
+          B=build/default
+          mkdir -p "$STAGE"
+          for f in "$B"/src/libopenace64*.dylib; do
+            [ -e "$f" ] || continue
+            cp "$f" "$STAGE/"
+            cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+          done
+          cp "$B"/tools/serverd/openads_serverd "$STAGE/"
+          if [ -e "$B"/tools/serverd/openads_auth_worker ]; then cp "$B"/tools/serverd/openads_auth_worker "$STAGE/"; fi
+          cp "$B"/tools/bench/openads_bench "$STAGE/"
+          cp LICENSE NOTICE README.md openads.ini.sample "$STAGE/"
+          mkdir -p "$STAGE/include/openads"
+          cp include/openads/ace.h "$STAGE/include/ace.h"
+          cp include/openads/ace.h include/openads/error.h include/openads/openads_sql.h include/openads/platform.h include/openads/version.h "$STAGE/include/openads/"
+          mkdir -p "$STAGE/contrib/oads_hb"
+          cp contrib/oads_hb/oads_hb.c contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md "$STAGE/contrib/oads_hb/"
+          echo "$PINNED_SOURCE" > "$STAGE/source-commit.txt"
+          (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)
+          tar czf "$STAGE.tar.gz" "$STAGE"
+          shasum -a 256 "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
+          cat "$STAGE.tar.gz.sha256"
+          tar tzf "$STAGE.tar.gz" | grep -q "/openads_serverd$"
+          "$STAGE/openads_serverd" --version | tee server-version.txt
+          grep -q "$KIT_VERSION" server-version.txt
+          lipo -info "$STAGE/openads_serverd" | tee lipo.txt
+          grep -q arm64 lipo.txt
+          grep -q x86_64 lipo.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kit-macos
+          path: |
+            openads-1.09.74-mtfix60-full-test-macos-universal.tar.gz
+            openads-1.09.74-mtfix60-full-test-macos-universal.tar.gz.sha256
+          retention-days: 14
+  publish:
+    name: Publish combined prerelease
+    runs-on: ubuntu-24.04
+    needs: [x86kit, x64kit, linuxkit, mackit]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kit-*
+          merge-multiple: true
+      - name: Write release notes
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md <<'NOTES'
+          # OpenADS mtfix60 full test kit
+
+          Pritpal Bedi. Fork: bedipritpal/OpenADS, from FiveTechSoft/OpenADS.
+
+          One entry, all kits, built from fork branch test/tim-2a-append-lock-ledger at 3bc1c245.
+
+          What sits on top of mtfix59, exactly:
+          - ADT create without extension uses .adt; SQL CREATE TABLE with a .adt name creates ADT.
+          - Scoped OrdKeyNo and REMOTE SetRelKeyPos use the scoped key range; ACE filter constants match SAP.
+          - Finding 2a: exclusive or FLocked appends no longer accumulate unused record locks or stop at 4096; shared, non-FLocked appends retain their automatic lock and cap.
+          - Regression tests for these changes, including both FLock handle-creation orders and a post-release peer lock check.
+
+          The mtfix52/58/59 V2 auth line and existing pinned compiler versions are retained. Findings 2b, 2c and 2d remain open. The GCC-DLL stars cause remains unverified; Tim reports no stars with MSVC, whose separate kit is not the Vouch kit.
+
+          Assets:
+          - mtfix60-full-qt492-x86.zip: Windows x86 (32-bit) kit, pinned Qt 4.9.2 / Winlibs GCC 10.2 i686. Full proof suite: B_BIG threaded fixtures, auth probes, batched unit regression, Vouch link-shape proof.
+          - mtfix60-full-x64.zip: Windows x64 kit, Winlibs GCC 10.2 x86_64. PE-checked on Windows; unit suite run on Linux only.
+          - openads-1.09.74-mtfix60-full-test-linux-x64.tar.gz (+ .sha256 + MTFIX60_LINUX_SERVER_TEST.md): Linux x64 server kit, full ctest suite passed on ubuntu-24.04.
+          - openads-1.09.74-mtfix60-full-test-macos-universal.tar.gz (+ .sha256): macOS universal (arm64 + x86_64) server kit, full ctest suite passed on macos-14.
+
+          Same mock-HRB auth test content as the mtfix52/56 kits. Public mock module only, not real auth. Test only, not for production.
+          NOTES
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la
+          sha256sum mtfix60-full-qt492-x86.zip mtfix60-full-x64.zip openads-1.09.74-mtfix60-full-test-linux-x64.tar.gz openads-1.09.74-mtfix60-full-test-macos-universal.tar.gz
+          sha256sum mtfix60-full-qt492-x86.zip mtfix60-full-x64.zip > WINDOWS_SHA256SUMS.txt
+          gh release create v1.09.74-mtfix60-full-test --target 3bc1c245cb348c0264e06ef2254509be2188edaa --prerelease --latest=false --title "OpenADS mtfix60 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix60-full-qt492-x86.zip mtfix60-full-x64.zip openads-1.09.74-mtfix60-full-test-linux-x64.tar.gz openads-1.09.74-mtfix60-full-test-linux-x64.tar.gz.sha256 MTFIX60_LINUX_SERVER_TEST.md openads-1.09.74-mtfix60-full-test-macos-universal.tar.gz openads-1.09.74-mtfix60-full-test-macos-universal.tar.gz.sha256
+          gh release view v1.09.74-mtfix60-full-test --json tagName,isPrerelease,url,assets

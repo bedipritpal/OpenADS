@@ -4761,7 +4761,7 @@
     try {
       const r = await apiFetch('api/server_info.php', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'kill', dd, connNo: row.connNo, user: row.name }),
+        body: JSON.stringify({ action: 'kill', csrf: document.getElementById('srvinfo-' + tabId)?.dataset.managementCsrf, dd, connNo: row.connNo, user: row.name }),
       });
       if (r.error) { setStatus(`Disconnect failed: ${r.error}`); return; }
       setStatus(r.note || `Disconnected ${label}`);
@@ -4778,7 +4778,7 @@
     try {
       const r = await apiFetch('api/server_info.php', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'sql', dd, threadNo: row.threadNo }),
+        body: JSON.stringify({ action: 'sql', csrf: document.getElementById('srvinfo-' + tabId)?.dataset.managementCsrf, dd, threadNo: row.threadNo }),
       });
       if (r.error) { box.textContent = `Error: ${r.error}`; return; }
       if (!r.sql) { box.textContent = 'This thread has not run any SQL yet.'; return; }
@@ -4796,7 +4796,7 @@
     try {
       const r = await apiFetch('api/server_info.php', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'locks', dd, tableName: row.name }),
+        body: JSON.stringify({ action: 'locks', csrf: document.getElementById('srvinfo-' + tabId)?.dataset.managementCsrf, dd, tableName: row.name }),
       });
       if (r.error) { box.textContent = `Error: ${r.error}`; return; }
       if (!r.locks || r.locks.length === 0) {
@@ -4824,7 +4824,7 @@
     if (!h) return `<div class="alert alert-info">${escHtml(error || 'Health unavailable')}</div>`;
     const val = v => v == null ? 'Unavailable / not measured' : escHtml(String(v));
     const rows = Object.entries(h).filter(([k]) => k !== 'semantics').map(([k,v]) =>
-      `<tr><th style="text-align:left;padding:5px">${escHtml(k.replaceAll('_',' '))}</th><td style="padding:5px">${v && typeof v === 'object' ? `Current: ${val(v.current)} | Max used: ${val(v.max_used)} | Rejected: ${val(v.rejected)}` : val(v)}</td></tr>`).join('');
+      `<tr><th style="text-align:left;padding:5px">${escHtml(k.replaceAll('_',' '))}</th><td style="padding:5px">${v && typeof v === 'object' ? `Current: ${val(v.current)} | Max used: ${val(v.max_used)} | Rejected: ${val(v.rejected)}` : k === 'max_sessions' && v === 0 ? 'Unlimited (0)' : val(v)}</td></tr>`).join('');
     return `<h3>Server health</h3><div style="overflow:auto"><table>${rows}</table></div><details><summary>Count meanings and raw JSON</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escHtml(JSON.stringify(h,null,2))}</pre></details>`;
   }
 
@@ -4861,6 +4861,7 @@
       apiFetch(`api/db_props.php?dd=${encodeURIComponent(dd)}`).catch(() => null),
     ])
       .then(([resp, props]) => {
+        container.dataset.managementCsrf = resp.management_csrf || '';
         if (resp.management_required) { showManagementLogin(container,tabId,dd,resp); return; }
         if (resp.error) {
           container.innerHTML = `<div class="alert alert-error" style="margin:8px;">${escHtml(resp.error)}</div>`;

@@ -8648,6 +8648,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
         rt->name = name;
         rt->alias = std::move(alias);
         rt->close_counted = true;
+        rt->prod_bag_path = ot.prod_bag_path;
         rt->production_index_reply = std::move(ot.production_index_reply);
         if (ot.has_record_length) {
             rt->cached_record_length = ot.record_length;
@@ -16085,10 +16086,14 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 return ok();
             }
         }
-        auto r = rt->production_index_reply.empty()
-            ? rt->conn->open_index(rt->id, path)
-            : openads::network::RemoteConnection::parse_open_index_reply(rt->production_index_reply, path);
-        rt->production_index_reply.clear();
+        const bool use_open_metadata = !rt->production_index_reply.empty() &&
+            !bag_stem_ci(path).empty() &&
+            bag_stem_ci(path) == bag_stem_ci(rt->prod_bag_path);
+        auto r = use_open_metadata
+            ? openads::network::RemoteConnection::parse_open_index_reply(
+                  rt->production_index_reply, path)
+            : rt->conn->open_index(rt->id, path);
+        if (use_open_metadata) rt->production_index_reply.clear();
         if (!r) return fail(r.error());
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -40456,7 +40461,7 @@ UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE hMgmt, UNSIGNED8* json, UNSIG
         if (reply.value().opcode != openads::network::Opcode::MgReplyAck)
             return openads::AE_FUNCTION_NOT_AVAILABLE;
         text.assign(reply.value().payload.begin(), reply.value().payload.end());
-        // Fail closed on malformed/oversized replies, not arbitrary remote text.
+        // Bound the reply and require a JSON object envelope. This is not a full JSON parser.
         if (text.empty() || text.size() > 65535 || text.front() != '{' || text.back() != '}')
             return openads::AE_INTERNAL_ERROR;
     }

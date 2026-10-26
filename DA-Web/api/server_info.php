@@ -47,7 +47,11 @@ if ($method === 'POST') {
     if (stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== 0) {
         api_error(415, 'JSON request required');
     }
-    $body   = json_decode(file_get_contents('php://input'), true) ?? [];
+    $body = json_decode(file_get_contents('php://input'), true) ?? [];
+    if (!is_array($body)) api_error(400, 'JSON object required');
+    if (!hash_equals($_SESSION['management_csrf'], (string)($body['csrf'] ?? ''))) {
+        api_error(403, 'Management request expired; refresh Server Info');
+    }
     $ddName = trim($body['dd'] ?? '');
 } else {
     $body   = [];
@@ -237,9 +241,6 @@ if ($mgAuth && (($mgAuth['endpoint'] ?? '') !== $endpointKey ||
 }
 $action = (string)($body['action'] ?? '');
 if ($method === 'POST' && in_array($action, ['management_login', 'management_logout'], true)) {
-    if (!hash_equals($_SESSION['management_csrf'], (string)($body['csrf'] ?? ''))) {
-        api_error(403, 'Management request expired; refresh Server Info');
-    }
     if ($action === 'management_logout') {
         unset($_SESSION['management_auth'][$ddName]);
         echo json_encode(['ok' => true]);
@@ -394,7 +395,7 @@ try {
             }
         }
     } catch (Throwable $e) {
-        $healthError = 'Health extension unavailable; use matching mtfix29 or newer DLL and server';
+        $healthError = 'Health extension unavailable; use a matching DLL and server with OAdsGetServerStats support';
     }
 
     // ── Activity info (counts) ────────────────────────────────────────────────

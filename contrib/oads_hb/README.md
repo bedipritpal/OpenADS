@@ -200,3 +200,14 @@ with the helper and `-gtstd -mt`. The existing text fixture remains unchanged.
 For an actual Clipper Tools window test, also compile/link hbct, define
 `STATS_SHOW_CTW` and run the same fixture. It checks a nonzero-origin CT
 window with local1,1coordinates. The helper adds no hbct dependency to apps.
+
+### Aggregate health query helpers
+
+`OAds_ServerStats(hMgmt, @nError)` returns a hash from an AdsMgConnect handle.
+`OAds_ServerStatsRemote(host, port, user, password, @nError)` owns a separate
+management handle and serializes its connect/read/disconnect lifecycle for MT
+callers. Neither uses or changes a default data handle. Failure returns NIL
+and a numeric error. Null JSON values remain NIL; wide counters stay wide.
+Use a literal hostname/IPv4 address, not a URI/path. Management remains plain
+TCP; load credentials from secure settings. See `docs/health-consumers.md` for
+transport, fixed-buffer and deployment limits.

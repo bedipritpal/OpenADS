@@ -1,7 +1,11 @@
 #include "doctest.h"
 #include "openads/ace.h"
 #include "drivers/cdx/cdx_driver.h"
+#include "network/client.h"
+#include "network/server.h"
 
+#include <array>
+#include <fstream>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>

@@ -231,3 +231,47 @@ TEST_CASE("data jail cleared: legacy symlink follow returns for local use") {
 }
 
 #endif // !_WIN32
+
+TEST_CASE("data jail: longest matching root and multiple roots stay usable") {
+    const auto base = fresh_dir("openads_jail_multiroot");
+    const auto a = canon(base); fs::create_directories(a / "nested");
+    fs::create_directories(a / "other");
+    {
+        JailGuard jail({a.string(), (a / "nested").string(), (a / "other").string()});
+        put_file(a / "plain.dbf", "p");
+        put_file(a / "nested" / "inner.dbf", "n");
+        put_file(a / "other" / "memo.fpt", "m");
+        CHECK(File::open((a / "nested" / "inner.dbf").string(), OpenMode::ReadOnly));
+        CHECK(File::open((a / "other" / "memo.fpt").string(), OpenMode::ReadOnly));
+    }
+    fs::remove_all(base);
+}
+
+TEST_CASE("data jail: failed root replacement retains installed policy") {
+    const auto root = fresh_dir("openads_jail_atomic"); const auto croot = canon(root);
+    {
+        JailGuard jail({croot.string()});
+        CHECK_FALSE(File::set_data_jail({(croot / "missing").string()}));
+        CHECK(File::data_jail_active());
+        put_file(croot / "still.dbf", "x");
+        CHECK_FALSE(File::open((croot / ".." / "escaped.dbf").string(), OpenMode::CreateRW));
+    }
+    fs::remove_all(root);
+}
+
+#ifndef _WIN32
+TEST_CASE("data jail: root descriptor stays pinned after pathname replacement") {
+    const auto base = fresh_dir("openads_jail_pin"); const auto cbase = canon(base);
+    fs::create_directories(cbase / "data"); put_file(cbase / "data" / "t.dbf", "SAFE");
+    {
+        JailGuard jail({(cbase / "data").string()});
+        fs::rename(cbase / "data", cbase / "moved");
+        fs::create_directories(cbase / "data");
+        // Path-name replacement must not move the configured descriptor anchor.
+        auto opened = File::open((cbase / "data" / "t.dbf").string(), OpenMode::ReadOnly);
+        REQUIRE(opened); char b[4] = {}; auto n = opened.value().read_at(0, b, 4);
+        REQUIRE(n); CHECK(std::string(b, n.value()) == "SAFE");
+    }
+    fs::remove_all(base);
+}
+#endif

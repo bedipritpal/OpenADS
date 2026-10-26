@@ -15,6 +15,8 @@
 // id, or the ack-confirmed server binding for table-handle nav).
 
 #include "doctest.h"
+#include "abi/runtime.h"
+#include "network/client.h"
 #include "mgmt/mg_stats.h"
 #include "network/server.h"
 #include "openads/ace.h"

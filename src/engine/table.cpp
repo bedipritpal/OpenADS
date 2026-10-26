@@ -1317,15 +1317,19 @@ util::Result<void> Table::append_record() {
     // erase until that commit lands (see append_pending_recno_ in table.h).
     append_pending_recno_ = recno_;
     append_keys_done_.clear();
-    // Exclusive ADT opens permit writes without a record lock. Avoid
-    // accumulating an unused append auto-lock on each new row, including
-    // when this engine Table is used by the server. Shared ADT and other
-    // table types retain their existing auto-lock behavior.
+    // Exclusive opens and FLocked tables permit writes without a record
+    // lock (the 5035 write guard bypasses both; SAP ADS takes no record
+    // locks there, matching Harbour dbfRawLock where REC_LOCK is a no-op
+    // success when exclusive or FLocked). Taking the auto-lock there only
+    // accumulates registrations that exclusive/FLock apps never release
+    // (rddads adsRawLock/adsAppend skip the unlock in those modes) until
+    // the 4096 walls stop the 4097th append (Tim Stone 2a, 2026-10-25).
+    // Shared, non-FLocked tables retain the auto-lock unchanged.
     // Do NOT use the blocking kernel acquire: a peer FLock/Browse covers the VFP rec-lock
     // range and LockFileEx waits forever (B_BIG N=700 convoy). Retry with
     // the ACE lock budget, then roll the blank row back so a timeout
     // cannot leave a durable empty record.
-    if (mode_ != OpenMode::Exclusive || type_ != TableType::Adt) {
+    if (mode_ != OpenMode::Exclusive && !table_lock_) {
         // Engine-internal budget, decoupled from the client-facing ACE lock
         // policy (single-attempt by default): the app cannot retry this
         // internal auto-lock itself, so it keeps its own short wait.
@@ -2122,7 +2126,11 @@ util::Result<void> Table::unlock_table() {
         if (auto r = commit_dirty_record(); !r) return r.error();
     }
     if (table_lock_) {
-        if (locks_.unlock_table(driver_->file(), to_lock_type_(), locking_)) {
+        if (table_lock_->offset() == 0) {
+            // Virtual wire-mirror FLock (adopt_virtual_table_lock): no OS
+            // byte was taken on this handle; drop the registration only.
+            table_lock_.reset();
+        } else if (locks_.unlock_table(driver_->file(), to_lock_type_(), locking_)) {
             table_lock_->release();
             table_lock_.reset();
         }

@@ -87,6 +87,17 @@ public:
     bool is_table_locked() const noexcept {
         return table_lock_.has_value();
     }
+    // Wire-mirror FLock for the server's parallel ABI twin (see
+    // Session::LockTable/ensure_abi_handle): the session's engine Table
+    // already holds the real OS FLock byte on this file in this process,
+    // so the twin marks the same whole-file coverage WITHOUT a second OS
+    // lock (Windows rejects a same-byte overlap from another handle).
+    // A default LockHandle has offset 0 - the same virtual marker the
+    // FLock-suspended record locks use; unlock_table resets it without an
+    // OS unlock.
+    void adopt_virtual_table_lock() noexcept {
+        if (!table_lock_) table_lock_ = LockHandle{};
+    }
     std::uint16_t lock_count() const noexcept {
         return static_cast<std::uint16_t>(recno_locks_.size());
     }

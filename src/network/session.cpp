@@ -55,6 +55,8 @@ void share_connection_resolve_log(ADSHANDLE                  hConnect,
 // fail a contended lock FAST — AdsLockRecord's retry loop would block the
 // session thread ~1s, starving the peer op that releases the lock.
 UNSIGNED32 try_lock_record_once(ADSHANDLE hTable, UNSIGNED32 ulRecord);
+// Virtual FLock mirror for the parallel ABI twin (ace_exports.cpp).
+void adopt_virtual_table_lock(ADSHANDLE hTable);
 // Raw (unformatted) date/timestamp field reads for the wire: the server
 // packs "YYYYMMDD"/"YYYYMMDDhhmmss" into row payloads regardless of the
 // process-wide date format; clients format for display themselves.
@@ -904,6 +906,9 @@ ADSHANDLE Session::ensure_abi_handle(std::uint32_t id) {
         std::memcpy(ab.data(), aof.data(), aof.size());
         (void)AdsSetAOF(h, ab.data(), 0);
     }
+    // A FLock taken before the twin existed must cover the twin too
+    // (same virtual mirror as the LockTable handler).
+    if (tbl->is_table_locked()) openads::abi::adopt_virtual_table_lock(h);
     tbls_h_[id] = h;
     return h;
 }
@@ -3584,6 +3589,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                         openads::AE_LOCKED);
                     break;
                 }
+                // M12.16 twin: mirror the FLock so the twin's write guard
+                // and append auto-lock see the whole-file cover. Virtual
+                // only - the engine Table above owns the real OS byte.
+                if (auto hit = tbls_h_.find(id); hit != tbls_h_.end())
+                    openads::abi::adopt_virtual_table_lock(hit->second);
             } else {
                 // M12.16 dual-handle: route through the ABI shadow handle
                 // when it exists (same as LockRecord/UnlockRecord) so the
@@ -4863,7 +4873,14 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("AppendBlank: lookup failed"); break; }
-            if (srv_->daemon_hardening() && explicit_record_locks_.size() >= 4096) {
+            // Exclusive open or a held FLock gives whole-file cover: no
+            // append auto-lock is taken in those modes (Table::append_blank
+            // skips it), so the ledger must neither count nor cap them
+            // (Tim Stone 2a: bulk APPEND FROM over REMOTE died at 4,096).
+            const bool whole_file_cover =
+                tbl->open_mode() == openads::engine::OpenMode::Exclusive ||
+                tbl->is_table_locked();
+            if (!whole_file_cover && srv_->daemon_hardening() && explicit_record_locks_.size() >= 4096) {
                 reply = err("Session record-lock limit", openads::AE_ACCESS_DENIED); break;
             }
             auto diag_name = tbl_open_paths_.find(id);
@@ -4905,7 +4922,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 diag_first_append_.insert(id).second)
                 openads::abi::create_diag::log("server-first-append-ok");
             // Include automatic append locks in the session ledger, not only explicit LockRecord.
-            if (srv_->daemon_hardening()) explicit_record_locks_.insert((static_cast<std::uint64_t>(id) << 32) | tbl->recno());
+            if (!whole_file_cover && srv_->daemon_hardening()) explicit_record_locks_.insert((static_cast<std::uint64_t>(id) << 32) | tbl->recno());
             reply.opcode = Opcode::AppendBlankAck;
             break;
         }

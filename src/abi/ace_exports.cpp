@@ -6017,6 +6017,15 @@ void set_connection_remote_server(ADSHANDLE hConnect, bool on) {
 // starving the peer op that would release the record (client threads on
 // a shared connection; Pritpal Bedi: "dbUnlock() in threads fail
 // somehow"). The client retries instead, one wire request per attempt.
+// Wire-mirror FLock for the server's parallel ABI twin (session.cpp
+// LockTable / ensure_abi_handle): the wire LockTable locks the session's
+// engine Table; the twin must see the same whole-file coverage for its
+// 5035 write guard and its append auto-lock decision, but must not take a
+// second OS lock on the same byte from another handle.
+void adopt_virtual_table_lock(ADSHANDLE hTable) {
+    if (Table* t = get_table(hTable)) t->adopt_virtual_table_lock();
+}
+
 UNSIGNED32 try_lock_record_once(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     Table* t = get_table(hTable);
     if (!t) return openads::AE_INTERNAL_ERROR;

@@ -67,7 +67,8 @@ jobs:
         changes=[]\nfor p in (root/'tests').rglob('*.cpp'):\n s=p.read_text(encoding='utf-8',errors='strict')\n\
         \ n=re.sub(r'\\b(?:std::filesystem|fs)::temp_directory_path\\b','openads_test::temp_directory_path',s)\n\
         \ if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))\nwith open(root/'tests/CMakeLists.txt','a')\
-        \ as f:f.write('\\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\\ntarget_compile_options(openads_unit_tests\
+        \ as f:f.write('\\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\\ntarget_compile_options(openads_trace_gate_probe\
+        \ PRIVATE -include \"${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h\")\\ntarget_compile_options(openads_unit_tests\
         \ PRIVATE -include \"${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h\")\\n')\nprint('Test-only native temp\
         \ helper applied:',len(changes),'test files')\npathlib.Path('unit-harness-changes.txt').write_text('\\n'.join(changes))\n\
         \nPYHARNESS\n\ncmake -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release\

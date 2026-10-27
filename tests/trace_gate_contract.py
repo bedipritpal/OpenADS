@@ -49,15 +49,20 @@ for value in ('0', 'false', 'off', 'no'):
 if len(sys.argv)>2:
  import time
  with tempfile.TemporaryDirectory(prefix='PRIVATE_SERVER_CANARY_') as base:
-  root=pathlib.Path(base);cfg=root/'server.ini'
-  cfg.write_text('host=127.0.0.1\nport=0\ndata='+base+'\ndiagnostics=false\n')
+  # The daemon's existing data jail rejects symlink path components.
+  # macOS tempfile roots may be under /var -> /private/var. Give it the
+  # physical root; do not weaken the jail to accommodate a test fixture.
+  root=pathlib.Path(base).resolve();cfg=root/'server.ini'
+  cfg.write_text('host=127.0.0.1\nport=0\ndata='+str(root)+'\ndiagnostics=false\n')
   env=os.environ.copy();env['OPENADS_WIRE_TRACE']='1';env['OPENADS_OPDUMP']='1'
   env['OPENADS_ERROR_LOG_PATH']=str(root/'errors')
   env['OPENADS_LOG_FILE']=str(root/'audit.log')
   server=subprocess.Popen([sys.argv[2],'--config',str(cfg)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
   try:
    time.sleep(1)
-   assert server.poll() is None,'server failed startup'
+   if server.poll() is not None:
+    out,err=server.communicate(timeout=10)
+    raise AssertionError(('server failed startup',server.returncode,out,err))
    server.terminate();out,err=server.communicate(timeout=10)
   finally:
    if server.poll() is None:server.kill();server.communicate()

@@ -1763,25 +1763,23 @@ static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
                                  std::uint8_t rep_op, std::size_t rep_bytes,
                                  long long us) {
     if (!cli_trace_on()) return;
-    // The first payload word is not a table ID for connect/open/hello.
-    // Do not serialize a path prefix disguised as an integer.
-    if (op == 0x01 || op == 0x10 || op == 0x20 || op == 0x30 ||
-        op == 0x32 || op == 0x05 || op == 0x07 || op == 0x09 || op == 0x0B)
-        tid = 0;
+    // Only table-scoped opcodes have a meaningful ID in word zero.
+    // Unknown/new opcodes fail closed, not by dumping arbitrary payload bits.
+    const bool table_scoped =
+        op == 0x03 || op == 0x0D || op == 0x13 || op == 0x15 || op == 0x22 ||
+        (op >= 0x40 && op <= 0x9E && (op & 1u) == 0) ||
+        op == 0xA4 || op == 0xA6 || op == 0xA8 || op == 0xAA ||
+        op == 0xAC || op == 0xAE || op == 0xB0;
+    if (!table_scoped) tid = 0;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
-    std::string table = tid == 0 ? "-" : "TABLE_" + std::to_string(tid);
-    const bool index_op = op == 0x90 || op == 0x92 || op == 0x8A ||
-                          op == 0x8C || op == 0x8E || op == 0x5C;
-    if (index_op) {
-        const auto ix = trace.indexes.find({conn, tid});
-        if (ix != trace.indexes.end()) table = ix->second;
-    } else if (op != 0x01 && op != 0x10 && op != 0x20 &&
-               op != 0x30 && op != 0x32 && op != 0x05 && op != 0x07 &&
-               op != 0x09 && op != 0x0B) {
-        const auto it = trace.tables.find({conn, tid});
-        if (it != trace.tables.end()) table = it->second;
-    }
+    // Only an ID registered by a successful table/index open is printable.
+    std::string table = "-";
+    const auto ti = trace.tables.find({conn, tid});
+    const auto ix = trace.indexes.find({conn, tid});
+    if (ti != trace.tables.end()) table = ti->second;
+    else if (ix != trace.indexes.end()) table = ix->second;
+    else tid = 0;
     char buf[200];
     std::snprintf(buf, sizeof(buf),
                   "wire op=0x%02X tid=%u req=%lu ack=0x%02X ackb=%lu dur_us=%lld conn=%04X",

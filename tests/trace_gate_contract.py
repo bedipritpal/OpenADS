@@ -31,3 +31,16 @@ with tempfile.TemporaryDirectory(prefix='openads_trace_contract_') as base:
     assert 'wire op=' in wire,(transport,mode)
     assert 'SAFE_ALIAS' in wire,(transport,mode)
    print(transport,mode,'PASS',p.stdout.strip())
+
+# Explicit master ON must not itself turn on an unselected wire channel.
+for value in ('0', 'false', 'off', 'no'):
+ with tempfile.TemporaryDirectory(prefix='openads_trace_false_') as base:
+  root=pathlib.Path(base);env=os.environ.copy()
+  env['OPENADS_INI']=str(root/'openads.ini');(root/'openads.ini').write_text('wire_trace=1\n')
+  env['OPENADS_WIRE_TRACE']=value;env['OPENADS_WIRE_TRACE_FILE']=str(root/'wire.log')
+  env['OPENADS_ERROR_LOG_PATH']=str(root/'errors')
+  p=subprocess.run([exe,'on'],env=env,capture_output=True,text=True,timeout=30)
+  assert p.returncode==0,(value,p.returncode,p.stderr)
+  assert not (root/'wire.log').exists(),value
+  assert '[wire]' not in p.stderr,value
+  print('env_false_overrides_ini',value,'PASS')

@@ -206,11 +206,12 @@ jobs:
         RETURN\nCHECKROWS\n\"$HB/bin/win/mingw/hbmk2.exe\" output/check_rows.prg -Lkit -lrddads -lopenace32 -iinclude/openads\
         \ -i\"$HB/contrib/rddads\" -mt -gtstd  -lws2_32 -lbcrypt -lpsapi -ooutput/check_rows.exe\n\ncat > output/auth_static.prg\
         \ <<'PRG'\n#include \"ads.ch\"\nREQUEST ADS, ADSCDX\nPROCEDURE Main(cUrl)\n LOCAL cChallenge,hPending:=0,hConn:=0,cBlob\n\
-        \ cChallenge:=OAds_BeginAuth(cUrl,@hPending)\n IF Len(cChallenge)!=32\n  OutStd(\"AUTH-BEGIN-FAIL\"+hb_eol())\n\
-        \  ErrorLevel(3);QUIT\n ENDIF\n cBlob:=cChallenge+\"test-only\"\n hConn:=OAds_CompleteAuth(hPending,cBlob)\n\
-        \ IF Empty(hConn)\n  OutStd(\"AUTH-COMPLETE-FAIL\"+hb_eol())\n  ErrorLevel(4);QUIT\n ENDIF\n OAds_SetConnection(hConn)\n\
-        \ dbUseArea(.T.,\"ADSCDX\",\"TestIndex.dbf\",\"TRACEPROBE\",.T.,.F.)\n IF !Used()\n  ErrorLevel(5);QUIT\n\
-        \ ENDIF\n dbCloseAll()\n AdsDisconnect(hConn)\n OutStd(\"STATIC-AUTH-PASS\"+hb_eol())\nRETURN\nPRG\n\"$HB/bin/win/mingw/hbmk2.exe\"\
+        \ IF !OAds_SetLogging(.T.)\n  OutStd(\"LOGGING-OPTIN-FAIL\"+hb_eol())\n  ErrorLevel(6);QUIT\n ENDIF\n cChallenge:=OAds_BeginAuth(cUrl,@hPending)\n\
+        \ IF Len(cChallenge)!=32\n  OutStd(\"AUTH-BEGIN-FAIL\"+hb_eol())\n  ErrorLevel(3);QUIT\n ENDIF\n cBlob:=cChallenge+\"\
+        test-only\"\n hConn:=OAds_CompleteAuth(hPending,cBlob)\n IF Empty(hConn)\n  OutStd(\"AUTH-COMPLETE-FAIL\"\
+        +hb_eol())\n  ErrorLevel(4);QUIT\n ENDIF\n OAds_SetConnection(hConn)\n dbUseArea(.T.,\"ADSCDX\",\"TestIndex.dbf\"\
+        ,\"TRACEPROBE\",.T.,.F.)\n IF !Used()\n  ErrorLevel(5);QUIT\n ENDIF\n dbCloseAll()\n AdsDisconnect(hConn)\n\
+        \ OAds_SetLogging(.F.)\n OutStd(\"STATIC-AUTH-PASS\"+hb_eol())\nRETURN\nPRG\n\"$HB/bin/win/mingw/hbmk2.exe\"\
         \ output/auth_static.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i\"$HB/contrib/rddads\" -mt -gtstd\
         \  -lws2_32 -lbcrypt -lpsapi -ooutput/auth_static.exe\nobjdump -p output/auth_static.exe > output/static-auth-pe.txt\n\
         grep -qi 'DLL Name: openace32.dll' output/static-auth-pe.txt\n\n\n# Same generated Harbour objects, link\

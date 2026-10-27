@@ -19,16 +19,15 @@ extern int oads_logging_enabled(void);
 
 static void arc_log_rc(const char* name, unsigned rc, int nargs, ...) {
     static int on = -1;
-    FILE* f; int i; va_list ap;
+    FILE* f;
     if (on < 0) on = getenv("OPENADS_ARC_TRACE") != NULL;
     if (!on) return;
     if (!oads_logging_enabled()) return;   /* OAdsSetLogging(0) kill-switch */
     f = fopen("C:/OpenADS/_arc32/ace_calls.log", "a");
     if (!f) return;
     fprintf(f, "W %s rc=%u args:", name, rc);
-    va_start(ap, nargs);
-    for (i = 0; i < nargs; i++) fprintf(f, " %lx", (unsigned long)va_arg(ap, uintptr_t));
-    va_end(ap);
+    /* Never serialize argument words: pointers and packed scalars may leak. */
+    (void)nargs;
     fputc('\n', f);
     fclose(f);
 }

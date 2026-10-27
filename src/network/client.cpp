@@ -1,4 +1,5 @@
 #include "network/client.h"
+#include "util/log.h"
 #include "network/mutual_auth.h"
 
 #include "abi/lock_retry_policy.h"
@@ -327,7 +328,7 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
             default: break;
         }
     }
-    const FrameTraceHook trace_hook = f.opcode!=Opcode::BeginAuth && f.opcode!=Opcode::CompleteAuth
+    const FrameTraceHook trace_hook = openads::util::logging_enabled() && f.opcode!=Opcode::BeginAuth && f.opcode!=Opcode::CompleteAuth
         ? g_frame_trace_hook.load(std::memory_order_relaxed) : nullptr;
     const auto trace_t0 = trace_hook != nullptr
         ? std::chrono::steady_clock::now()

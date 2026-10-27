@@ -13,6 +13,7 @@
 // interactive use).
 
 #include "mgmt/error_log.h"
+#include "util/log.h"
 #include "mgmt/mg_stats.h"
 #include "network/server.h"
 #include "platform/file.h"
@@ -129,6 +130,7 @@ void usage(const char* argv0) {
 
 // Args parsed from argv. Defaults match the original CLI.
 struct Args {
+    bool diagnostics = false;
     std::string   host        = "127.0.0.1";
     bool          allow_anonymous = false;
     std::string auth_module;
@@ -284,6 +286,7 @@ bool parse_args(int argc, char** argv, Args& out) {
 // file actually set are touched, so this sits cleanly between the built-in
 // defaults (Args ctor) and the command line: defaults < config file < CLI.
 void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
+    if (cfg.has_diagnostics) out.diagnostics = cfg.diagnostics;
     if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
     if (cfg.has_host)      out.host      = cfg.host;
     if (cfg.has_port)      out.port      = cfg.port;
@@ -407,6 +410,8 @@ static void probe_ace_dlls(bool console) {
 // Run the actual server. Returns when g_running flips to false
 // (signal handler on POSIX / SCM stop control on Windows).
 int run_server(const Args& args, bool console) {
+    // Admin-owned config only. Never read master enable from environment.
+    openads::util::set_logging_enabled(args.diagnostics);
     if (args.tls_cert_file.empty() != args.tls_key_file.empty()) {
         std::fprintf(stderr, "Both --tls_cert and --tls_key are required.\n");
         return 1;

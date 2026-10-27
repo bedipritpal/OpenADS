@@ -608,3 +608,14 @@ find_program(OPENADS_NODE_EXECUTABLE node)
 if(OPENADS_NODE_EXECUTABLE)
     add_test(NAME portal_health_js COMMAND ${OPENADS_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_js_test.js)
 endif()
+
+# The security default must be tested in new processes, not after a unit test
+# has already called the app's opt-in API.
+add_executable(openads_trace_gate_probe trace_gate_probe.cpp)
+target_link_libraries(openads_trace_gate_probe PRIVATE openads_core)
+target_include_directories(openads_trace_gate_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_dependencies(openads_unit_tests openads_trace_gate_probe)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME diagnostics_gate_contract COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/trace_gate_contract.py $<TARGET_FILE:openads_trace_gate_probe>)
+endif()

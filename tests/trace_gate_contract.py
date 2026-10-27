@@ -1,0 +1,33 @@
+"""Generated-data process matrix; no customer source or data."""
+import os, pathlib, subprocess, sys, tempfile
+exe=sys.argv[1]
+with tempfile.TemporaryDirectory(prefix='openads_trace_contract_') as base:
+ for transport in ('env','ini','both'):
+  for mode in ('default','off','on','lifecycle','late'):
+   root=pathlib.Path(base)/(transport+'-'+mode);root.mkdir()
+   env=os.environ.copy()
+   for key in list(env):
+    if key.startswith('OPENADS_') and any(x in key for x in ('TRACE','LOG','DIAG','INI')):env.pop(key)
+   env['OPENADS_INI']=str(root/'openads.ini')
+   settings={'wire_trace':'1','wire_trace_file':str(root/'wire.log'),'log_file':str(root/'audit.log'),'log':'debug','resolve_verbose':'1','arc_trace':'1','trace':'1'}
+   (root/'openads.ini').write_text('\n'.join(k+'='+v for k,v in settings.items()) if transport!='env' else '')
+   if transport!='ini':
+    for key,val in settings.items():env['OPENADS_'+key.upper()]=val
+   # Lifecycle probe gets path independently of config lookup.
+   env['OPENADS_WIRE_TRACE_FILE']=str(root/'wire.log')
+   for k,name in [('CREATE_INDEX_DIAG_FILE','index.log'),('CREATE_TABLE_DIAG_FILE','table.log'),('LOCK_DIAG','lock.log'),('ERROR_LOG_PATH','errors')]:env['OPENADS_'+k]=str(root/name)
+   p=subprocess.run([exe,mode],env=env,capture_output=True,text=True,timeout=30)
+   if p.returncode:raise AssertionError((transport,mode,p.returncode,p.stdout,p.stderr))
+   texts='\n'.join(f.read_bytes().decode('latin1') for f in root.rglob('*') if f.is_file() and f.name!='openads.ini')+p.stderr
+   for canary in ('PRIVATE_TABLE_CANARY','PRIVATE_ERROR_CANARY','FIELD_X','TAGX','1234567','openads_trace_gate_probe'):
+    assert canary not in texts,(transport,mode,canary)
+   if mode in ('default','off'):
+    assert not p.stderr,(transport,mode,p.stderr)
+    assert not (root/'wire.log').exists(),(transport,mode)
+    assert not list((root/'errors').glob('*')),(transport,mode)
+    assert not any((root/f).exists() for f in ('index.log','table.log','audit.log','lock.log')),(transport,mode)
+   else:
+    wire=(root/'wire.log').read_text()
+    assert 'wire op=' in wire,(transport,mode)
+    assert 'SAFE_ALIAS' in wire,(transport,mode)
+   print(transport,mode,'PASS',p.stdout.strip())

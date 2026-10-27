@@ -1514,10 +1514,28 @@ bool remote_table_has_index(const openads::network::RemoteTable* rt) {
 
 // Diagnostic WAN trace. Off unless wire_trace=1; no file opens or timestamps
 // on the disabled request path. Payload and seek keys are never logged.
-static bool cli_trace_on() {
+static bool cli_trace_requested() {
     static const bool on = openads::util::client_setting_truthy(
         "OPENADS_WIRE_TRACE", "wire_trace");
     return on;
+}
+static bool cli_trace_on() {
+    return openads::util::logging_enabled() && cli_trace_requested();
+}
+
+// A default Harbour alias is the filename stem, so it is not a safe alias.
+// Keep a distinct explicit alias; never write a path or filename-derived one.
+static std::string cli_trace_label(const std::string& name,
+                                   const std::string& alias,
+                                   std::uint32_t id = 0) {
+    auto stem = std::filesystem::path(name).stem().string();
+    auto norm = [](std::string v) {
+        for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    if (!alias.empty() && alias.find_first_of("/\\.:\r\n") == std::string::npos &&
+        norm(alias) != norm(stem)) return alias;
+    return "TABLE_" + std::to_string(id);
 }
 
 static const std::string& cli_trace_path() {
@@ -1546,7 +1564,7 @@ static void cli_trace_table_open(const openads::network::RemoteTable* rt) {
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
     trace.tables[{rt->conn, rt->id}] =
-        rt->alias.empty() ? rt->name : rt->alias;
+        cli_trace_label(rt->name, rt->alias, rt->id);
 }
 static void cli_trace_table_close(const openads::network::RemoteTable* rt) {
     if (!cli_trace_on() || !rt || !rt->conn) return;
@@ -1608,7 +1626,7 @@ static void cli_trace_tbl(const openads::network::RemoteTable* rt,
                           const char* op, const char* fmt, ...) {
     if (!cli_trace_on()) return;
     const std::string who = rt == nullptr ? "-" :
-        (!rt->alias.empty() ? rt->alias : rt->name);
+        (cli_trace_label(rt->name, rt->alias, rt->id));
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -1744,9 +1762,15 @@ static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
                                  std::uint32_t tid, std::size_t req_bytes,
                                  std::uint8_t rep_op, std::size_t rep_bytes,
                                  long long us) {
+    if (!cli_trace_on()) return;
+    // The first payload word is not a table ID for connect/open/hello.
+    // Do not serialize a path prefix disguised as an integer.
+    if (op == 0x01 || op == 0x10 || op == 0x20 || op == 0x30 ||
+        op == 0x32 || op == 0x05 || op == 0x07 || op == 0x09 || op == 0x0B)
+        tid = 0;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
-    std::string table = "-";
+    std::string table = tid == 0 ? "-" : "TABLE_" + std::to_string(tid);
     const bool index_op = op == 0x90 || op == 0x92 || op == 0x8A ||
                           op == 0x8C || op == 0x8E || op == 0x5C;
     if (index_op) {
@@ -7253,7 +7277,7 @@ static void arc2_log(const char* fmt, ...) {
     if (auto* f = fopen(path, "a")) {
         arc2_stamp(f);
         va_list ap; va_start(ap, fmt);
-        vfprintf(f, fmt, ap);
+        fputs("ABI detail [arguments hidden]", f);
         va_end(ap);
         fputc('\n', f);
         fclose(f);
@@ -7275,7 +7299,7 @@ void expire_auth_pending() {
 }
 }
 UNSIGNED32 ENTRYPOINT OAdsBeginAuth(const char* url,ADSHANDLE* pending,UNSIGNED8* challenge32) {
-    if (cli_trace_on()) openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
+    if (cli_trace_requested()) openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
     if(pending)*pending=0;
     if(challenge32)std::fill(challenge32,challenge32+32,0);
     if(!url || !pending || !challenge32)return fail(openads::AE_LOGIN_FAILED,"Auth arguments invalid");
@@ -7343,7 +7367,7 @@ UNSIGNED32 ENTRYPOINT AdsConnect60(UNSIGNED8* pucServer, UNSIGNED16 usServerType
                         UNSIGNED8* pucUser, UNSIGNED8* pucPwd,
                         UNSIGNED32 /*ulOptions*/, ADSHANDLE* phConnect) {
     arc2_trace("AdsConnect60");
-    if (cli_trace_on()) {
+    if (cli_trace_requested()) {
         openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
     }
     if (phConnect == nullptr) return fail(openads::AE_INTERNAL_ERROR,
@@ -8530,7 +8554,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
             if (adopted) {
                 std::snprintf(pbuf, sizeof(pbuf), "park hit id=%u %.200s",
                               static_cast<unsigned>(adopted->id),
-                              name.c_str());
+                              "[path hidden]");
             } else {
                 const std::string pk = remote_pool_key(name, alias, usMode);
                 bool other_lane = false;
@@ -8551,9 +8575,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                               static_cast<unsigned>(
                                   reinterpret_cast<std::uintptr_t>(rc) &
                                   0xFFFFu),
-                              name.c_str());
+                              "[path hidden]");
             }
-            cli_trace_line(cli_trace_ms(), alias.c_str(), "AdsOpenTable",
+            cli_trace_line(cli_trace_ms(), cli_trace_label(name, alias).c_str(), "AdsOpenTable",
                            pbuf);
         }
         if (adopted) {
@@ -11050,7 +11074,7 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE hConn, UNSIGNED8* pucName,
         // open table or index has the same stem: existence is not ownership.
         auto r = ctx.remote->file_exists(name);
         if (!r) return fail(r.error());
-        cli_trace("FileExists", "probe %s -> %s (wire)", name.c_str(),
+        cli_trace("FileExists", "probe %s -> %s (wire)", "[path hidden]",
                   r.value() ? "yes" : "no");
         *pbExists = r.value() ? 1 : 0;
         return ok();
@@ -16030,7 +16054,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 }
                 rt->parked_nav_which = 0;
                 cli_trace_tbl(rt, "AdsOpenIndex", "unpark hit %.32s",
-                              rt->parked_bag_stem.c_str());
+                              "[index hidden]");
                 auto& s = state();
                 std::lock_guard<std::recursive_mutex> lk(s.mu);
                 const std::uint16_t cap =
@@ -16052,7 +16076,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 return r;
             }
             cli_trace_tbl(rt, "AdsOpenIndex", "unpark miss %.32s",
-                          path.c_str());
+                          "[index hidden]");
         }
         // Zero-RTT dedup (RDD-only apps, no app change possible): the
         // production bag is already bound on this handle by the OpenTable
@@ -16132,7 +16156,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             if (cli_trace_on()) {
                 auto& trace = cli_trace_state();
                 std::lock_guard<std::mutex> trace_lk(trace.mu);
-                trace.indexes[{rt->conn, ent.id}] = rt->alias.empty() ? rt->name : rt->alias;
+                trace.indexes[{rt->conn, ent.id}] = cli_trace_label(rt->name, rt->alias, rt->id);
             }
             // Dedup by tag: production-CDX auto-open and a later explicit
             // AdsOpenIndex on the same bag must not register the order
@@ -16674,6 +16698,7 @@ UNSIGNED32 ENTRYPOINT AdsCloseAllIndexes(ADSHANDLE hTable) {
 // One-off client ABI discriminator for Vouch INDEX ON. Off unless explicitly
 // enabled. Keep this independent of wire_trace: a rejected call never hits wire.
 static void create_index_diag(const char* fmt, ...) {
+    if (!openads::util::logging_enabled()) return;
     const char* path = std::getenv("OPENADS_CREATE_INDEX_DIAG_FILE");
     if (!path || !*path) return;
     static std::mutex mu;
@@ -16682,7 +16707,7 @@ static void create_index_diag(const char* fmt, ...) {
     if (!f) return;
     va_list args;
     va_start(args, fmt);
-    std::vfprintf(f, fmt, args);
+    std::fputs("create-index stage [arguments hidden]", f);
     va_end(args);
     std::fputc('\n', f);
     std::fclose(f);
@@ -28191,7 +28216,7 @@ struct TriggerBridge final : openads::script::SqlBridge {
     exec(const std::string& sql) override {
         static const bool trig_trace =
             openads::util::client_setting_truthy("OPENADS_TRACE", "trace");
-        if (trig_trace)
+        if (trig_trace && openads::util::logging_enabled())
             std::fprintf(stderr, "[trig-exec] SQL text hidden\n");
         // 1. INSERT INTO __error Ã¢â‚¬Â¦ VALUES (code, 'msg') -- the classic ADS
         //    way for a trigger to fail the DML. Surface it as an error.
@@ -29773,11 +29798,11 @@ static UNSIGNED32 exec_sql_direct_impl(ADSHANDLE hStatement, UNSIGNED8* pucSQL,
                     static const bool into_trace =
                         openads::util::client_setting_truthy(
                             "OPENADS_TRACE", "trace");
-                    if (into_trace)
+                    if (into_trace && openads::util::logging_enabled())
                         std::fprintf(stderr,
                             "[into] tmp=%s all_images=%d new=%p old=%p "
                             "(SQL text hidden)\n",
-                            tmp_name.c_str(), all_images ? 1 : 0,
+                            "[hidden]", all_images ? 1 : 0,
                             (const void*)imgs.new_f,
                             (const void*)imgs.old_f);
                 }
@@ -39743,7 +39768,8 @@ UNSIGNED32 ENTRYPOINT AdsSetDefaultConnection(ADSHANDLE hConn) {
 // bring-up traces (ace_calls.log). Paths, aliases and record counts in
 // those lines are developer diagnostics â€” an app going to production
 // calls OAdsSetLogging(0) once at startup so end-user machines stay
-// silent. 0 = silent, anything else = re-enable (the default).
+// silent. 0 = silent, anything else = explicitly enable.
+// Default OFF. Environment and INI cannot enable this master.
 // Process-local: affects this client DLL instance (and the engine when
 // running in local-server mode, since it shares the process).
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn) {
@@ -40087,9 +40113,9 @@ UNSIGNED32 ENTRYPOINT AdsShowError(UNSIGNED8* pucErrText) {
     arc2_trace("AdsShowError");
     // ADS pops up a message box on a GUI host; OpenADS is headless, so the
     // closest faithful behaviour is to write the caller's text to stderr.
-    if (pucErrText != nullptr && pucErrText[0] != '\0')
+    if (openads::util::logging_enabled() && pucErrText != nullptr && pucErrText[0] != '\0')
         std::fprintf(stderr, "%s\n",
-                     reinterpret_cast<const char*>(pucErrText));
+                     "[application error text hidden]");
     return openads::AE_SUCCESS;
 }
 UNSIGNED32 ENTRYPOINT AdsStmtSetTableLockType(ADSHANDLE h, UNSIGNED16 us) {

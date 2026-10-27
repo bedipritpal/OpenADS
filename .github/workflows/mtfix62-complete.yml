@@ -50,16 +50,21 @@ jobs:
 
         test "$(uname -m)" = x86_64
 
+        test -f third_party/minizip/zip.h
+
+        printf ''#include "zip.h"\n'' | clang++ -x c++ -E -I"$PWD/third_party/minizip" - | grep "third_party/minizip/zip.h"
+
         '
     - name: Set up Ninja
       uses: seanmiddleditch/gha-setup-ninja@v6
     - name: Configure
       shell: bash
       run: "cmake --preset default \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON \\\n      -DOPENADS_VERSION_FORCE=$KIT_VERSION\
-        \ \\\n      -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\"\n\n"
+        \ \\\n      -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" \\\n      -DCMAKE_CXX_FLAGS=\"-I$PWD/third_party/minizip\"\
+        \n\n"
     - name: Build
       shell: bash
-      run: cmake --build build/default --config Release
+      run: cmake --build build/default --config Release --parallel 3
     - name: Test
       timeout-minutes: 25
       shell: bash

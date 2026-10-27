@@ -7,7 +7,7 @@ with tempfile.TemporaryDirectory(prefix='openads_trace_contract_') as base:
    root=pathlib.Path(base)/(transport+'-'+mode);root.mkdir()
    env=os.environ.copy()
    for key in list(env):
-    if key.startswith('OPENADS_') and any(x in key for x in ('TRACE','LOG','DIAG','INI')):env.pop(key)
+    if key.startswith('OPENADS_') and any(x in key for x in ('TRACE','LOG','DIAG','INI','OPDUMP')):env.pop(key)
    env['OPENADS_INI']=str(root/'openads.ini')
    settings={'wire_trace':'1','wire_trace_file':str(root/'wire.log'),'log_file':str(root/'audit.log'),'log':'debug','resolve_verbose':'1','arc_trace':'1','trace':'1'}
    (root/'openads.ini').write_text('\n'.join(k+'='+v for k,v in settings.items()) if transport!='env' else '')
@@ -44,3 +44,25 @@ for value in ('0', 'false', 'off', 'no'):
   assert not (root/'wire.log').exists(),value
   assert '[wire]' not in p.stderr,value
   print('env_false_overrides_ini',value,'PASS')
+
+# Standalone daemon keeps necessary operational replies, not diagnostics.
+if len(sys.argv)>2:
+ import time
+ with tempfile.TemporaryDirectory(prefix='PRIVATE_SERVER_CANARY_') as base:
+  root=pathlib.Path(base);cfg=root/'server.ini'
+  cfg.write_text('host=127.0.0.1\nport=0\ndata='+base+'\ndiagnostics=false\n')
+  env=os.environ.copy();env['OPENADS_WIRE_TRACE']='1';env['OPENADS_OPDUMP']='1'
+  env['OPENADS_ERROR_LOG_PATH']=str(root/'errors')
+  env['OPENADS_LOG_FILE']=str(root/'audit.log')
+  server=subprocess.Popen([sys.argv[2],'--config',str(cfg)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+  try:
+   time.sleep(1)
+   assert server.poll() is None,'server failed startup'
+   server.terminate();out,err=server.communicate(timeout=10)
+  finally:
+   if server.poll() is None:server.kill();server.communicate()
+  assert 'PRIVATE_SERVER_CANARY' not in out+err
+  assert '[wire]' not in err
+  assert not list((root/'errors').glob('*'))
+  assert not (root/'audit.log').exists()
+  print('standalone_server_OFF_env_OPDUMP_and_wire PASS')

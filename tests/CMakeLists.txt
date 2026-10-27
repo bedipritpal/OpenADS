@@ -621,7 +621,8 @@ if(OPENADS_WITH_HARBOUR_UDF)
     target_link_libraries(openads_trace_gate_probe PRIVATE ${HARBOUR_LINK_LIBRARIES})
 endif()
 add_dependencies(openads_unit_tests openads_trace_gate_probe)
-if(Python3_Interpreter_FOUND)
+if(Python3_Interpreter_FOUND AND TARGET openads_serverd)
     add_test(NAME diagnostics_gate_contract COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/trace_gate_contract.py $<TARGET_FILE:openads_trace_gate_probe>)
+        ${CMAKE_CURRENT_SOURCE_DIR}/trace_gate_contract.py $<TARGET_FILE:openads_trace_gate_probe>
+        $<TARGET_FILE:openads_serverd>)
 endif()

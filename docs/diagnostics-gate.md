@@ -33,3 +33,8 @@ The file is appended, not cleared or rotated by the master. Existing raw
 files from older versions are not sanitized by an update. Capture briefly,
 turn the application master off, and review files before sharing. Trace
 writes add overhead; traced wall-clock time is not a clean speed benchmark.
+
+Operational CLI responses remain: help/version, readiness/shutdown and safe
+startup/service failure status. The master gates diagnostics, not these
+management responses. Sensitive startup paths/raw errors are suppressed.
+OPDUMP's environment selector cannot start sampling while the master is OFF.

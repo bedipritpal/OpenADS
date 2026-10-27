@@ -1528,7 +1528,9 @@ static bool cli_trace_on() {
 static std::string cli_trace_label(const std::string& name,
                                    const std::string& alias,
                                    std::uint32_t id = 0) {
-    auto stem = std::filesystem::path(name).stem().string();
+    std::string normalized = name;
+    for (auto& c : normalized) if (c == '\\') c = '/';
+    auto stem = std::filesystem::path(normalized).stem().string();
     auto norm = [](std::string v) {
         for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         return v;

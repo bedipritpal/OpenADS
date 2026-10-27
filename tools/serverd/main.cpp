@@ -327,7 +327,7 @@ bool load_config_and_args(int argc, char** argv, Args& out) {
         openads::serverd::IniConfig cfg;
         std::string err;
         if (!openads::serverd::load_ini_file(config_path, cfg, err)) {
-            std::fprintf(stderr, "config: %s\n", err.c_str());
+            std::fprintf(stderr, "config: invalid or unreadable configuration\n");
             return false;
         }
         apply_ini(cfg, out);
@@ -469,22 +469,21 @@ int run_server(const Args& args, bool console) {
             openads::engine::hrb_udf::make_harbour_backend());
         std::string udf_err;
         if (!openads::engine::hrb_udf::load(udf_path, udf_err)) {
-            std::fprintf(stderr, "UDF module failed: %s\n",
-                         udf_err.c_str());
+            std::fprintf(stderr, "UDF module failed [detail hidden]\n");
             return 1;
         }
         if (console) {
-            std::printf("UDF module: %s\n", udf_path.c_str());
-            for (const auto& fn :
+            if (args.diagnostics) std::printf("UDF module loaded\n");
+            for ([[maybe_unused]] const auto& fn :
                  openads::engine::hrb_udf::functions())
-                std::printf("  udf: %s\n", fn.c_str());
+                if (args.diagnostics) std::printf("  udf: [name hidden]\n");
             std::fflush(stdout);
         }
 #else
         std::fprintf(stderr,
             "UDF module '%s' requested but this build lacks "
             "OPENADS_WITH_HARBOUR_UDF=ON\n",
-            udf_path.c_str());
+            "[module path hidden]");
         return 1;
 #endif
     }
@@ -502,7 +501,7 @@ int run_server(const Args& args, bool console) {
             !jr) {
             std::fprintf(stderr,
                          "data jail: %s - refusing to start without the jail\n",
-                         jr.error().message.c_str());
+                         "[detail hidden]");
             return 1;
         }
     }
@@ -547,7 +546,7 @@ int run_server(const Args& args, bool console) {
         }
         auto tls = srv.set_tls(config);
         if (!tls) {
-            std::fprintf(stderr, "TLS configuration rejected: %s\n", tls.error().message.c_str());
+            std::fprintf(stderr, "TLS configuration rejected code=%d\n", tls.error().code);
             return 1;
         }
 #else
@@ -575,7 +574,7 @@ int run_server(const Args& args, bool console) {
     auto r = srv.start(args.host, args.port);
     if (!r) {
         std::fprintf(stderr, "server start failed: %s (sub=%d)\n",
-                     r.error().message.c_str(), r.error().sub_code);
+                     "[detail hidden]", r.error().sub_code);
         // The default OpenADS / SAP-ACE wire port is 6262. Port
         // collisions with the SAP Advantage Database Server service
         // (when both run on the same host) surface as a generic
@@ -602,7 +601,7 @@ int run_server(const Args& args, bool console) {
         auto er = srv.add_listener(args.host, pe.port, pe.data_dir);
         if (!er) {
             std::fprintf(stderr, "extra listener on port %u failed: %s\n",
-                         pe.port, er.error().message.c_str());
+                         pe.port, "[detail hidden]");
             return 1;
         }
     }
@@ -613,7 +612,7 @@ int run_server(const Args& args, bool console) {
                     args.backlog);
         for (const auto& pe : args.extra_listeners) {
             std::printf("  extra listener on port %u (data=%s)\n",
-                        pe.port, pe.data_dir.c_str());
+                        pe.port, "[data root hidden]");
         }
         probe_ace_dlls(console);
     }
@@ -628,7 +627,7 @@ int run_server(const Args& args, bool console) {
                 args.host.c_str(), args.http_port);
         } else if (console) {
             std::printf("Studio web console on http://%s:%u/  (data=%s)\n",
-                        args.host.c_str(), args.http_port, http_data_dir.c_str());
+                        args.host.c_str(), args.http_port, "[data root hidden]");
             std::fflush(stdout);
         }
     }
@@ -645,7 +644,7 @@ int run_server(const Args& args, bool console) {
     // plus the session-thread high-water mark. Zero cost when off.
     std::atomic<bool> opdump_stop{false};
     std::thread opdump;
-    if (std::getenv("OPENADS_OPDUMP") != nullptr &&
+    if (openads::util::logging_enabled() && std::getenv("OPENADS_OPDUMP") != nullptr &&
         std::strcmp(std::getenv("OPENADS_OPDUMP"), "1") == 0) {
         openads::mgmt::process_mg_stats().op_dump_enabled.store(true);
         opdump = std::thread([&srv, &opdump_stop]() {

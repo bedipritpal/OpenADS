@@ -1,0 +1,241 @@
+name: mtfix62 macOS15 completion and combined kit
+'on':
+  push:
+    branches:
+    - release/mtfix62-full
+    paths:
+    - .github/workflows/mtfix62-complete.yml
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: mtfix62-full-kit
+  cancel-in-progress: false
+env:
+  KIT_VERSION: 1.09.75-mtfix62-full-test
+  PINNED_SOURCE: 722e3c2c6bc8fd4656929a22bab03ee79c14d251
+jobs:
+  mackit:
+    name: Build macOS universal server kit
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix62-full
+    - name: Verify clean main-based source
+      shell: bash
+      run: 'set -euxo pipefail
+
+        test "$GITHUB_REF" = refs/heads/release/mtfix62-full
+
+        git merge-base --is-ancestor 722e3c2c6bc8fd4656929a22bab03ee79c14d251 HEAD
+
+        test -z "$(git diff --name-only 722e3c2c6bc8fd4656929a22bab03ee79c14d251 HEAD -- . '':!.github/workflows'')"
+
+        '
+    - name: Record supported runner and compiler provenance
+      shell: bash
+      run: 'set -euo pipefail
+
+        sw_vers
+
+        xcodebuild -version
+
+        clang --version
+
+        xcrun --show-sdk-path
+
+        test "$(uname -m)" = arm64
+
+        '
+    - name: Set up Ninja
+      uses: seanmiddleditch/gha-setup-ninja@v6
+    - name: Configure
+      shell: bash
+      run: "cmake --preset default \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON \\\n      -DOPENADS_VERSION_FORCE=$KIT_VERSION\
+        \ \\\n      -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\"\n\n"
+    - name: Build
+      shell: bash
+      run: cmake --build build/default --config Release
+    - name: Test
+      timeout-minutes: 25
+      shell: bash
+      run: ctest --test-dir build/default --output-on-failure -C Release
+    - name: Stage and verify macOS kit
+      shell: bash
+      run: "set -euxo pipefail\nSTAGE=\"openads-$KIT_VERSION-macos-universal\"\nB=build/default\nmkdir -p \"$STAGE\"\
+        \nfor f in \"$B\"/src/libopenace64*.dylib; do\n  [ -e \"$f\" ] || continue\n  cp \"$f\" \"$STAGE/\"\n  cp\
+        \ \"$f\" \"$STAGE/$(basename \"$f\" | sed 's/libopenace64/libace64/')\"\ndone\ncp \"$B\"/tools/serverd/openads_serverd\
+        \ \"$STAGE/\"\nif [ -e \"$B\"/tools/serverd/openads_auth_worker ]; then cp \"$B\"/tools/serverd/openads_auth_worker\
+        \ \"$STAGE/\"; fi\ncp \"$B\"/tools/bench/openads_bench \"$STAGE/\"\ncp LICENSE NOTICE README.md openads.ini.sample\
+        \ \"$STAGE/\"\nmkdir -p \"$STAGE/include/openads\"\ncp include/openads/ace.h \"$STAGE/include/ace.h\"\n\
+        cp include/openads/ace.h include/openads/error.h include/openads/openads_sql.h include/openads/platform.h\
+        \ include/openads/version.h \"$STAGE/include/openads/\"\nmkdir -p \"$STAGE/contrib/oads_hb\"\ncp contrib/oads_hb/oads_hb.c\
+        \ contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md \"$STAGE/contrib/oads_hb/\"\ncp docs/diagnostics-gate.md\
+        \ \"$STAGE/\"\necho \"$PINNED_SOURCE\" > \"$STAGE/source-commit.txt\"\n{ sw_vers; xcodebuild -version; clang\
+        \ --version; echo \"deployment target: $MACOSX_DEPLOYMENT_TARGET; universal arm64+x86_64\"; } > \"$STAGE/build-provenance.txt\"\
+        \nfor bin in \"$STAGE/openads_serverd\" \"$STAGE/openads_bench\" \"$STAGE\"/*.dylib; do\n  lipo -verify_arch\
+        \ arm64 x86_64 \"$bin\"\n  for arch in arm64 x86_64; do\n    xcrun vtool -show-build -arch \"$arch\" \"\
+        $bin\" | tee /tmp/build-command.txt\n    grep -Eq 'minos[[:space:]]+14\\.0' /tmp/build-command.txt\n   \
+        \ otool -arch \"$arch\" -L \"$bin\" | tee /tmp/dependencies.txt\n    if grep -E '/(opt/homebrew|usr/local|Users/runner|Applications/Xcode)'\
+        \ /tmp/dependencies.txt; then exit 1; fi\n  done\ndone\n(cd \"$STAGE\" && find . -type f ! -name SHA256SUMS\
+        \ | sort | xargs shasum -a 256 > SHA256SUMS)\ntar czf \"$STAGE.tar.gz\" \"$STAGE\"\nshasum -a 256 \"$STAGE.tar.gz\"\
+        \ > \"$STAGE.tar.gz.sha256\"\ncat \"$STAGE.tar.gz.sha256\"\ntar tzf \"$STAGE.tar.gz\" | grep -q \"/openads_serverd$\"\
+        \n\"$STAGE/openads_serverd\" --version | tee server-version.txt\ngrep -q \"$KIT_VERSION\" server-version.txt\n\
+        lipo -info \"$STAGE/openads_serverd\" | tee lipo.txt\ngrep -q arm64 lipo.txt\ngrep -q x86_64 lipo.txt\n"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-macos
+        path: 'openads-1.09.75-mtfix62-full-test-macos-universal.tar.gz
+
+          openads-1.09.75-mtfix62-full-test-macos-universal.tar.gz.sha256
+
+          '
+        retention-days: 14
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+  publish:
+    name: Publish combined prerelease
+    runs-on: ubuntu-24.04
+    needs:
+    - mackit
+    steps:
+    - name: Verify reused source run and job results
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: 'set -euo pipefail
+
+        gh api repos/bedipritpal/OpenADS/actions/runs/40528689422 > source-run.json
+
+        gh api ''repos/bedipritpal/OpenADS/actions/runs/40528689422/jobs?per_page=100'' > source-jobs.json
+
+        python - <<''PYCHECK''
+
+        import json
+
+        r=json.load(open(''source-run.json''));assert r[''head_sha'']==''04bf05189b3d4db4d6d7e4d14f752f35a3a24e30''
+
+        j={x[''name'']:x for x in json.load(open(''source-jobs.json''))[''jobs'']}
+
+        for name in (''x86kit'',''x64kit'',''Build, test, package, verify, prerelease''):assert j[name][''conclusion'']==''success'',name
+
+        PYCHECK
+
+        '
+    - name: Reuse exact successful Windows and Linux artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: kit-*
+        merge-multiple: true
+        run-id: '40528689422'
+        github-token: ${{ github.token }}
+    - name: Collect new universal macOS artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: kit-macos
+        merge-multiple: true
+    - name: Write release notes
+      shell: bash
+      run: 'cat > RELEASE_NOTES.md <<''NOTES''
+
+        # OpenADS mtfix62 full test kit
+
+
+        Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
+
+        Cumulative mtfix62 = shipped mtfix61 plus diagnostic master/gates/masking only.
+
+        Product source: 722e3c2c6bc8fd4656929a22bab03ee79c14d251.
+
+        No separate trim change, Vouch source change or database/wire-format change.
+
+        Client diagnostics default OFF; same-process OAds_SetLogging(.T.) permits
+
+        existing channel selectors, .F. stops current output. Environment cannot
+
+        enable the master. Server separately defaults diagnostics=false, explicit
+
+        admin-owned config only. Client capture needs no server trace.
+
+        Operational help/version/readiness/shutdown/safe failures remain.
+
+        Payloads/auth proofs, real paths/names/schema/raw errors excluded from logs;
+
+        distinct explicit aliases retained. Existing old logs are not sanitized.
+
+        Use a new private trace file, not an old unmasked file. Wire selector/path
+
+        are cached; restart after changing them. No production deployment implied.
+
+        Full 11-job candidate CI passed before packaging:
+
+        https://github.com/bedipritpal/OpenADS/actions/runs/40466542566
+
+        Earlier baseline warning and intermediate test failure history is preserved.
+
+        No actual Vouch browse-speed improvement or bottleneck cause proven.
+
+        All earlier parent/Tim/auth fixes from mtfix61 retained; original Harbour
+
+        2b confirmation/C8 repro and round-trip analysis remain open as before.
+
+
+        Assets: complete Windows x86 Qt4.9.2/Winlibs GCC10.2 DLL-only Vouch kit;
+
+        Windows x64 Winlibs GCC10.2 kit; Linux x64 and macOS universal server kits.
+
+        Windows pinned compilers, auth mock module, packaging and regression proofs retained.
+
+        macOS uses supported macos-15 arm64/Xcode16.4 with explicit deployment target14.0,
+
+        both universal slices/dependency checks and full tests. Tested on macOS15;
+
+        minimumOS14 metadata is verified, runtime on macOS14 is not independently tested.
+
+        Original macos-14 allocation cancelled before any steps in three attempts.
+
+        Windows/Linux artifacts reused byte-for-byte from successful40528689422 jobs.
+
+        Windows x86 includes exact owner binutils2.35.1 link proof and diagnostic
+
+        fresh-process contract. Windows x64 packaging has PE checks, not a native
+
+        GCC unit run; source MSVCx64 CI and Linux suite are separate evidence.
+
+        SHA256 sidecars/manifests and source pins accompany the kits.
+
+        Public mock HRB only, never the real Vouch auth module. Test only.
+
+        No main/stable/upstream changes. Existing published assets untouched.
+
+        NOTES
+
+        '
+    - name: Create prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      shell: bash
+      run: 'set -euo pipefail
+
+        ls -la
+
+        sha256sum mtfix62-full-qt492-x86.zip mtfix62-full-x64.zip openads-1.09.75-mtfix62-full-test-linux-x64.tar.gz
+        openads-1.09.75-mtfix62-full-test-macos-universal.tar.gz
+
+        sha256sum mtfix62-full-qt492-x86.zip mtfix62-full-x64.zip > WINDOWS_SHA256SUMS.txt
+
+        gh release create v1.09.75-mtfix62-full-test --target 722e3c2c6bc8fd4656929a22bab03ee79c14d251 --prerelease
+        --latest=false --title "OpenADS mtfix62 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS
+        universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix62-full-qt492-x86.zip mtfix62-full-x64.zip
+        openads-1.09.75-mtfix62-full-test-linux-x64.tar.gz openads-1.09.75-mtfix62-full-test-linux-x64.tar.gz.sha256
+        MTFIX62_LINUX_SERVER_TEST.md openads-1.09.75-mtfix62-full-test-macos-universal.tar.gz openads-1.09.75-mtfix62-full-test-macos-universal.tar.gz.sha256
+
+        gh release view v1.09.75-mtfix62-full-test --json tagName,isPrerelease,url,assets
+
+        '

@@ -15,7 +15,6 @@ jobs:
       with:
         fetch-depth: 0
         ref: release/mtfix62-full
-      run: ''
     - name: Verify clean main-based source
       run: 'set -euxo pipefail
 
@@ -446,13 +445,11 @@ jobs:
 
           '
         retention-days: 14
-      run: ''
     - uses: actions/upload-artifact@v4
       with:
         name: kit-x86
         path: mtfix62-full-qt492-x86.zip
         retention-days: 14
-      run: ''
     timeout-minutes: 140
   x64kit:
     runs-on: windows-2022
@@ -462,7 +459,6 @@ jobs:
       with:
         fetch-depth: 0
         ref: release/mtfix62-full
-      run: ''
     - name: Verify clean main-based source
       shell: bash
       run: 'set -euxo pipefail
@@ -603,13 +599,11 @@ jobs:
 
           '
         retention-days: 14
-      run: ''
     - uses: actions/upload-artifact@v4
       with:
         name: kit-x64
         path: mtfix62-full-x64.zip
         retention-days: 14
-      run: ''
   linuxkit:
     name: Build, test, package, verify, prerelease
     runs-on: ubuntu-24.04
@@ -620,7 +614,6 @@ jobs:
         ref: ${{ env.PINNED_SOURCE }}
         fetch-depth: 0
         fetch-tags: true
-      run: ''
     - name: Verify pinned source commit
       shell: bash
       run: 'set -euo pipefail
@@ -632,13 +625,11 @@ jobs:
         '
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@v6
-      run: ''
     - name: Cache Harbour SDK (Linux)
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/harbour-udf
         key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
-      run: ''
     - name: Provision Harbour SDK (Linux)
       shell: bash
       env:
@@ -746,7 +737,6 @@ jobs:
 
           '
         retention-days: 14
-      run: ''
   mackit:
     name: Build macOS universal server kit
     runs-on: macos-14
@@ -756,7 +746,6 @@ jobs:
       with:
         fetch-depth: 0
         ref: release/mtfix62-full
-      run: ''
     - name: Verify clean main-based source
       shell: bash
       run: 'set -euxo pipefail
@@ -770,7 +759,6 @@ jobs:
         '
     - name: Set up Ninja
       uses: seanmiddleditch/gha-setup-ninja@v6
-      run: ''
     - name: Configure
       shell: bash
       run: "cmake --preset default \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON \\\n      -DOPENADS_VERSION_FORCE=$KIT_VERSION\
@@ -808,7 +796,6 @@ jobs:
 
           '
         retention-days: 14
-      run: ''
   publish:
     name: Publish combined prerelease
     runs-on: ubuntu-24.04
@@ -822,7 +809,6 @@ jobs:
       with:
         pattern: kit-*
         merge-multiple: true
-      run: ''
     - name: Write release notes
       shell: bash
       run: 'cat > RELEASE_NOTES.md <<''NOTES''

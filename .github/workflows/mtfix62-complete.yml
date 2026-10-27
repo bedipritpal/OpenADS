@@ -82,10 +82,10 @@ jobs:
         \ contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md \"$STAGE/contrib/oads_hb/\"\ncp docs/diagnostics-gate.md\
         \ \"$STAGE/\"\necho \"$PINNED_SOURCE\" > \"$STAGE/source-commit.txt\"\n{ sw_vers; xcodebuild -version; clang\
         \ --version; echo \"deployment target: $MACOSX_DEPLOYMENT_TARGET; universal arm64+x86_64\"; } > \"$STAGE/build-provenance.txt\"\
-        \nfor bin in \"$STAGE/openads_serverd\" \"$STAGE/openads_bench\" \"$STAGE\"/*.dylib; do\n  lipo -verify_arch\
-        \ arm64 x86_64 \"$bin\"\n  for arch in arm64 x86_64; do\n    xcrun vtool -show-build -arch \"$arch\" \"\
-        $bin\" | tee /tmp/build-command.txt\n    grep -Eq 'minos[[:space:]]+14\\.0' /tmp/build-command.txt\n   \
-        \ otool -arch \"$arch\" -L \"$bin\" | tee /tmp/dependencies.txt\n    if grep -E '/(opt/homebrew|usr/local|Users/runner|Applications/Xcode)'\
+        \nfor bin in \"$STAGE/openads_serverd\" \"$STAGE/openads_bench\" \"$STAGE\"/*.dylib; do\n  lipo \"$bin\"\
+        \ -verify_arch arm64 x86_64\n  for arch in arm64 x86_64; do\n    xcrun vtool -show-build -arch \"$arch\"\
+        \ \"$bin\" | tee /tmp/build-command.txt\n    grep -Eq 'minos[[:space:]]+14\\.0' /tmp/build-command.txt\n\
+        \    otool -arch \"$arch\" -L \"$bin\" | tee /tmp/dependencies.txt\n    if grep -E '/(opt/homebrew|usr/local|Users/runner|Applications/Xcode)'\
         \ /tmp/dependencies.txt; then exit 1; fi\n  done\ndone\n(cd \"$STAGE\" && find . -type f ! -name SHA256SUMS\
         \ | sort | xargs shasum -a 256 > SHA256SUMS)\ntar czf \"$STAGE.tar.gz\" \"$STAGE\"\nshasum -a 256 \"$STAGE.tar.gz\"\
         \ > \"$STAGE.tar.gz.sha256\"\ncat \"$STAGE.tar.gz.sha256\"\ntar tzf \"$STAGE.tar.gz\" | grep -q \"/openads_serverd$\"\

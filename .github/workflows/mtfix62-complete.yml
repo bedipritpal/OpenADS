@@ -1,4 +1,4 @@
-name: mtfix62 macOS15 completion and combined kit
+name: mtfix62 Intel macOS15 completion and combined kit
 'on':
   push:
     branches:
@@ -18,7 +18,7 @@ env:
 jobs:
   mackit:
     name: Build macOS universal server kit
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
     - uses: actions/checkout@v5
@@ -48,7 +48,7 @@ jobs:
 
         xcrun --show-sdk-path
 
-        test "$(uname -m)" = arm64
+        test "$(uname -m)" = x86_64
 
         '
     - name: Set up Ninja
@@ -191,9 +191,10 @@ jobs:
 
         Windows pinned compilers, auth mock module, packaging and regression proofs retained.
 
-        macOS uses supported macos-15 arm64/Xcode16.4 with explicit deployment target14.0,
+        macOS uses supported macos-15-intel/Xcode16.4 with explicit deployment target14.0,
 
-        both universal slices/dependency checks and full tests. Tested on macOS15;
+        both universal slices/dependency checks and full tests. Native tests on Intel macOS15; ARM slice cross-compiled,
+        not runtime-tested in this kit;
 
         minimumOS14 metadata is verified, runtime on macOS14 is not independently tested.
 

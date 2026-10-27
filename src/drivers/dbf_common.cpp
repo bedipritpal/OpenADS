@@ -158,9 +158,8 @@ parse_dbf_fields(const std::uint8_t* data, std::size_t size,
 namespace {
 
 std::string make_string(const std::uint8_t* p, std::size_t n) {
-    std::string s(reinterpret_cast<const char*>(p), n);
-    while (!s.empty() && s.back() == ' ') s.pop_back();
-    return s;
+    while (n != 0 && p[n - 1] == ' ') --n;
+    return std::string(reinterpret_cast<const char*>(p), n);
 }
 
 double parse_numeric(const std::uint8_t* p, std::size_t n) {

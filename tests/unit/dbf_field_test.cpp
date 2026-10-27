@@ -141,3 +141,38 @@ TEST_CASE("VFP 0x32 nullable fields shift offsets and add _NullFlags") {
     CHECK(fields[2].record_offset == 1);
     CHECK(fields[2].length == 4);
 }
+
+TEST_CASE("DBF text decode preserves bytes while trimming only trailing ASCII spaces") {
+    const auto check_bytes = [](const std::vector<std::uint8_t>& bytes) {
+        for (const auto type : {DbfFieldType::Character, DbfFieldType::Date,
+                                DbfFieldType::Unknown}) {
+            DbfField field{};
+            field.type = type;
+            field.record_offset = 1;
+            field.length = static_cast<std::uint16_t>(bytes.size());
+            std::vector<std::uint8_t> record(1, ' ');
+            record.insert(record.end(), bytes.begin(), bytes.end());
+            std::string expected(reinterpret_cast<const char*>(record.data() + 1), bytes.size());
+            while (!expected.empty() && expected.back() == ' ') expected.pop_back();
+            const auto decoded = openads::drivers::decode_field(field, record.data(), record.size());
+            REQUIRE(decoded.has_value());
+            CHECK(decoded.value().as_string == expected);
+        }
+    };
+    check_bytes({});
+    check_bytes({' '});
+    check_bytes({' ', ' ', ' '});
+    check_bytes({' ', 'A', ' ', 'B', ' '});
+    check_bytes({'A', 0, 'B', ' ', ' '});
+    check_bytes({'A', '\t', '\r', '\n', ' '});
+    check_bytes({0x80, 0xff, ' ', 0, ' '});
+    for (const std::size_t length : {2, 8, 200, 4096, 65535}) {
+        std::vector<std::uint8_t> bytes(length, ' ');
+        check_bytes(bytes);
+        for (std::size_t i = 0; i < length; ++i)
+            bytes[i] = static_cast<std::uint8_t>((i * 31 + 17) & 255);
+        check_bytes(bytes);
+        for (std::size_t i = length / 2; i < length; ++i) bytes[i] = ' ';
+        check_bytes(bytes);
+    }
+}

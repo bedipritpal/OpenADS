@@ -22,7 +22,7 @@ jobs:
       shell: bash
       run: 'cmake --preset msvc-x64
 
-        cmake --build build/msvc-x64 --config Release --target openads_ace openads_serverd openads_auth_worker'
+        cmake --build build/msvc-x64 --config Release --target openads_ace openads_serverd'
     - name: Bootstrap Harbour
       shell: pwsh
       run: pwsh -File tools/scripts/bootstrap_harbour_ci.ps1

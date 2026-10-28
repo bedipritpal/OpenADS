@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main, test/tim-2e-deleted-scope]
+    paths-ignore: [.github/workflows/tim2e-harbour.yml]
   pull_request:
   workflow_dispatch:
 

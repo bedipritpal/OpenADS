@@ -1071,9 +1071,8 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         h_abi = cit->second;
     } else if (ordered_tables_.count(id) != 0) {
         h_abi = ensure_abi_handle(id);
-        // Also resolve the engine table — we need it for fallback reads
-        // when the ABI twin is in Limbo (ACE's CDX may disagree with the
-        // engine's CDX on index state, leaving the twin at bof=eof=1).
+        // Also resolve the engine table for natural-path bookkeeping.
+        // Ordered packing below never substitutes its cursor for the ABI twin.
         if (auto eit = tbls_.find(id); eit != tbls_.end() && sess_conn_) {
             eng_tbl = sess_conn_->lookup_table(eit->second);
         }
@@ -1086,54 +1085,12 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         reply.payload.push_back(0);
         return;
     }
-    if (h_abi != 0) {
-        UNSIGNED16 _b = 9, _e = 9; AdsAtBOF(h_abi, &_b); AdsAtEOF(h_abi, &_e);
-        // Rescue: if the twin landed in Limbo (bof=1 eof=1) — e.g. from a
-        // cached handle opened when the table was empty — reposition it now.
-        if (_b && _e) {
-            AdsGotoTop(h_abi);
-            AdsAtBOF(h_abi, &_b); AdsAtEOF(h_abi, &_e);
-            if (_b && _e) AdsGotoBottom(h_abi);
-            AdsAtBOF(h_abi, &_b); AdsAtEOF(h_abi, &_e);
-            WTRACE("[wire] pack enter id=%u Limbo rescue bof=%u eof=%u\n",
-                   id, (unsigned)_b, (unsigned)_e);
-        }
-        WTRACE("[wire] pack enter id=%u twin bof=%u eof=%u\n", id, (unsigned)_b, (unsigned)_e);
-    }
-    // f2436d8 regression: for ORDERED tables it made this pack read from the
-    // engine mirror. That mirror lags the twin one op (handlers sync AFTER
-    // packing) and its lookahead walks NATURAL order, so every ordered op
-    // shipped the previous position's row and ordered read-ahead walked
-    // recno order instead of the index. The twin is the authority for an
-    // ordered table: pack from it. The engine stays the source for
-    // natural-order tables and the fallback when the twin is genuinely in
-    // Limbo (empty order/table) — the case f2436d8 meant to cover.
-    bool twin_limbo = false;
-    if (h_abi != 0) {
-        UNSIGNED16 lb = 9, le = 9;
-        AdsAtBOF(h_abi, &lb); AdsAtEOF(h_abi, &le);
-        twin_limbo = (lb != 0 && le != 0);
-    }
-    const bool use_engine = (eng_tbl != nullptr) && (h_abi == 0 || twin_limbo);
+    // An ordered ABI cursor is authoritative even when no visible key
+    // exists. Packing must never navigate it or substitute an unscoped row.
+    const bool use_engine = (eng_tbl != nullptr) && (h_abi == 0);
     // Pack the current row.
     bool current_packed = false;
     if (use_engine) {
-        // If the ABI twin is in Limbo (bof=eof=1) but we have the engine
-        // table, sync the engine to the ABI twin's recno and read from engine.
-        // ACE's CDX may disagree with the engine's CDX on index state.
-        if (h_abi != 0) {
-            UNSIGNED32 rn = 0;
-            AdsGetRecordNum(h_abi, 0, &rn);
-            if (rn > 0 && eng_tbl->record_count() >= rn) {
-                eng_tbl->goto_record(rn);
-                WTRACE("[wire] pack enter id=%u Limbo fallback engine recno=%u\n",
-                       id, (unsigned)rn);
-            } else {
-                // Twin recno unavailable (Limbo); use engine's current pos.
-                WTRACE("[wire] pack enter id=%u Limbo, engine recno=%u\n",
-                       id, (unsigned)eng_tbl->recno());
-            }
-        }
         if (eng_tbl->eof() || eng_tbl->bof() || eng_tbl->recno() == 0) {
             reply.payload.push_back(0);
         } else {

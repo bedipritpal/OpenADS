@@ -765,6 +765,10 @@ util::Result<void> Table::goto_bottom() {
                 }
                 r = idx->prev();
                 if (!r) return r.error();
+                if (r.value().positioned &&
+                    !key_in_top_scope_(idx->current_key())) {
+                    state_ = State::Limbo; recno_ = 0; return {};
+                }
             }
             state_ = State::Limbo; recno_ = 0; return {};
         }
@@ -776,6 +780,10 @@ util::Result<void> Table::goto_bottom() {
             if (ld) return {};
             r = idx->prev();
             if (!r) return r.error();
+            if (r.value().positioned &&
+                !key_in_top_scope_(idx->current_key())) {
+                state_ = State::Limbo; recno_ = 0; return {};
+            }
         }
         state_ = State::Limbo; recno_ = 0; return {};
     }

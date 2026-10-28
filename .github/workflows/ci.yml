@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, test/tim-2e-deleted-scope]
   pull_request:
   workflow_dispatch:
 
@@ -27,7 +27,7 @@ jobs:
           - os: ubuntu-24.04
             preset: ninja-clang
             tls: false
-          - os: macos-14
+          - os: macos-15-intel
             preset: default
             tls: false
           # M12.12 — verify the OPENADS_WITH_TLS path (vendored

@@ -56,7 +56,9 @@ jobs:
       - name: Configure
         run: |
           cmake --preset ${{ matrix.preset }} \
-                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }}
+                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }} \
+                ${{ runner.os == 'macOS' && '-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0' || '' }} \
+                ${{ runner.os == 'macOS' && '-DCMAKE_CXX_FLAGS=-I$PWD/third_party/minizip' || '' }}
         shell: bash
 
       - name: Build

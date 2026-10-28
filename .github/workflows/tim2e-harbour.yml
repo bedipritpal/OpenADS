@@ -66,10 +66,10 @@ jobs:
         \ \"-L$stage\" -lace64 -llegacy_stdio_definitions -loldnames\nif ($LASTEXITCODE -ne 0) { throw \"hbmk2 failed\"\
         \ }\n$p = Start-Process ./openads_serverd.exe -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','6278','--data',$data)\
         \ -PassThru -RedirectStandardOutput server.txt -RedirectStandardError server-error.txt\ntry {\n Start-Sleep\
-        \ -Seconds 4\n & ./repro.exe 'tcp://127.0.0.1:6278/' ($data+'\\') *> result.txt\n $rc = $LASTEXITCODE\n\
-        \ Write-Host \"repro process exit: $rc\"\n Get-Content result.txt\n if ($rc -ne 0 -or -not (Select-String\
-        \ -Path result.txt -Pattern 'TIM2E-HARBOUR-PASS' -Quiet)) { throw 'Harbour regression failed' }\n} finally\
-        \ { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Pop-Location }\n"
+        \ -Seconds 4\n & ./repro.exe ('tcp://127.0.0.1:6278/'+($data -replace '\\\\','/')+'/') ($data+'\\') *> result.txt\n\
+        \ $rc = $LASTEXITCODE\n Write-Host \"repro process exit: $rc\"\n Get-Content result.txt\n if ($rc -ne 0\
+        \ -or -not (Select-String -Path result.txt -Pattern 'TIM2E-HARBOUR-PASS' -Quiet)) { throw 'Harbour regression\
+        \ failed' }\n} finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Pop-Location }\n"
     - uses: actions/upload-artifact@v4
       if: always()
       with:

@@ -41,31 +41,32 @@ jobs:
         \ -First 1\nif (-not $mk) { throw \"hbmk2 not found after bootstrap\" }\n$env:HB_INSTALL = $hb\n$env:PATH\
         \ = \"$(Split-Path $mk);$env:PATH\"\n$stage = Join-Path $env:RUNNER_TEMP \"tim2e-proof\"\n$data = Join-Path\
         \ $stage \"data\"\nNew-Item -ItemType Directory -Force $data | Out-Null\nCopy-Item build/msvc-x64/src/Release/openace64.dll\
-        \ \"$stage/ace64.dll\"\nCopy-Item build/msvc-x64/src/Release/openace64.lib \"$stage/ace64.lib\"\nCopy-Item\
-        \ build/msvc-x64/tools/serverd/Release/openads_serverd.exe $stage\nCopy-Item build/msvc-x64/tools/serverd/Release/openads_auth_worker.exe\
-        \ $stage -ErrorAction SilentlyContinue\nSet-Content \"$stage/repro.prg\" -Value @'\nREQUEST ADS, ADSCDX,\
-        \ DBFCDX\n#define ADS_REMOTE_SERVER 2\n#define ADS_CDX 2\nPROCEDURE Main(cUri,cDir)\n LOCAL h:=0,aRows:={{\"\
-        105555\",.F.},{\"105556\",.F.},{\"105557\",.T.},{\"105557\",.T.},{\"105566\",.F.}},a\n SET DELETED ON\n\
-        \ DbCreate(cDir+\"T_REC\",{{\"WRKORD\",\"C\",6,0},{\"LABCOD\",\"C\",15,0}},\"DBFCDX\")\n DbUseArea(.T.,\"\
-        DBFCDX\",cDir+\"T_REC\",\"SEED\",.F.)\n FOR EACH a IN aRows\n  DbAppend(); FIELD->WRKORD:=a[1]; FIELD->LABCOD:=\"\
-        C\"+a[1]+\"_\"+hb_ntos(a:__enumIndex())\n  IF a[2]; DbDelete(); ENDIF\n NEXT\n OrdCreate(,\"WRKORD\",\"\
-        WRKORD\",{||FIELD->WRKORD},.F.)\n DbCloseArea()\n DbUseArea(.T.,\"DBFCDX\",cDir+\"T_REC\",\"REF\",.T.)\n\
-        \ CheckScope(\"DBFCDX\")\n DbCloseArea()\n AdsSetFileType(ADS_CDX)\n Assert(AdsConnect60(cUri,ADS_REMOTE_SERVER,NIL,NIL,0,@h),\"\
-        connect\")\n DbUseArea(.T.,\"ADSCDX\",\"T_REC.dbf\",\"REMOTE\",.T.,.F.,NIL,h)\n CheckScope(\"REMOTE\")\n\
-        \ DbCloseArea()\n ? \"TIM2E-HARBOUR-PASS\"\n ErrorLevel(0)\n RETURN\nSTATIC PROCEDURE CheckScope(cEngine)\n\
-        \ LOCAL c,lLive\n OrdSetFocus(1)\n FOR EACH c IN {\"105557\",\"105560\",\"105556\",\"105557\"}\n  lLive:=c==\"\
-        105556\"\n  OrdScope(0,c);OrdScope(1,c);DbGoTop()\n  Assert(Eof()==!lLive,cEngine+\" EOF \"+c)\n  Assert(RecNo()==IIf(lLive,2,6),cEngine+\"\
-        \ RecNo \"+c)\n  Assert(FIELD->WRKORD==IIf(lLive,\"105556\",Space(6)),cEngine+\" fields \"+c)\n  ? cEngine,c,Eof(),RecNo(),FIELD->WRKORD\n\
-        \  DbSkip(1)\n  Assert(Eof(),cEngine+\" skip EOF \"+c)\n NEXT\n OrdScope(0,NIL);OrdScope(1,NIL)\n RETURN\n\
-        STATIC PROCEDURE Assert(lOk,cWhat)\n IF !lOk\n  ? \"TIM2E-HARBOUR-FAIL\",cWhat\n  ErrorLevel(1)\n  QUIT\n\
-        \ ENDIF\n RETURN\n\n'@ -Encoding ascii\nPush-Location $stage\n& $mk -comp=msvc64 -gtstd repro.prg -lrddads\
-        \ \"-L$stage\" -lace64 -llegacy_stdio_definitions -loldnames\nif ($LASTEXITCODE -ne 0) { throw \"hbmk2 failed\"\
-        \ }\n$p = Start-Process ./openads_serverd.exe -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','6278','--data',$data)\
-        \ -PassThru -RedirectStandardOutput server.txt -RedirectStandardError server-error.txt\ntry {\n Start-Sleep\
-        \ -Seconds 4\n & ./repro.exe 'tcp://127.0.0.1:6278/' ($data+'\\') *> result.txt\n $rc = $LASTEXITCODE\n\
-        \ Get-Content result.txt\n if ($rc -ne 0 -or -not (Select-String -Path result.txt -Pattern 'TIM2E-HARBOUR-PASS'\
-        \ -Quiet)) { throw 'Harbour regression failed' }\n} finally { Stop-Process -Id $p.Id -Force -ErrorAction\
-        \ SilentlyContinue; Pop-Location }\n"
+        \ \"$stage/ace64.dll\"\nCopy-Item build/msvc-x64/src/Release/openace64.dll \"$stage/openace64.dll\"\nCopy-Item\
+        \ build/msvc-x64/src/Release/openace64.lib \"$stage/ace64.lib\"\nCopy-Item build/msvc-x64/tools/serverd/Release/openads_serverd.exe\
+        \ $stage\nCopy-Item build/msvc-x64/tools/serverd/Release/openads_auth_worker.exe $stage -ErrorAction SilentlyContinue\n\
+        Set-Content \"$stage/repro.prg\" -Value @'\nREQUEST ADS, ADSCDX, DBFCDX\n#define ADS_REMOTE_SERVER 2\n#define\
+        \ ADS_CDX 2\nPROCEDURE Main(cUri,cDir)\n LOCAL h:=0,aRows:={{\"105555\",.F.},{\"105556\",.F.},{\"105557\"\
+        ,.T.},{\"105557\",.T.},{\"105566\",.F.}},a\n SET DELETED ON\n DbCreate(cDir+\"T_REC\",{{\"WRKORD\",\"C\"\
+        ,6,0},{\"LABCOD\",\"C\",15,0}},\"DBFCDX\")\n DbUseArea(.T.,\"DBFCDX\",cDir+\"T_REC\",\"SEED\",.F.)\n FOR\
+        \ EACH a IN aRows\n  DbAppend(); FIELD->WRKORD:=a[1]; FIELD->LABCOD:=\"C\"+a[1]+\"_\"+hb_ntos(a:__enumIndex())\n\
+        \  IF a[2]; DbDelete(); ENDIF\n NEXT\n OrdCreate(,\"WRKORD\",\"WRKORD\",{||FIELD->WRKORD},.F.)\n DbCloseArea()\n\
+        \ DbUseArea(.T.,\"DBFCDX\",cDir+\"T_REC\",\"REF\",.T.)\n CheckScope(\"DBFCDX\")\n DbCloseArea()\n AdsSetFileType(ADS_CDX)\n\
+        \ Assert(AdsConnect60(cUri,ADS_REMOTE_SERVER,NIL,NIL,0,@h),\"connect\")\n DbUseArea(.T.,\"ADSCDX\",\"T_REC.dbf\"\
+        ,\"REMOTE\",.T.,.F.,NIL,h)\n CheckScope(\"REMOTE\")\n DbCloseArea()\n ? \"TIM2E-HARBOUR-PASS\"\n ErrorLevel(0)\n\
+        \ RETURN\nSTATIC PROCEDURE CheckScope(cEngine)\n LOCAL c,lLive\n OrdSetFocus(1)\n FOR EACH c IN {\"105557\"\
+        ,\"105560\",\"105556\",\"105557\"}\n  lLive:=c==\"105556\"\n  OrdScope(0,c);OrdScope(1,c);DbGoTop()\n  Assert(Eof()==!lLive,cEngine+\"\
+        \ EOF \"+c)\n  Assert(RecNo()==IIf(lLive,2,6),cEngine+\" RecNo \"+c)\n  Assert(FIELD->WRKORD==IIf(lLive,\"\
+        105556\",Space(6)),cEngine+\" fields \"+c)\n  ? cEngine,c,Eof(),RecNo(),FIELD->WRKORD\n  DbSkip(1)\n  Assert(Eof(),cEngine+\"\
+        \ skip EOF \"+c)\n NEXT\n OrdScope(0,NIL);OrdScope(1,NIL)\n RETURN\nSTATIC PROCEDURE Assert(lOk,cWhat)\n\
+        \ IF !lOk\n  ? \"TIM2E-HARBOUR-FAIL\",cWhat\n  ErrorLevel(1)\n  QUIT\n ENDIF\n RETURN\n\n'@ -Encoding ascii\n\
+        Push-Location $stage\n& $mk -comp=msvc64 -gtstd repro.prg -lrddads \"-L$stage\" -lace64 -llegacy_stdio_definitions\
+        \ -loldnames\nif ($LASTEXITCODE -ne 0) { throw \"hbmk2 failed\" }\n$p = Start-Process ./openads_serverd.exe\
+        \ -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','6278','--data',$data) -PassThru -RedirectStandardOutput\
+        \ server.txt -RedirectStandardError server-error.txt\ntry {\n Start-Sleep -Seconds 4\n & ./repro.exe 'tcp://127.0.0.1:6278/'\
+        \ ($data+'\\') *> result.txt\n $rc = $LASTEXITCODE\n Write-Host \"repro process exit: $rc\"\n Get-Content\
+        \ result.txt\n if ($rc -ne 0 -or -not (Select-String -Path result.txt -Pattern 'TIM2E-HARBOUR-PASS' -Quiet))\
+        \ { throw 'Harbour regression failed' }\n} finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue;\
+        \ Pop-Location }\n"
     - uses: actions/upload-artifact@v4
       if: always()
       with:

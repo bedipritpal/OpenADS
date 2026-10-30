@@ -191,7 +191,9 @@ try {
         }
     }
     Write-Host "[harbour-smoke] SQLite URI smoke EXIT=$code2"
-    exit $code2
+    if ($code2 -ne 0) { exit $code2 }
+    & (Join-Path $PSScriptRoot "run_refresh_peer_harbour.ps1") -OpenAdsBuild $OpenAdsBuild -HarbourRoot $HarbourRoot
+    exit 0
 }
 finally {
     Pop-Location

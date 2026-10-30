@@ -92,3 +92,79 @@ TEST_CASE("Tim 2e deleted-only scope never substitutes a preceding live row") {
     }
     fs::remove_all(dir);
 }
+
+// Explicit refresh must read the same ordered twin that supplies its row ack.
+// Synthetic peer write, checked flush/unlock, plus independent fresh control.
+TEST_CASE("indexed explicit refresh sees peer writes without losing position") {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "openads_indexed_refresh_peer";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    openads::network::Server server;
+    server.set_daemon_hardening(true);
+    REQUIRE(server.start("127.0.0.1", 0));
+    std::string uri = "tcp://127.0.0.1:" + std::to_string(server.port()) + "/" + dir.generic_string();
+    ADSHANDLE conn = 0, peer = 0, table = 0, writer = 0, index = 0, wi = 0;
+    success(AdsConnect60(bytes(uri), ADS_REMOTE_SERVER, nullptr, nullptr, 0, &conn));
+    std::string name = "fresh.dbf", bag = "fresh.cdx", tag = "CODE", field = "CITY";
+    std::string def = "CODE,C,10,0;CITY,C,20,0";
+    success(AdsCreateTable(conn, bytes(name), nullptr, ADS_CDX, ADS_ANSI, 0, 0, 0, bytes(def), &table));
+    for (std::string key : {"AAA", "BBB", "CCC", "DDD"}) {
+        success(AdsAppendRecord(table));
+        success(AdsSetString(table, bytes(tag), bytes(key), 3));
+        std::string value = "OLD";
+        success(AdsSetString(table, bytes(field), bytes(value), 3));
+        success(AdsWriteRecord(table));
+    }
+    success(AdsCreateIndex61(table, bytes(bag), bytes(tag), bytes(tag), nullptr, nullptr, ADS_COMPOUND, 0, &index));
+    success(AdsCloseTable(table));
+    success(AdsOpenTable(conn, bytes(name), nullptr, ADS_CDX, ADS_ANSI, 0, ADS_IGNORERIGHTS, ADS_SHARED, &table));
+    success(AdsGetIndexHandle(table, bytes(tag), &index));
+    success(AdsSetIndexOrderByHandle(table, index));
+    success(AdsConnect60(bytes(uri), ADS_REMOTE_SERVER, nullptr, nullptr, 0, &peer));
+    success(AdsOpenTable(peer, bytes(name), nullptr, ADS_CDX, ADS_ANSI, 0, ADS_IGNORERIGHTS, ADS_SHARED, &writer));
+    success(AdsGetIndexHandle(writer, bytes(tag), &wi));
+    success(AdsSetIndexOrderByHandle(writer, wi));
+    auto position = [&](UNSIGNED32 expected) {
+        UNSIGNED32 rn = 0; UNSIGNED16 bof = 0, eof = 0, ord = 0;
+        success(AdsGetRecordNum(table, 0, &rn));
+        success(AdsAtBOF(table, &bof)); success(AdsAtEOF(table, &eof));
+        success(AdsGetIndexOrderByHandle(index, &ord));
+        CHECK(rn == expected); CHECK(bof == 0); CHECK(eof == 0); CHECK(ord == 1);
+    };
+    auto value = [&](ADSHANDLE h, std::string& col) {
+        UNSIGNED8 buf[64] = {}; UNSIGNED32 size = 63;
+        success(AdsGetString(h, bytes(col), buf, &size, ADS_NONE));
+        return std::string(reinterpret_cast<char*>(buf));
+    };
+    success(AdsGotoTop(index)); success(AdsSkip(index, 2)); position(3);
+    success(AdsGotoRecord(writer, 3)); success(AdsLockRecord(writer, 3));
+    std::string changed = "PEER";
+    success(AdsSetString(writer, bytes(field), bytes(changed), 4));
+    success(AdsWriteRecord(writer)); success(AdsFlushFileBuffers(writer)); success(AdsUnlockRecord(writer, 3));
+    ADSHANDLE control = 0;
+    success(AdsOpenTable(peer, bytes(name), nullptr, ADS_CDX, ADS_ANSI, 0, ADS_IGNORERIGHTS, ADS_SHARED, &control));
+    success(AdsGotoRecord(control, 3)); CHECK(value(control, field) == "PEER");
+    success(AdsCloseTable(control));
+    success(AdsSkip(index, 0)); success(AdsRefreshRecord(table));
+    CHECK(value(table, field) == "PEER"); position(3);
+    success(AdsSkip(index, 1)); position(4);
+    success(AdsGotoTop(index)); success(AdsSkip(index, 2));
+    success(AdsGotoRecord(writer, 3)); success(AdsLockRecord(writer, 3));
+    success(AdsDeleteRecord(writer)); success(AdsWriteRecord(writer));
+    success(AdsFlushFileBuffers(writer)); success(AdsUnlockRecord(writer, 3));
+    success(AdsRefreshRecord(table));
+    UNSIGNED16 deleted = 0; success(AdsIsRecordDeleted(table, &deleted)); CHECK(deleted == 1);
+    success(AdsLockRecord(writer, 3)); success(AdsRecallRecord(writer));
+    std::string moved = "CCC5";
+    success(AdsSetString(writer, bytes(tag), bytes(moved), 4));
+    success(AdsWriteRecord(writer)); success(AdsFlushFileBuffers(writer)); success(AdsUnlockRecord(writer, 3));
+    success(AdsRefreshRecord(table)); position(3);
+    CHECK(value(table, tag) == "CCC5");
+    success(AdsIsRecordDeleted(table, &deleted)); CHECK(deleted == 0);
+    success(AdsSkip(index, 1)); position(4);
+    success(AdsCloseTable(writer)); success(AdsCloseTable(table));
+    success(AdsDisconnect(peer)); success(AdsDisconnect(conn));
+    server.stop(); fs::remove_all(dir, ec);
+}

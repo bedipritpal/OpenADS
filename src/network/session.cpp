@@ -3204,6 +3204,18 @@ DispatchResult Session::dispatch(const Frame& f) {
             // current recno.
             auto rb = tbl->goto_record(tbl->recno());
             if (!rb) { reply = err("RefreshRecord: " + rb.error().message); break; }
+            // Ordered refresh acknowledgements are packed from the ABI
+            // twin for ordered tables, but the re-read above only touched
+            // the session engine table - the twin's private read-ahead
+            // block stayed stale. Refresh the twin as well: its local
+            // AdsRefreshRecord invalidates its driver read-ahead and
+            // re-reads and re-seats the current record in its active order.
+            if (ordered_tables_.count(id) != 0) {
+                if (ADSHANDLE h = ensure_abi_handle(id); h != 0) {
+                    const auto rc = AdsRefreshRecord(h);
+                    if (rc != 0) { reply = err("RefreshRecord: twin refresh failed rc=" + std::to_string(rc)); break; }
+                } else { reply = err("RefreshRecord: no twin handle"); break; }
+            }
             reply.opcode = Opcode::RefreshRecordAck;
             // The re-read row rides back with the ack (row trailer),
             // plus position truth (bound tail), so the caller's

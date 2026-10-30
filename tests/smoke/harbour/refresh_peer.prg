@@ -1,8 +1,9 @@
 /* Synthetic Windows actual Harbour RDDADS / independent DBFCDX writer. */
 REQUEST ADS, ADSCDX, DBFCDX
 PROCEDURE Main( cMode, cUri, cDir, cValue )
- LOCAL h:=0, n, cOut, cCmd, nRc
+ LOCAL h:=0, n, cOut, cErr, cCmd, nRc
  ErrorBlock( {|e| Fail( "runtime "+e:Description ) } )
+ cDir:=hb_DirSepAdd(cDir)
  IF cMode == "writer"
   DbUseArea(.T.,"DBFCDX",cDir+"fresh.dbf","W",.T.)
   Assert(!NetErr(),"writer open")
@@ -27,9 +28,15 @@ PROCEDURE Main( cMode, cUri, cDir, cValue )
  OrdSetFocus(1); DbGoTop(); DbSkip(2)
  Assert(RecNo()==3,"reader initial position")
  FOR EACH cValue IN {"PEER1","PEER2"}
-  cOut:=cDir+"writer-"+cValue+".txt"
-  cCmd:='"'+hb_ProgName()+'" writer unused "'+cDir+'" '+cValue+' > "'+cOut+'" 2>&1'
-  nRc:=hb_run(cCmd)
+  cOut:=""; cErr:=""
+  cCmd:='"'+hb_ProgName()+'" writer unused "'+cDir+'." '+cValue
+  // Direct process API avoids cmd.exe outer-quote stripping.
+  // The dot before the closing quote avoids a trailing backslash.
+  nRc:=hb_processRun(cCmd,,@cOut,@cErr)
+  MemoWrit(cDir+"writer-"+cValue+".txt",cOut+cErr)
+  IF nRc != 0
+   ? cOut+cErr
+  ENDIF
   Assert(nRc==0,"independent DBFCDX writer exit")
   DbSelectArea("R")
   DbSkip(0)

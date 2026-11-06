@@ -703,6 +703,15 @@ inline constexpr std::uint32_t kCapOpenSetupMetadata = 0x00000200u;
 // Both peers must advertise this bit; old peers keep opcode-only locks.
 inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
 
+// mtfix68 - AppendBlankAck metadata trailer: when the client advertises
+// this bit, the server appends [u32 recno][u8 lock_held][u8 bof][u8 eof]
+// to the (previously empty) AppendBlankAck, so the client books the new
+// record's position and the already-taken append auto-lock without the
+// two follow-up round trips (GetRecordNum + LockRecord). Old servers send
+// the empty ack; the client length-gates and keeps the legacy path.
+// Server behavior is otherwise unchanged: the auto-lock already exists.
+inline constexpr std::uint32_t kCapAppendMetadata = 0x00000800u;
+
 namespace OpenTableAckSections {
     constexpr std::uint8_t kRecordLength = 3;
     constexpr std::uint8_t kProductionIndex = 4;

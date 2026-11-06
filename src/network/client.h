@@ -508,6 +508,18 @@ public:
     util::Result<void>          apply_pair_blob(RemoteTable* rt);
     // M12.6 — remote write surface.
     util::Result<void>          append_blank(std::uint32_t id);
+    // mtfix68 - append with the metadata trailer (kCapAppendMetadata).
+    // present=false means an old server sent the empty ack: the caller
+    // keeps the legacy follow-up trips. On present=true the new recno is
+    // certified through apply_bound_trailer inside the call.
+    struct AppendMeta {
+        bool          present   = false;
+        std::uint32_t recno     = 0;
+        bool          lock_held = false;
+        bool          bof       = false;
+        bool          eof       = false;
+    };
+    util::Result<AppendMeta>    append_blank_meta(RemoteTable* rt);
     util::Result<void>          set_field(std::uint32_t id,
                                           const std::string& field_name,
                                           const std::string& value);

@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "network/client.h"
 #include "util/log.h"
 #include "network/mutual_auth.h"
@@ -422,7 +423,12 @@ void connect_pack_payload(std::vector<std::uint8_t>& payload,
     std::uint32_t caps = kCapPrefetchConsume | kCapPrefetchBackward
                        | kCapOpenTableMode | kCapSetFieldsBatch
                        | kCapFlushInCloseAll | kCapNavOrderFuse
-                       | kCapNavBoundaryPair | kCapOpenSetupMetadata | kCapLockedRow;
+                       | kCapNavBoundaryPair | kCapOpenSetupMetadata | kCapLockedRow | kCapAppendMetadata;
+    // Test kill-switch: pretend to be a pre-mtfix68 client (the server
+    // then sends the empty ack; the legacy path runs). Same env name as
+    // the server-side gate in session.cpp.
+    if (std::getenv("OPENADS_NO_APPEND_META_CAP") != nullptr)
+        caps &= ~kCapAppendMetadata;
     for (int i = 0; i < 4; ++i)
         payload.push_back(static_cast<std::uint8_t>((caps >> (8 * i)) & 0xFFu));
 }
@@ -1172,6 +1178,34 @@ util::Result<void> RemoteConnection::append_blank(std::uint32_t id) {
         return util::Error{5000, 0, "AppendBlank: server error", ""};
     }
     return {};
+}
+
+util::Result<RemoteConnection::AppendMeta>
+RemoteConnection::append_blank_meta(RemoteTable* rt) {
+    note_nav_frame();
+    Frame req;
+    req.opcode = Opcode::AppendBlank;
+    write_u32_le(rt->id, req.payload);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::AppendBlankAck) {
+        return util::Error{5000, 0, "AppendBlank: server error", ""};
+    }
+    AppendMeta m;
+    // mtfix68 - length-gated trailer [u32 recno][u8 lock_held][u8 bof]
+    // [u8 eof], kCapAppendMetadata servers only. The append frame already
+    // bumped tbl_nav_seqs_[rt->id] inside request(), so this certification
+    // snapshots the post-append generation exactly like a nav-ack one.
+    if (rep.value().payload.size() >= 7) {
+        const auto& pl = rep.value().payload;
+        m.present   = true;
+        m.recno     = read_u32_le(pl.data());
+        m.lock_held = pl[4] != 0;
+        m.bof       = pl[5] != 0;
+        m.eof       = pl[6] != 0;
+        apply_bound_trailer(rt, m.bof, m.eof, m.recno, 0, false);
+    }
+    return m;
 }
 
 util::Result<std::vector<std::uint8_t>>

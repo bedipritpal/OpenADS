@@ -354,6 +354,7 @@ add_executable(openads_unit_tests
     unit/network_remote_reindex_test.cpp
     unit/network_frame_trace_test.cpp
     unit/abi_remote_recno_bound_test.cpp
+    unit/abi_remote_append_meta_test.cpp
     unit/network_boundary_pair_test.cpp
     unit/network_commit_slimming_test.cpp
     unit/network_teardown_batch_test.cpp

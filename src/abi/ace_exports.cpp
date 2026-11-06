@@ -13912,18 +13912,31 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
         rt->keyno_valid      = false;
         remote_clear_nav_boundaries(rt);
         rt->invalidate_prefetch();
-        auto r = rt->conn->append_blank(rt->id);
-        if (!r) {
-            openads::abi::create_diag::log("client-append-fail", r.error().code,
-                "wire-append", r.error().sub_code);
-            return fail(r.error());
+        auto amr = rt->conn->append_blank_meta(rt);
+        if (!amr) {
+            openads::abi::create_diag::log("client-append-fail", amr.error().code,
+                "wire-append", amr.error().sub_code);
+            return fail(amr.error());
         }
         // Fresh appends auto-lock (non-exclusive tables): pooled reuse
-        // must not resurrect a locked handle. The ack carries no
-        // recno, so the ledger cannot name the auto-lock -- mark the
-        // lock state uncertain until a full UnlockTable proves clear.
+        // must not resurrect a locked handle.
+        // mtfix68 - a kCapAppendMetadata ack NAMES the auto-locked record,
+        // so the ledger books it exactly (held_recs) and the following
+        // RecNo/RLOCK are served locally; UnlockRecord/UnlockTable/close
+        // clear it through the existing paths. Old-server acks carry
+        // nothing: keep marking the lock state uncertain until a full
+        // UnlockTable proves clear. whole_file_cover (exclusive/FLock)
+        // takes no auto-lock: trailer says lock_held=0, ledger stays exact.
         rt->ever_locked = true;
-        rt->locks_uncertain = true;
+        if (!amr.value().present) {
+            rt->locks_uncertain = true;
+        } else if (amr.value().lock_held) {
+            // The ack names exactly ONE lock: the appended record's.
+            // Book it, but never clear a pre-existing locks_uncertain --
+            // earlier locks this ledger cannot name stay uncertain until
+            // a full UnlockTable/close proves them gone.
+            rt->held_recs.insert(amr.value().recno);
+        }
         rt->write_dirty = true;
         openads::abi::create_diag::log("client-append-ok");
         return ok();
@@ -15249,6 +15262,18 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     if (auto* rt = get_remote_table(hTable)) {
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
         remote_settle_cursor(rt);
+        // mtfix68 - a record this connection already holds (booked from
+        // the append ack trailer, or a prior lock) needs no re-lock trip:
+        // the server's try_lock_record_excl answers a repeated same-handle
+        // lock with success by design (engine/table.cpp:2004, refcount-
+        // free binary lock), so the local answer is identical. Explicit
+        // recno only: ulRecord==0 keeps the wire path, which resolves the
+        // current record server-side.
+        if (ulRecord != 0 && rt->held_recs.count(ulRecord) != 0) {
+            cli_trace_tbl(rt, 'L', "AdsLockRecord",
+                          "already held rec=%u", ulRecord);
+            return ok();
+        }
         auto r = rt->conn->lock_record(rt, ulRecord);
         if (!r) return fail(r.error());
         cli_trace_tbl(rt, 'W', "AdsLockRecord", "locked rec=%u", ulRecord);

@@ -1895,7 +1895,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 };
                 pack(auth_dir_);pack(hrb_result.user);pack(hrb_result.password);
                 const std::uint32_t caps=kCapPrefetchConsume|kCapPrefetchBackward|kCapOpenTableMode|
-                    kCapSetFieldsBatch|kCapFlushInCloseAll|kCapNavOrderFuse|kCapNavBoundaryPair|kCapOpenSetupMetadata|kCapLockedRow;
+                    kCapSetFieldsBatch|kCapFlushInCloseAll|kCapNavOrderFuse|kCapNavBoundaryPair|kCapOpenSetupMetadata|kCapLockedRow|kCapAppendMetadata;
                 for(unsigned i=0;i<4;++i)auth_connect.payload.push_back(static_cast<std::uint8_t>(caps>>(8*i)));
             }
             // M12.9 — Connect payload format:
@@ -1948,6 +1948,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                 client_open_setup_metadata_ok_ = (caps & kCapOpenSetupMetadata) != 0;
                 client_locked_row_ok_ = (caps & kCapLockedRow) != 0 &&
                     std::getenv("OPENADS_NO_LOCKED_ROW_CAP") == nullptr;
+                // mtfix68 - AppendBlankAck trailer (kCapAppendMetadata).
+                client_append_meta_ok_ = (caps & kCapAppendMetadata) != 0 &&
+                    std::getenv("OPENADS_NO_APPEND_META_CAP") == nullptr;
                 client_open_table_mode_ok_ =
                     (caps & openads::network::kCapOpenTableMode) != 0;
             }
@@ -4892,6 +4895,19 @@ DispatchResult Session::dispatch(const Frame& f) {
                 openads::abi::create_diag::log("server-first-append-ok");
             // Include automatic append locks in the session ledger, not only explicit LockRecord.
             if (!whole_file_cover && srv_->daemon_hardening()) explicit_record_locks_.insert((static_cast<std::uint64_t>(id) << 32) | tbl->recno());
+            // mtfix68 - the append already happened and the auto-lock is
+            // already held; report the facts so a kCapAppendMetadata client
+            // books position + lock without GetRecordNum/LockRecord trips.
+            // Old clients get the empty ack exactly as before. Position after
+            // a successful append is the new record: bof=0, eof=0 (xBase
+            // APPEND BLANK lands on the row, never at a boundary).
+            if (client_append_meta_ok_) {
+                write_u32_le(tbl->recno(), reply.payload);
+                reply.payload.push_back(whole_file_cover
+                    ? std::uint8_t{0} : std::uint8_t{1});
+                reply.payload.push_back(std::uint8_t{0});
+                reply.payload.push_back(std::uint8_t{0});
+            }
             reply.opcode = Opcode::AppendBlankAck;
             break;
         }

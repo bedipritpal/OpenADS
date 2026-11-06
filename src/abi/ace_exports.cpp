@@ -1519,8 +1519,22 @@ static bool cli_trace_requested() {
         "OPENADS_WIRE_TRACE", "wire_trace");
     return on;
 }
+static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
+                                 std::uint32_t tid, std::size_t req_bytes,
+                                 std::uint8_t rep_op, std::size_t rep_bytes,
+                                 long long us);
 static bool cli_trace_on() {
-    return openads::util::logging_enabled() && cli_trace_requested();
+    const bool on = openads::util::logging_enabled() && cli_trace_requested();
+    if (on) {
+        // Arm the per-frame hook lazily: connect paths that predate the
+        // trace (AdsConnect101 and any future entry point) never register
+        // it, which silently dropped frame lines from captured sessions.
+        static std::once_flag s_frame_hook_once;
+        std::call_once(s_frame_hook_once, [] {
+            openads::network::set_frame_trace_hook(&cli_trace_frame_hook);
+        });
+    }
+    return on;
 }
 
 // A default Harbour alias is the filename stem, so it is not a safe alias.

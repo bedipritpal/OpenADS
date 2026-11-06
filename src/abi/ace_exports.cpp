@@ -1540,6 +1540,15 @@ static std::string cli_trace_label(const std::string& name,
     return "TABLE_" + std::to_string(id);
 }
 
+// Compact mode (wire_trace_compact=1 / OPENADS_WIRE_TRACE_COMPACT=1):
+// only [W] lines print -- one line per server round trip, so the log
+// counts wire trips by line count. Local/bookkeeping lines drop out.
+static bool cli_trace_compact_on() {
+    static const bool on = openads::util::client_setting_truthy(
+        "OPENADS_WIRE_TRACE_COMPACT", "wire_trace_compact");
+    return on;
+}
+
 static const std::string& cli_trace_path() {
     static const std::string path = [] {
         auto p = openads::util::client_setting("OPENADS_WIRE_TRACE_FILE",
@@ -1579,7 +1588,7 @@ static void cli_trace_table_close(const openads::network::RemoteTable* rt) {
 
 static void cli_trace_write_locked(FILE* hf, long long ms,
                                    const char* who, const char* op,
-                                   const char* detail) {
+                                   char flag, const char* detail) {
     const auto now = std::chrono::system_clock::now();
     const auto epoch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
@@ -1592,19 +1601,21 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 #endif
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
-    std::fprintf(hf, "%s.%03lld [+%9lldms] [%-20.20s] [%-20.20s] %s\n",
+    std::fprintf(hf, "%s.%03lld [+%9lldms] [%-20.20s] [%-20.20s] [%c] %s\n",
                  stamp, static_cast<long long>(epoch_ms % 1000), ms,
-                 who ? who : "-", op ? op : "-", detail ? detail : "");
+                 who ? who : "-", op ? op : "-", flag,
+                 detail ? detail : "");
 }
 
 static void cli_trace_line(long long ms, const char* who, const char* op,
-                           const char* detail) {
+                           char flag, const char* detail) {
     if (!cli_trace_on()) return;
+    if (flag != 'W' && cli_trace_compact_on()) return;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
     FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
     if (!hf) return;
-    cli_trace_write_locked(hf, ms, who, op, detail);
+    cli_trace_write_locked(hf, ms, who, op, flag, detail);
     std::fclose(hf);
 }
 
@@ -1615,17 +1626,19 @@ static long long cli_trace_ms() {
             std::chrono::steady_clock::now() - t0).count());
 }
 
-static void cli_trace(const char* op, const char* fmt, ...) {
+static void cli_trace(char flag, const char* op, const char* fmt, ...) {
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
     va_end(ap);
     buf[sizeof(buf) - 1] = 0;
-    cli_trace_line(cli_trace_ms(), "-", op, buf);
+    cli_trace_line(cli_trace_ms(), "-", op, flag, buf);
 }
+// flag: 'W' = this call made a server round trip, 'L' = answered
+// locally, ' ' = context line (neither; suppressed in compact mode).
 static void cli_trace_tbl(const openads::network::RemoteTable* rt,
-                          const char* op, const char* fmt, ...) {
+                          char flag, const char* op, const char* fmt, ...) {
     if (!cli_trace_on()) return;
     const std::string who = rt == nullptr ? "-" :
         (cli_trace_label(rt->name, rt->alias, rt->id));
@@ -1635,7 +1648,7 @@ static void cli_trace_tbl(const openads::network::RemoteTable* rt,
     vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
     va_end(ap);
     buf[sizeof(buf) - 1] = 0;
-    cli_trace_line(cli_trace_ms(), who.c_str(), op, buf);
+    cli_trace_line(cli_trace_ms(), who.c_str(), op, flag, buf);
 }
 
 static const char* cli_trace_opcode(std::uint8_t op) {
@@ -1793,7 +1806,7 @@ static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
     FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
     if (!hf) return;
     cli_trace_write_locked(hf, cli_trace_ms(), table.c_str(),
-                           cli_trace_opcode(op), buf);
+                           cli_trace_opcode(op), 'W', buf);
     std::fclose(hf);
 }
 
@@ -2298,7 +2311,7 @@ UNSIGNED32 remote_goto_key_num(openads::network::RemoteTable* rt,
         ? remote_ensure_key_count(rt)
         : (physical_snapshot != nullptr ? *physical_snapshot
              : (rt->rec_count_cached ? rt->cached_rec_count : 0u));
-    cli_trace("goto_key_num", "want=%u kmax=%u", keyno, kmax);
+    cli_trace(' ', "goto_key_num", "want=%u kmax=%u", keyno, kmax);
     if (kmax > 0 && keyno > kmax) {
         keyno = kmax;
     }
@@ -8578,7 +8591,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
                               "[path hidden]");
             }
             cli_trace_line(cli_trace_ms(), cli_trace_label(name, alias).c_str(), "AdsOpenTable",
-                           pbuf);
+                           adopted ? 'W' : ' ', pbuf);
         }
         if (adopted) {
             adopted->row_valid = false;
@@ -8697,7 +8710,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
             }
         }
         cli_trace_table_open(rt.get());
-        cli_trace_tbl(rt.get(), "AdsOpenTable", "opened id=%u mode=%u",
+        cli_trace_tbl(rt.get(), 'W', "AdsOpenTable", "opened id=%u mode=%u",
                       static_cast<unsigned>(rt->id),
                       static_cast<unsigned>(usMode));
         rc->deferred_open_tables += 1;
@@ -10828,7 +10841,7 @@ UNSIGNED32 ENTRYPOINT AdsRefreshRecord(ADSHANDLE hTable) {
             rt->current_recno == rt->goto_row_recno &&
             rt->cursor_lag == 0 && rt->pending_sets.empty()) {
             rt->goto_row_fresh = false;
-            cli_trace_tbl(rt, "AdsRefreshRecord", "served from GotoRecord ack");
+            cli_trace_tbl(rt, 'L', "AdsRefreshRecord", "served from GotoRecord ack");
             rt->invalidate_prefetch();
             rt->rec_count_cached = false;
             rt->key_count_cached = false;
@@ -10847,6 +10860,8 @@ UNSIGNED32 ENTRYPOINT AdsRefreshRecord(ADSHANDLE hTable) {
         // is the old-server fallback).
         auto r = rt->conn->refresh_record(rt);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsRefreshRecord", "re-read recno=%u",
+                      rt->current_recno);
         return ok();
     }
     Table* t = get_table(hTable);
@@ -10894,8 +10909,6 @@ UNSIGNED32 ENTRYPOINT AdsExtractKey(ADSHANDLE hIndex, UNSIGNED8* pucBuf,
 UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
     arc2_trace("AdsGotoRecord");
     if (auto* rt = get_remote_table(hTable)) {
-        cli_trace_tbl(rt, "AdsGotoRecord", "want=%u row_valid=%d",
-                      ulRecord, (int)rt->row_valid);
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
         if (UNSIGNED32 frc = remote_close_parked_indexes(rt); frc != 0) {
             return frc;
@@ -10945,7 +10958,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
                  : rt->anchor_seq == rt->conn->nav_seq());
         rt->goto_row_fresh = false;
         if (self_goto) {
-            cli_trace_tbl(rt, "AdsGotoRecord", "served locally (self-goto)");
+            cli_trace_tbl(rt, 'L', "AdsGotoRecord", "served locally (self-goto)");
             // A wire GotoRecord ack carries the row but NO lookahead
             // block, and its trailer parse clears the queue — mirror
             // that exactly, or a following Skip drains rows a real
@@ -10958,14 +10971,14 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
             rt->last_nav = 0;  // a real frame would have expired it
         } else if (empty_goto) {
             if (empty_goto_exact) {
-                cli_trace_tbl(rt, "AdsGotoRecord", "served locally (empty table)");
+                cli_trace_tbl(rt, 'L', "AdsGotoRecord", "served locally (empty table)");
                 rt->invalidate_prefetch();
                 // A real frame would have expired the duplicate-nav stamp.
                 rt->last_nav = 0;
                 rt->pair_valid = false;
                 rt->anchor_ok = false;  // landed on no row
             } else {
-                cli_trace_tbl(rt, "AdsGotoRecord",
+                cli_trace_tbl(rt, 'L', "AdsGotoRecord",
                               "empty window: served locally want=%u",
                               ulRecord);
                 remote_empty_restamp(rt);
@@ -10973,6 +10986,9 @@ UNSIGNED32 ENTRYPOINT AdsGotoRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         } else {
             auto r = rt->conn->goto_record(rt, ulRecord);
             if (!r) return fail(r.error());
+            cli_trace_tbl(rt, 'W', "AdsGotoRecord",
+                          "want=%u -> recno=%u row_valid=%d", ulRecord,
+                          rt->current_recno, (int)rt->row_valid);
             if (rt->row_valid) {
                 rt->goto_row_fresh     = true;
                 rt->goto_row_frame_seq = rt->conn->frame_seq();
@@ -11074,7 +11090,7 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE hConn, UNSIGNED8* pucName,
         // open table or index has the same stem: existence is not ownership.
         auto r = ctx.remote->file_exists(name);
         if (!r) return fail(r.error());
-        cli_trace("FileExists", "probe %s -> %s (wire)", "[path hidden]",
+        cli_trace('W', "FileExists", "probe %s -> %s (wire)", "[path hidden]",
                   r.value() ? "yes" : "no");
         *pbExists = r.value() ? 1 : 0;
         return ok();
@@ -11804,14 +11820,14 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
                                                    owned->open_mode_raw);
                 openads::network::RemoteTable* traced = owned.get();
                 if (cli_trace_on()) {
-                    cli_trace_tbl(traced, "AdsCloseTable", "parked id=%u",
+                    cli_trace_tbl(traced, 'L', "AdsCloseTable", "parked id=%u",
                                   static_cast<unsigned>(traced->id));
                 }
                 rc->parked_store(std::move(pkey), std::move(owned), evicted);
                 if (cli_trace_on()) {
                     for (auto& e : evicted) {
-                        cli_trace_tbl(e.get(), "AdsCloseTable",
-                                      "evicted from park id=%u",
+                        cli_trace_tbl(e.get(), 'W', "AdsCloseTable",
+                                      "evicted from park id=%u (wire close)",
                                       e ? static_cast<unsigned>(e->id) : 0u);
                     }
                 }
@@ -11824,7 +11840,7 @@ UNSIGNED32 ENTRYPOINT AdsCloseTable(ADSHANDLE hTable) {
         // the table's index bindings, so these frames would be waste.
         // A parked index snapshot dies with the handle (same purge).
         if (cli_trace_on()) {
-            cli_trace_tbl(rt, "AdsCloseTable", "real close id=%u reason=%s",
+            cli_trace_tbl(rt, 'W', "AdsCloseTable", "real close id=%u reason=%s",
                           static_cast<unsigned>(rt->id),
                           remote_table_unpoolable_reason(rt, hTable));
         }
@@ -11904,7 +11920,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
                 ri->parent->key_count_cached = false;
                 remote_sync_keyno_gototop(ri->parent);
                 remote_nav_stamp(ri->parent, 1, ri->id);
-                cli_trace_tbl(ri->parent, "AdsGotoTop(idx)", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+                cli_trace_tbl(ri->parent, 'W', "AdsGotoTop(idx)", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
                               (int)ri->parent->row_valid,
                               ri->parent->current_recno,
                               ri->parent->current_keyno,
@@ -11920,7 +11936,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
             }
         }
         if (remote_nav_duplicate(ri->parent, 1, ri->id)) {
-            cli_trace_tbl(ri->parent, "AdsGotoTop(idx)", "duplicate suppressed");
+            cli_trace_tbl(ri->parent, 'L', "AdsGotoTop(idx)", "duplicate suppressed");
             remote_sync_keyno_gototop(ri->parent);
             if (Handle th = handle_for_remote_table(ri->parent))
                 apply_relations_for_handle(to_ads_handle(th));
@@ -11931,7 +11947,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
             // landing in the same server visit; apply it verbatim.
             auto pr = ri->parent->conn->apply_pair_blob(ri->parent);
             if (!pr) return fail(pr.error());
-            cli_trace_tbl(ri->parent, "AdsGotoTop(idx)", "pair certified");
+            cli_trace_tbl(ri->parent, 'L', "AdsGotoTop(idx)", "pair certified");
             remote_sync_keyno_gototop(ri->parent);
             remote_nav_stamp(ri->parent, 1, ri->id);
             if (Handle th = handle_for_remote_table(ri->parent))
@@ -11942,7 +11958,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         remote_sync_keyno_gototop(ri->parent);
         remote_nav_stamp(ri->parent, 1, ri->id);
-        cli_trace_tbl(ri->parent, "AdsGotoTop(idx)", "row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+        cli_trace_tbl(ri->parent, 'W', "AdsGotoTop(idx)", "row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
                   (int)ri->parent->row_valid, ri->parent->current_recno,
                   ri->parent->current_keyno, (int)ri->parent->nav_at_eof,
                   (int)ri->parent->nav_at_bof);
@@ -11990,7 +12006,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
                 rt->key_count_cached = false;
                 remote_sync_keyno_gototop(rt);
                 remote_nav_stamp(rt, 1, oid);
-                cli_trace_tbl(rt, "AdsGotoTop", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+                cli_trace_tbl(rt, 'W', "AdsGotoTop", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
                               (int)rt->row_valid, rt->current_recno,
                               rt->current_keyno, (int)rt->nav_at_eof,
                               (int)rt->nav_at_bof);
@@ -12000,7 +12016,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
             if (UNSIGNED32 frc = remote_flush_order(rt); frc != 0) return frc;
         }
         if (remote_nav_duplicate(rt, 1, rt->server_order_id)) {
-            cli_trace_tbl(rt, "AdsGotoTop", "duplicate suppressed");
+            cli_trace_tbl(rt, 'L', "AdsGotoTop", "duplicate suppressed");
             remote_sync_keyno_gototop(rt);
             apply_relations_for_handle(hTable);
             return ok();
@@ -12008,7 +12024,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
         if (remote_nav_pair(rt, 1, rt->server_order_id)) {
             auto pr = rt->conn->apply_pair_blob(rt);
             if (!pr) return fail(pr.error());
-            cli_trace_tbl(rt, "AdsGotoTop", "pair certified");
+            cli_trace_tbl(rt, 'L', "AdsGotoTop", "pair certified");
             remote_sync_keyno_gototop(rt);
             remote_nav_stamp(rt, 1, rt->server_order_id);
             apply_relations_for_handle(hTable);
@@ -12016,6 +12032,8 @@ UNSIGNED32 ENTRYPOINT AdsGotoTop(ADSHANDLE hTable) {
         }
         auto r = rt->conn->goto_top(rt);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsGotoTop", "top: recno=%u",
+                      rt->current_recno);
         remote_sync_keyno_gototop(rt);
         remote_nav_stamp(rt, 1, rt->server_order_id);
         apply_relations_for_handle(hTable);
@@ -12066,7 +12084,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
                 ri->parent->key_count_cached = false;
                 remote_sync_keyno_gotobottom(ri->parent);
                 remote_nav_stamp(ri->parent, 2, ri->id);
-                cli_trace_tbl(ri->parent, "AdsGotoBottom(idx)", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+                cli_trace_tbl(ri->parent, 'W', "AdsGotoBottom(idx)", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
                               (int)ri->parent->row_valid,
                               ri->parent->current_recno,
                               ri->parent->current_keyno,
@@ -12082,7 +12100,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
             }
         }
         if (remote_nav_duplicate(ri->parent, 2, ri->id)) {
-            cli_trace_tbl(ri->parent, "AdsGotoBottom(idx)", "duplicate suppressed");
+            cli_trace_tbl(ri->parent, 'L', "AdsGotoBottom(idx)", "duplicate suppressed");
             remote_sync_keyno_gotobottom(ri->parent);
             if (Handle th = handle_for_remote_table(ri->parent))
                 apply_relations_for_handle(to_ads_handle(th));
@@ -12092,7 +12110,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
             // mtfix12 R1: the preceding GotoTop certified this landing.
             auto pr = ri->parent->conn->apply_pair_blob(ri->parent);
             if (!pr) return fail(pr.error());
-            cli_trace_tbl(ri->parent, "AdsGotoBottom(idx)", "pair certified");
+            cli_trace_tbl(ri->parent, 'L', "AdsGotoBottom(idx)", "pair certified");
             remote_sync_keyno_gotobottom(ri->parent);
             remote_nav_stamp(ri->parent, 2, ri->id);
             if (Handle th = handle_for_remote_table(ri->parent))
@@ -12103,7 +12121,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
         if (!r) return fail(r.error());
         remote_sync_keyno_gotobottom(ri->parent);
         remote_nav_stamp(ri->parent, 2, ri->id);
-        cli_trace_tbl(ri->parent, "AdsGotoBottom(idx)", "row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+        cli_trace_tbl(ri->parent, 'W', "AdsGotoBottom(idx)", "row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
                   (int)ri->parent->row_valid, ri->parent->current_recno,
                   ri->parent->current_keyno, (int)ri->parent->nav_at_eof,
                   (int)ri->parent->nav_at_bof);
@@ -12142,7 +12160,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
                 rt->key_count_cached = false;
                 remote_sync_keyno_gotobottom(rt);
                 remote_nav_stamp(rt, 2, oid);
-                cli_trace_tbl(rt, "AdsGotoBottom", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+                cli_trace_tbl(rt, 'W', "AdsGotoBottom", "fused: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
                               (int)rt->row_valid, rt->current_recno,
                               rt->current_keyno, (int)rt->nav_at_eof,
                               (int)rt->nav_at_bof);
@@ -12152,7 +12170,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
             if (UNSIGNED32 frc = remote_flush_order(rt); frc != 0) return frc;
         }
         if (remote_nav_duplicate(rt, 2, rt->server_order_id)) {
-            cli_trace_tbl(rt, "AdsGotoBottom", "duplicate suppressed");
+            cli_trace_tbl(rt, 'L', "AdsGotoBottom", "duplicate suppressed");
             remote_sync_keyno_gotobottom(rt);
             apply_relations_for_handle(hTable);
             return ok();
@@ -12160,7 +12178,7 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
         if (remote_nav_pair(rt, 2, rt->server_order_id)) {
             auto pr = rt->conn->apply_pair_blob(rt);
             if (!pr) return fail(pr.error());
-            cli_trace_tbl(rt, "AdsGotoBottom", "pair certified");
+            cli_trace_tbl(rt, 'L', "AdsGotoBottom", "pair certified");
             remote_sync_keyno_gotobottom(rt);
             remote_nav_stamp(rt, 2, rt->server_order_id);
             apply_relations_for_handle(hTable);
@@ -12168,6 +12186,8 @@ UNSIGNED32 ENTRYPOINT AdsGotoBottom(ADSHANDLE hTable) {
         }
         auto r = rt->conn->goto_bottom(rt);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsGotoBottom", "bottom: recno=%u",
+                      rt->current_recno);
         remote_sync_keyno_gotobottom(rt);
         remote_nav_stamp(rt, 2, rt->server_order_id);
         apply_relations_for_handle(hTable);
@@ -12199,7 +12219,6 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
     seek_last_retry_latch() = false;
     if (auto* ri = get_remote_index(hTable)) {
         if (ri->parent) ri->parent->created_order_focus = false;
-        cli_trace_tbl(ri->parent, "AdsSkip(idx)", "rows=%d", (int)lRows);
         openads::network::RemoteTable* rt = ri->parent;
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
         // A pair-certified GotoTop/GotoBottom moved only the client: the
@@ -12211,6 +12230,8 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
             rt->row_valid && rt->current_recno != 0) {
             auto ar = rt->conn->goto_record(rt, rt->current_recno);
             if (!ar) return fail(ar.error());
+            cli_trace_tbl(rt, 'W', "AdsSkip(idx)", "anchor re-goto recno=%u",
+                          rt->current_recno);
         }
         const std::uint32_t rec_before =
             (rt != nullptr && rt->row_valid) ? rt->current_recno : 0u;
@@ -12219,8 +12240,9 @@ UNSIGNED32 ENTRYPOINT AdsSkip(ADSHANDLE hTable, SIGNED32 lRows) {
         if (!r) return fail(r.error());
         remote_sync_keyno_skip(rt, lRows);
         remote_update_nav_boundaries(rt, lRows, rec_before, row_valid_before);
-        cli_trace_tbl(rt, "AdsSkip(idx)", "done: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
-                  (int)rt->row_valid, rt->current_recno, rt->current_keyno,
+        cli_trace_tbl(rt, 'W', "AdsSkip(idx)", "rows=%d done: row_valid=%d recno=%u keyno=%u eof=%d bof=%d",
+                  (int)lRows, (int)rt->row_valid, rt->current_recno,
+                  rt->current_keyno,
                   (int)rt->nav_at_eof, (int)rt->nav_at_bof);
         if (Handle th = handle_for_remote_table(rt))
             apply_relations_for_handle(to_ads_handle(th));
@@ -12318,32 +12340,42 @@ UNSIGNED32 ENTRYPOINT AdsAtEOF(ADSHANDLE hTable, UNSIGNED16* pbAtEnd) {
     arc2_trace("AdsAtEOF");
     if (auto* rt = get_remote_table(hTable)) {
         if (pbAtEnd == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
-        cli_trace_tbl(rt, "AdsAtEOF", "nav_eof=%d row_valid=%d",
-                  (int)rt->nav_at_eof, (int)rt->row_valid);
-        if (rt->nav_at_eof) { *pbAtEnd = 1; return ok(); }
+        if (rt->nav_at_eof) { *pbAtEnd = 1;
+            cli_trace_tbl(rt, 'L', "AdsAtEOF", "=1 (nav flag)");
+            return ok(); }
         // M12.21 option C -- a valid cached current row (including one
         // served locally from the prefetch queue) means the cursor is
         // on a record, so it cannot be at EOF: answer with no round
         // trip. This is what lets a prefetched scan loop, which polls
         // Eof() every iteration, actually shed its per-step round trips.
-        if (rt->row_valid) { *pbAtEnd = 0; return ok(); }
+        if (rt->row_valid) { *pbAtEnd = 0;
+            cli_trace_tbl(rt, 'L', "AdsAtEOF", "=0 (row valid)");
+            return ok(); }
         // Proven not-EOF (skip landed on a row, bottom positioned):
         // answer locally even with no valid row right now.
-        if (rt->nav_not_eof) { *pbAtEnd = 0; return ok(); }
+        if (rt->nav_not_eof) { *pbAtEnd = 0;
+            cli_trace_tbl(rt, 'L', "AdsAtEOF", "=0 (proven not-EOF)");
+            return ok(); }
         // Empty-cursor sticky (see remote_nav_empty_sticky): the last
         // wire nav proved the cursor empty with nothing on the wire
         // since — an empty cursor is EOF without asking the server.
-        if (remote_nav_empty_sticky(rt)) { *pbAtEnd = 1; return ok(); }
+        if (remote_nav_empty_sticky(rt)) { *pbAtEnd = 1;
+            cli_trace_tbl(rt, 'L', "AdsAtEOF", "=1 (empty sticky)");
+            return ok(); }
         // Seq-gated repeat: same answer as moments ago, still current.
         {
             bool be = false;
             if (remote_nav_bound_get(rt, true, &be)) {
                 *pbAtEnd = be ? 1 : 0;
+                cli_trace_tbl(rt, 'L', "AdsAtEOF", "=%d (bound cache)",
+                              be ? 1 : 0);
                 return ok();
             }
         }
         auto r = rt->conn->eof_bof(rt->id);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsAtEOF", "=%d (eof_bof)",
+                      r.value().eof ? 1 : 0);
         // Twin flag: the ack carried the BOF answer too — cache it so
         // the twin half of rddads' pair is served locally.
         if (r.value().has_twin)
@@ -12365,27 +12397,37 @@ UNSIGNED32 ENTRYPOINT AdsAtBOF(ADSHANDLE hTable, UNSIGNED16* pbAtBegin) {
     arc2_trace("AdsAtBOF");
     if (pbAtBegin == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
     if (auto* rt = get_remote_table(hTable)) {
-        cli_trace_tbl(rt, "AdsAtBOF", "nav_bof=%d row_valid=%d",
-                  (int)rt->nav_at_bof, (int)rt->row_valid);
-        if (rt->nav_at_bof) { *pbAtBegin = 1; return ok(); }
+        if (rt->nav_at_bof) { *pbAtBegin = 1;
+            cli_trace_tbl(rt, 'L', "AdsAtBOF", "=1 (nav flag)");
+            return ok(); }
         // M12.21 option C -- a valid cached current row means the cursor
         // is on a record, so it cannot be at BOF: answer with no round
         // trip (see AdsAtEOF).
-        if (rt->row_valid) { *pbAtBegin = 0; return ok(); }
+        if (rt->row_valid) { *pbAtBegin = 0;
+            cli_trace_tbl(rt, 'L', "AdsAtBOF", "=0 (row valid)");
+            return ok(); }
         // Proven not-BOF: answer locally even with no valid row.
-        if (rt->nav_not_bof) { *pbAtBegin = 0; return ok(); }
+        if (rt->nav_not_bof) { *pbAtBegin = 0;
+            cli_trace_tbl(rt, 'L', "AdsAtBOF", "=0 (proven not-BOF)");
+            return ok(); }
         // Empty-cursor sticky: an empty cursor is BOF without asking.
-        if (remote_nav_empty_sticky(rt)) { *pbAtBegin = 1; return ok(); }
+        if (remote_nav_empty_sticky(rt)) { *pbAtBegin = 1;
+            cli_trace_tbl(rt, 'L', "AdsAtBOF", "=1 (empty sticky)");
+            return ok(); }
         // Seq-gated repeat: same answer as moments ago, still current.
         {
             bool bb = false;
             if (remote_nav_bound_get(rt, false, &bb)) {
                 *pbAtBegin = bb ? 1 : 0;
+                cli_trace_tbl(rt, 'L', "AdsAtBOF", "=%d (bound cache)",
+                              bb ? 1 : 0);
                 return ok();
             }
         }
         auto r = rt->conn->bof_eof(rt->id);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsAtBOF", "=%d (bof_eof)",
+                      r.value().bof ? 1 : 0);
         // Twin flag: cache the EOF answer for the twin half of the pair.
         if (r.value().has_twin)
             rt->nav_at_eof = r.value().eof;
@@ -13998,11 +14040,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
         rt->keyno_valid = false;
         rt->invalidate_prefetch();
         if (!had_writes) {
-            cli_trace_tbl(rt, "AdsWriteRecord", "clean: flush skipped");
+            cli_trace_tbl(rt, 'L', "AdsWriteRecord", "clean: flush skipped");
             return ok();
         }
         auto r = rt->conn->flush_table(rt->id);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsWriteRecord", "flushed%s",
+                      rt->conn->server_flush_table_durable()
+                          ? " (durable)" : " (file-buffers follow)");
         // kCapFlushTableDurable servers run the full file-buffers
         // flush inside the FlushTable handler, so the commit is
         // durable right here and a trailing AdsFlushFileBuffers owes
@@ -15178,6 +15223,7 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         remote_settle_cursor(rt);
         auto r = rt->conn->lock_record(rt, ulRecord);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsLockRecord", "locked rec=%u", ulRecord);
         rt->ever_locked = true;
         // ulRecord == 0 -> the current record (ACE convention). With
         // no valid cursor the recno is unknowable client-side, so the
@@ -15191,6 +15237,8 @@ UNSIGNED32 ENTRYPOINT AdsLockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (!rt->row_valid && lrec != 0 && lrec == rt->current_recno) {
             auto fresh = rt->conn->refresh_record(rt);
             if (!fresh) return fail(fresh.error());
+            cli_trace_tbl(rt, 'W', "AdsLockRecord",
+                          "re-read after lock recno=%u", rt->current_recno);
         }
         return ok();
     }
@@ -15268,6 +15316,8 @@ UNSIGNED32 ENTRYPOINT AdsUnlockRecord(ADSHANDLE hTable, UNSIGNED32 ulRecord) {
         if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
         auto r = rt->conn->unlock_record(rt->id, ulRecord);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsUnlockRecord", "unlocked rec=%u",
+                      ulRecord);
         const std::uint32_t urec = (ulRecord == 0)
             ? (rt->row_valid ? rt->current_recno : 0) : ulRecord;
         if (urec != 0) rt->held_recs.erase(urec);
@@ -15423,11 +15473,12 @@ UNSIGNED32 ENTRYPOINT AdsUnlockTable(ADSHANDLE hTable) {
         // traffic in a Vouch save.
         if (rt->held_recs.empty() && !rt->table_lock_held &&
             !rt->locks_uncertain) {
-            cli_trace_tbl(rt, "AdsUnlockTable", "skipped: no locks held");
+            cli_trace_tbl(rt, 'L', "AdsUnlockTable", "skipped: no locks held");
             return ok();
         }
         auto r = rt->conn->unlock_table(rt->id);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsUnlockTable", "released all locks");
         // SAP ACE semantics: AdsUnlockTable releases ALL locks (table
         // AND record, including the append auto-lock), so the ledger
         // is provably empty again.
@@ -16053,7 +16104,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                     rt->last_nav_seq   = rt->parked_nav_seq;
                 }
                 rt->parked_nav_which = 0;
-                cli_trace_tbl(rt, "AdsOpenIndex", "unpark hit %.32s",
+                cli_trace_tbl(rt, 'L', "AdsOpenIndex", "unpark hit %.32s",
                               "[index hidden]");
                 auto& s = state();
                 std::lock_guard<std::recursive_mutex> lk(s.mu);
@@ -16075,7 +16126,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             if (auto r = remote_emit_close_all(rt); r != 0) {
                 return r;
             }
-            cli_trace_tbl(rt, "AdsOpenIndex", "unpark miss %.32s",
+            cli_trace_tbl(rt, ' ', "AdsOpenIndex", "unpark miss %.32s",
                           "[index hidden]");
         }
         // Zero-RTT dedup (RDD-only apps, no app change possible): the
@@ -16107,6 +16158,8 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
                 if (rt->active_index_id == 0)
                     rt->active_index_id = rt->index_by_tag.front().second;
                 if (pu16ArrayLen != nullptr) *pu16ArrayLen = count;
+                cli_trace_tbl(rt, 'L', "AdsOpenIndex",
+                              "production bag already bound");
                 return ok();
             }
         }
@@ -16119,6 +16172,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             : rt->conn->open_index(rt->id, path);
         if (use_open_metadata) rt->production_index_reply.clear();
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, use_open_metadata ? 'L' : 'W', "AdsOpenIndex",
+                      use_open_metadata ? "opened bag (from open ack)"
+                                        : "opened bag (wire)");
         auto& s = state();
         std::lock_guard<std::recursive_mutex> lk(s.mu);
         // Persist RemoteIndex objects in a side container keyed by
@@ -16635,11 +16691,11 @@ UNSIGNED32 ENTRYPOINT AdsCloseAllIndexes(ADSHANDLE hTable) {
             rt->parked_nav_order = rt->last_nav_order;
             rt->parked_nav_row   = rt->last_nav_row;
             rt->parked_nav_seq   = rt->last_nav_seq;
-            cli_trace_tbl(rt, "AdsCloseAllIndexes", "parked %u tags", ntags);
+            cli_trace_tbl(rt, 'L', "AdsCloseAllIndexes", "parked %u tags", ntags);
         } else if (rt->indexes_parked) {
-            cli_trace_tbl(rt, "AdsCloseAllIndexes", "repeat clear, park kept");
+            cli_trace_tbl(rt, 'L', "AdsCloseAllIndexes", "repeat clear, park kept");
         } else {
-            cli_trace_tbl(rt, "AdsCloseAllIndexes", "nothing open");
+            cli_trace_tbl(rt, 'L', "AdsCloseAllIndexes", "nothing open");
         }
         // Order belief changed with no frame: expire the nav stamp so a
         // subsequent GotoTop cannot dedupe against the old binding.
@@ -18260,7 +18316,7 @@ UNSIGNED32 ENTRYPOINT AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
         // every commit -- answering locally saves 1 RTT each time.
         if (pusCount != nullptr && !rt->locks_uncertain &&
             !rt->table_lock_held) {
-            cli_trace_tbl(rt, "AdsGetAllLocks",
+            cli_trace_tbl(rt, 'L', "AdsGetAllLocks",
                           "served from client lock ledger");
             const UNSIGNED16 lcap = *pusCount;
             UNSIGNED16 li = 0;
@@ -18278,6 +18334,7 @@ UNSIGNED32 ENTRYPOINT AdsGetAllLocks(ADSHANDLE hTable, UNSIGNED32* paRecnos,
         if (pusCount == nullptr) return fail(openads::AE_INTERNAL_ERROR, "");
         auto r = rt->conn->get_all_locks(rt->id);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsGetAllLocks", "list from server");
         const auto& held = r.value();
         UNSIGNED16 cap = *pusCount;
         UNSIGNED16 n   = static_cast<UNSIGNED16>(
@@ -21530,11 +21587,9 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             // -- nothing on the network to make it look wrong -- and the wire skip
             // after that sent (step + a lag that no longer applied).
             ri->parent->invalidate_prefetch();
-            cli_trace_tbl(ri->parent, "AdsSeek", "key_len=%u",
-                          static_cast<unsigned>(u16KeyLen));
         }
         if (ri->parent != nullptr && remote_empty_window(ri->parent)) {
-            cli_trace_tbl(ri->parent, "AdsSeek",
+            cli_trace_tbl(ri->parent, 'L', "AdsSeek",
                           "empty window: not found (local)");
             remote_empty_restamp(ri->parent);
             ri->parent->found_cached  = true;
@@ -21551,6 +21606,10 @@ UNSIGNED32 ENTRYPOINT AdsSeek(ADSHANDLE hIndex,
             static_cast<std::uint8_t>(u16SeekType),
             /*last=*/0, ri->parent);
         if (!r) return fail(r.error());
+        cli_trace_tbl(ri->parent, 'W', "AdsSeek",
+                      "key_len=%u -> found=%d recno=%u",
+                      static_cast<unsigned>(u16KeyLen),
+                      (int)r.value().hit, r.value().recno);
         if (pbFound) *pbFound = r.value().hit;
         if (ri->parent) {                            // M12.21 option C
             ri->parent->found_cached  = true;
@@ -21716,13 +21775,15 @@ UNSIGNED32 ENTRYPOINT AdsSeekLast(ADSHANDLE hIndex,
             // RCB 07/14/2026: same stale-queue bug as AdsSeek -- see the note
             // there for why dropping the block is mandatory after a seek.
             ri->parent->invalidate_prefetch();
-            cli_trace_tbl(ri->parent, "AdsSeekLast", "key_len=%u",
-                          static_cast<unsigned>(u16KeyLen));
         }
         auto r = ri->conn->seek(ri->id, key,
             /*soft=*/0,
             /*last=*/1, ri->parent);       // M12.24 -- see AdsSeek
         if (!r) return fail(r.error());
+        cli_trace_tbl(ri->parent, 'W', "AdsSeekLast",
+                      "key_len=%u -> found=%d recno=%u",
+                      static_cast<unsigned>(u16KeyLen),
+                      (int)r.value().hit, r.value().recno);
         if (pbFound) *pbFound = r.value().hit;
         if (ri->parent) {                            // M12.21 option C
             ri->parent->found_cached  = true;
@@ -39011,13 +39072,14 @@ UNSIGNED32 ENTRYPOINT AdsGetNumLocks(ADSHANDLE hTable, UNSIGNED16* p) {
         // lock), the count is the ledger size. rddads polls this after
         // every commit -- answering locally saves 1 RTT each time.
         if (!rt->locks_uncertain && !rt->table_lock_held) {
-            cli_trace_tbl(rt, "AdsGetNumLocks",
+            cli_trace_tbl(rt, 'L', "AdsGetNumLocks",
                           "served from client lock ledger");
             *p = static_cast<UNSIGNED16>(rt->held_recs.size());
             return ok();
         }
         auto r = rt->conn->get_all_locks(rt->id);
         if (!r) return fail(r.error());
+        cli_trace_tbl(rt, 'W', "AdsGetNumLocks", "count from server");
         *p = static_cast<UNSIGNED16>(r.value().size());
         return ok();
     }

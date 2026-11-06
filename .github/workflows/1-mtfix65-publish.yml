@@ -1,0 +1,152 @@
+name: mtfix65 publish verified existing artifacts
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: mtfix65-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    name: Publish combined prerelease
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        run-id: '42215714960'
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        pattern: kit-x86
+        path: download
+    - uses: actions/download-artifact@v4
+      with:
+        run-id: '42209235730'
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        pattern: kit-*
+        path: download
+    - name: Flatten existing archive assets without modifying bytes
+      shell: bash
+      run: "set -euo pipefail\npython - <<'PYFLAT'\nfrom pathlib import Path\nimport shutil\nfor f in Path('download').rglob('*'):\n\
+        \ if f.is_file():\n  dst=Path(f.name)\n  assert not dst.exists(), 'duplicate asset '+f.name\n  shutil.copyfile(f,dst)\n\
+        PYFLAT\nsha256sum mtfix65-full-qt492-x86.zip mtfix65-full-x64.zip openads-1.09.75-mtfix65-full-test-linux-x64.tar.gz\
+        \ openads-1.09.75-mtfix65-full-test-macos-universal.tar.gz\ncat > EXPECTED_SHA256.txt <<'SUMS'\n91c8aebee08b14877d3d0827104cad8d2fecb5705ed6f3d72caa59bd79bb0d28\
+        \  mtfix65-full-qt492-x86.zip\nd79e4027582e8fc4eec52842b38a5cd2b0c913109393cb7447940bee6ff0c0a8  mtfix65-full-x64.zip\n\
+        c5f4b24e2dab7988b530ddec92b9bbaf1d07eb23e60279618d3e3da897057d16  openads-1.09.75-mtfix65-full-test-linux-x64.tar.gz\n\
+        8cc509039f411e911d5e5afb71ff7d5fae6cef1267e57d5f7a18922f77f376bd  MTFIX65_LINUX_SERVER_TEST.md\n097c4f9adc03906d736167ff2aa7002d10660c8a873b7f213b8586414ecb4f80\
+        \  openads-1.09.75-mtfix65-full-test-linux-x64.tar.gz.sha256\n54a6de8b1cff6eb0e14d5a1d95bca5a92b139597c7003fbfd9f54d04dc8b301a\
+        \  openads-1.09.75-mtfix65-full-test-macos-universal.tar.gz\nad86f37277a4414e4bdbcb1604719d07bc54fbf3d536de41df36e5c16a4a2ef3\
+        \  openads-1.09.75-mtfix65-full-test-macos-universal.tar.gz.sha256\nSUMS\nsha256sum -c EXPECTED_SHA256.txt\n"
+    - name: Write release notes
+      shell: bash
+      run: 'cat > RELEASE_NOTES.md <<''NOTES''
+
+        # OpenADS mtfix65 full cumulative test kit
+
+        Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
+
+
+        Cumulative mtfix65 = frozen mtfix64 plus cli_trace wire-trip flags (W column) and compact trace mode.
+
+        Product source: 98c16983da085722aae1534b9f19eb578e1285d5.
+
+        Every cli_trace line now ends with a flag column: [W] wire round trip, [L] local answer, [ ] context.
+
+        Set wire_trace_compact=1 (or env OPENADS_WIRE_TRACE_COMPACT=1) to print only [W] lines, one per round trip.
+
+        Diagnostic-only client-side change inside ace32.dll; no server change required; trace format stays
+
+        backward-readable. The mtfix64 explicit-refresh repair layer is carried unchanged.
+
+
+        Cumulative mtfix64 layer (frozen): explicit refresh re-reads the ordered ABI twin used to pack the response
+
+        and propagates twin refresh errors. No Skip-freshness B, refill optimization, Vouch source rewrite,
+
+        database/wire-format change or browse-speed claim. Added userspace reads measured in a 2200-row/31-byte
+
+        fixture:65542DBF+1028CDX bytes per full-block refresh;2674DBF+1028CDX final partial. Not physical disk or
+
+        elapsed production latency. Duplicate reads retained for correctness/error safety.
+
+        Shared pre-existing relation-child re-seek and stored-descending bottom/EOF gaps remain outside this repair.
+
+        No full relation/descending semantics claim. Not proof of Vouch compiled RDDADS/ForceStable chain.
+
+
+        Full kit build: https://github.com/bedipritpal/OpenADS/actions/runs/42209235730
+
+        x86 kit recovery: https://github.com/bedipritpal/OpenADS/actions/runs/42215714960
+
+        The first full-kit run failed the connect harness spelling (trailing-slash URI; the known unchanged 5103
+
+        path behavior), same as the mtfix64 first run. The x86 leg was rebuilt with the corrected spelling; the
+
+        Windows actual Harbour marker REFRESH-PEER-HARBOUR-PASS is verified in the recovery run. x64, Linux and
+
+        macOS artifacts are reused byte-identical from the full-kit run. Final publish reuses exact verified
+
+        archive bytes, no rebuild of green legs.
+
+
+        Windows x86 is not a clean unit-suite pass: same197 baseline failing cases with
+
+        identical recorded assertion results/sourcefiles required.1782 cases must execute,
+
+        zero harness errors; new indexed explicit-refresh regression must pass113 assertions,
+
+        and prior Tim2e regression must still pass304 assertions.
+
+        All prior cumulative fixes/toolchains and auth/HRB/diagnostics gates retained.
+
+        Main/upstream and running installations untouched. No automatic deployment.
+
+        Client diagnostics default OFF. Explicit opt-in remains required.
+
+        macOS uses Intelmac15/Xcode16.4, universal slices, minOS14.0 metadata and full tests.
+
+        ARM slice and macOS14 runtime not independently tested; targetmetadata is not proof.
+
+        Windowsx64 has PE/package checks, not a nativeGCC unit-suite pass.
+
+
+        All four platform kits together; SHA256 sidecars/manifests and source pins.
+
+        Windowsx86 Qt4.9.2/GCC10.2 and ownerbinutils2.35.1 unchanged.
+
+        Public mock HRB only, not realcustomer auth. Test-only, no automatic deployment.
+
+        Use matched client/server for the mtfix64 repair layer. The mtfix65 trace flags are client-side only;
+
+        no server change is required.
+
+        NOTES
+
+        '
+    - name: Create prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      shell: bash
+      run: 'set -euo pipefail
+
+        ls -la
+
+        sha256sum mtfix65-full-qt492-x86.zip mtfix65-full-x64.zip openads-1.09.75-mtfix65-full-test-linux-x64.tar.gz
+        openads-1.09.75-mtfix65-full-test-macos-universal.tar.gz
+
+        sha256sum mtfix65-full-qt492-x86.zip mtfix65-full-x64.zip > WINDOWS_SHA256SUMS.txt
+
+        gh release create v1.09.75-mtfix65-full-test --target 98c16983da085722aae1534b9f19eb578e1285d5 --prerelease
+        --latest=false --title "OpenADS mtfix65 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS
+        universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix65-full-qt492-x86.zip mtfix65-full-x64.zip
+        openads-1.09.75-mtfix65-full-test-linux-x64.tar.gz openads-1.09.75-mtfix65-full-test-linux-x64.tar.gz.sha256
+        MTFIX65_LINUX_SERVER_TEST.md openads-1.09.75-mtfix65-full-test-macos-universal.tar.gz openads-1.09.75-mtfix65-full-test-macos-universal.tar.gz.sha256
+
+        gh release view v1.09.75-mtfix65-full-test --json tagName,isPrerelease,url,assets
+
+        '
+'on':
+  push:
+    branches:
+    - release/mtfix65-full
+    paths:
+    - .github/workflows/1-mtfix65-publish.yml
+  workflow_dispatch: {}

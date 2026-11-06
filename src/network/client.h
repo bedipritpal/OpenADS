@@ -815,6 +815,13 @@ struct RemoteTable {
     std::uint32_t            recno_bound    = 0;
     bool                     recno_bound_ok = false;
     std::uint64_t            recno_bound_seq = 0;
+    // mtfix67 -- per-table twin of recno_bound_seq: snapshots
+    // RemoteConnection::tbl_nav_seq(id). A frame on another table cannot
+    // move this table's server cursor, and writes do not move it either
+    // (they bump tbl_write_gens, not tbl_nav_seqs), so this seq stays
+    // valid across other-table navs and same-table writes where the
+    // conn-wide seq is conservatively dropped.
+    std::uint64_t            recno_bound_tbl_seq = 0;
     // Certified record count from the last nav ack tail (optional
     // [u32 reccount] after the bound bytes), with the seq at answer
     // time. Same trust as rec_count_cached (in-memory server count,

@@ -808,6 +808,10 @@ static void apply_bound_trailer(RemoteTable* rt, bool bof, bool eof,
     rt->recno_bound     = recno;
     rt->recno_bound_ok  = true;
     rt->recno_bound_seq = seq;
+    // mtfix67 -- certify the per-table twin from the same nav answer;
+    // the frame that delivered it already bumped tbl_nav_seqs_[id]
+    // inside request(), so the snapshot matches.
+    rt->recno_bound_tbl_seq = rt->conn->tbl_nav_seq(rt->id);
     rt->bound_at         = std::chrono::steady_clock::now();
     rt->bound_data_epoch = rt->conn->data_epoch();
     if (has_count) {

@@ -2029,6 +2029,7 @@ void remote_empty_restamp(openads::network::RemoteTable* rt) {
     rt->nav_not_eof = false;
     rt->bound_seq = seq;
     rt->recno_bound_seq = seq;
+    rt->recno_bound_tbl_seq = rt->conn->tbl_nav_seq(rt->id);
     rt->count_bound_seq = seq;
     rt->last_nav = 0;
     // The serve lands on no row: no anchor, and any certified pair
@@ -13158,8 +13159,20 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOpti
         // did). Serves xBrowse's per-row RecNo() while no
         // cursor-affecting frame lands — same currency as the bound
         // cache, cleared with it.
+        // mtfix67 -- validity keyed on the PER-TABLE nav generation:
+        // only this handle's cursor-moving frames (classified in
+        // request(), plus Seek's resolved-binding bump and the
+        // all-tables bumps for index-keyed/visibility ops) can move its
+        // server cursor, so other-table navs and this table's own
+        // writes (SetField/SetFields/FlushTable bump the conn-wide
+        // nav_seq but move no cursor) no longer evict the bound recno.
+        // Same-table invalidation is unchanged: any cursor op on this
+        // table bumps tbl_nav_seq(id) and the check misses exactly as
+        // before. Unconditional: the env-gated anchor envelope and this
+        // one share the same per-table correctness invariant, and the
+        // rebind below certifies both seqs from one wire answer.
         if (rt->recno_bound_ok &&
-            rt->recno_bound_seq == rt->conn->nav_seq()) {
+            rt->recno_bound_tbl_seq == rt->conn->tbl_nav_seq(rt->id)) {
             *pulRecordNum = rt->recno_bound;
             return ok();
         }
@@ -13193,9 +13206,10 @@ UNSIGNED32 ENTRYPOINT AdsGetRecordNum(ADSHANDLE hTable, UNSIGNED16 /*bFilterOpti
         auto r = rt->conn->get_record_num(rt->id);
         if (!r) return fail(r.error());
         *pulRecordNum = r.value();
-        rt->recno_bound     = r.value();
-        rt->recno_bound_ok  = true;
-        rt->recno_bound_seq = rt->conn->nav_seq();
+        rt->recno_bound         = r.value();
+        rt->recno_bound_ok      = true;
+        rt->recno_bound_seq     = rt->conn->nav_seq();
+        rt->recno_bound_tbl_seq = rt->conn->tbl_nav_seq(rt->id);
         return ok();
     }
     if (auto* ops = openads::abi::backend_table_ops_for(hTable))

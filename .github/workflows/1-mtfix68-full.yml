@@ -724,7 +724,7 @@ jobs:
         \nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\n\nBuilt from fork branch release/mtfix68-full,\
         \ commit 02e840e16fc400ffc7a690655b584e0c0a3f113d\n(frozen mtfix67 plus AppendBlank ack metadata trailer (recno + lock-held state in the append reply);\
         \ AdsRecNo and the follow-up record lock pay no round trip; legacy two-trip fallback kept).\nClient master OFF by default. See diagnostics-gate.md. No running server\n\
-        update is required for client-only diagnostics; mtfix68 append savings DO need a server update. On kit-installed boxes the tested route is: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix68-full-test (downloads + SHA-verifies this release, stops both 6262/6264, switches, starts detached; rollback: ~/start-openads.sh rollback; active clients disconnect). Do not deploy this kit\nwithout separately deciding\
+        update is required for client-only diagnostics; mtfix68 append savings DO need a server update. On kit-installed boxes the upgrade script handles it: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix68-full-test (downloads + SHA-verifies this release, stops both 6262/6264, switches, starts detached; rollback: ~/start-openads.sh rollback; active clients disconnect). Do not deploy this kit\nwithout separately deciding\
         \ to change your running setup.\nThe full ctest suite passed on\nubuntu-24.04.\n\nKit contents: openads_serverd,\
         \ openads_auth_worker, openads_bench,\nlibace64.so / libopenace64.so, openads.ini.sample, headers, contrib,\n\
         mutual-test-only.hrb (mock V2 auth module), run-mock-test.sh,\nsource-commit.txt, ldd-server.txt, ldd-worker.txt,\

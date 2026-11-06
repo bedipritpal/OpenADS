@@ -404,9 +404,9 @@ jobs:
         \ writes without losing position']['passed'],'explicit refresh regression failed'\nassert summary['cases']['indexed\
         \ explicit refresh sees peer writes without losing position']['assertions']['successes']=='113','explicit\
         \ refresh assertion count changed'\nassert summary['cases']['Tim 2e deleted-only scope never substitutes\
-        \ a preceding live row']['assertions']['successes']=='304','2e assertion count changed'\nassert summary['count']==1782\
-        \ and summary['executed']==1782,'Coverage mismatch'\n(out/'baseline-comparison.txt').write_text('mtfix62\
-        \ baseline197failures; same197names and recorded assertion signatures; no additional failing cases;1782/1782executed;2ePASS;explicitRefresh113PASS;0harnesserrors\\\
+        \ a preceding live row']['assertions']['successes']=='304','2e assertion count changed'\nassert summary['count']==1783\
+        \ and summary['executed']==1783,'Coverage mismatch'\n(out/'baseline-comparison.txt').write_text('mtfix62\
+        \ baseline197failures; same197names and recorded assertion signatures; no additional failing cases;1783/1783executed;2ePASS;explicitRefresh113PASS;0harnesserrors\\\
         n')\n\n\nPYBATCH\n"
     - name: Fresh-process diagnostics gate contract on packaged x86 compiler
       shell: bash
@@ -434,7 +434,7 @@ jobs:
         Source CI including Windows actual Harbour RDDADS/independent DBFCDX writer:\nhttps://github.com/bedipritpal/OpenADS/actions/runs/41083765147\n\
         Windows actual Harbour marker REFRESH-PEER-HARBOUR-PASS verified there.\nNot proof of Vouch compiled RDDADS/ForceStable\
         \ chain.\nWindows x86 is not a clean unit-suite pass: same197 baseline failing cases with\nidentical recorded\
-        \ assertion results/sourcefiles required.1782 cases must execute,\nzero harness errors; new indexed explicit-refresh\
+        \ assertion results/sourcefiles required.1783 cases must execute,\nzero harness errors; new indexed explicit-refresh\
         \ regression must pass113 assertions,\nand prior Tim2e regression must still pass304 assertions.\nAll prior\
         \ cumulative fixes/toolchains and auth/HRB/diagnostics gates retained.\nMain/upstream and running installations\
         \ untouched. No automatic deployment.\nClient diagnostics default OFF. Explicit opt-in remains required.\n\
@@ -606,7 +606,7 @@ jobs:
 
         Windows x86 is not a clean unit-suite pass: same197 baseline failing cases with
 
-        identical recorded assertion results/sourcefiles required.1782 cases must execute,
+        identical recorded assertion results/sourcefiles required.1783 cases must execute,
 
         zero harness errors; new indexed explicit-refresh regression must pass113 assertions,
 
@@ -935,7 +935,7 @@ jobs:
 
         Windows x86 is not a clean unit-suite pass: same197 baseline failing cases with
 
-        identical recorded assertion results/sourcefiles required.1782 cases must execute,
+        identical recorded assertion results/sourcefiles required.1783 cases must execute,
 
         zero harness errors; new indexed explicit-refresh regression must pass113 assertions,
 

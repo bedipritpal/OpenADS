@@ -1622,7 +1622,7 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 }
 
 static void cli_trace_line(long long ms, const char* who, const char* op,
-                           char flag, const char* detail) {
+                           char /*legacy_flag*/, const char* detail) {
     if (!cli_trace_on()) return;
     // The frame hook writes directly through cli_trace_write_locked.
     // Everything routed here is an API/context summary, not a frame.

@@ -293,8 +293,8 @@ jobs:
         \ $q.WaitForExit(45000)){$q.Kill();throw 'static auth hung'}\n if($q.ExitCode -ne 0){throw \"static auth\
         \ failed $($q.ExitCode)\"}\n if(-not (Select-String output/static-auth-stdout.txt -Pattern STATIC-AUTH-PASS)){throw\
         \ 'static auth proof missing'}\n} finally {if(-not $p.HasExited){$p.Kill()}}\n\nif(-not (Select-String output/auth-wire-trace.txt\
-        \ -Pattern \"wire op=\")){throw \"auth wire trace missing\"}\nif(Select-String output/auth-wire-trace.txt\
-        \ -Pattern \"wire op=0x(3D|3F) \"){throw \"auth handshake leaked to wire trace\"}\n\nGet-Content output/static-auth-stdout.txt\n"
+        \ -Pattern \"wire  op\.\")){throw \"auth wire trace missing\"}\nif(Select-String output/auth-wire-trace.txt\
+        \ -Pattern \"wire  op\.0x(3D|3F) \"){throw \"auth handshake leaked to wire trace\"}\n\nGet-Content output/static-auth-stdout.txt\n"
       shell: pwsh
     - name: Actual worker HRB timestamp and UTC calls
       run: 'set -euxo pipefail

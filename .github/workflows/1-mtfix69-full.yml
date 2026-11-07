@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix69-full-test
-  PINNED_SOURCE: b1f33a598d8462d1c1cd80e1f279469fa20d2b32
+  PINNED_SOURCE: 2bcda16d2dfa267f8042c859feda85048e91e655
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -20,9 +20,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix69-full
 
-        git merge-base --is-ancestor b1f33a598d8462d1c1cd80e1f279469fa20d2b32 HEAD
+        git merge-base --is-ancestor 2bcda16d2dfa267f8042c859feda85048e91e655 HEAD
 
-        test -z "$(git diff --name-only b1f33a598d8462d1c1cd80e1f279469fa20d2b32 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 2bcda16d2dfa267f8042c859feda85048e91e655 HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
@@ -421,8 +421,8 @@ jobs:
         cp kit/libopenace32.dll.a kit/librddads.a delivery/mtfix69-full/lib/\ncp include/openads/ace.h \"$RUNNER_TEMP/harbour-old/contrib/rddads/ads.ch\"\
         \ delivery/mtfix69-full/include/\ncat > delivery/mtfix69-full/docs/README.txt <<'NOTES'\nMTFIX69 FULL TEST\
         \ KIT, WINDOWS X86\nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\nCumulative mtfix69\
-        \ = frozen mtfix68 plus client-only diagnostic correction: compact mode contains only actual completed frame rows, W is exclusive to those rows, all other flags are blank, and columns are plain aligned with two-space separators. No server/protocol change; existing mtfix68 server stays compatible.\nProduct source: b1f33a598d8462d1c1cd80e1f279469fa20d2b32.\n\
-        \nTrace columns are plain aligned with two-space separators. W marks actual completed frame rows only; all API/local/context flags are blank.\
+        \ = frozen mtfix68 plus client-only diagnostic correction: compact mode contains only actual completed frame rows, W is exclusive to those rows, all other flags are blank, and columns are plain aligned with two-space separators and bare elapsed milliseconds. No server/protocol change; existing mtfix68 server stays compatible.\nProduct source: 2bcda16d2dfa267f8042c859feda85048e91e655.\n\
+        \nTrace columns are plain aligned with two-space separators and bare elapsed milliseconds. W marks actual completed frame rows only; all API/local/context flags are blank.\
         \ Set wire_trace_compact=1 (or env OPENADS_WIRE_TRACE_COMPACT=1) to print frame rows only. mtfix69 is client-only; existing mtfix68 server is compatible. Append metadata from mtfix68 remains cumulative.\n\
         Explicit refresh now re-reads the ordered ABI twin used to pack the response and\npropagates twin refresh\
         \ errors. No Skip-freshness B, refill optimization, Vouch\nsource rewrite, database/wire-format change or\
@@ -506,9 +506,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix69-full
 
-        git merge-base --is-ancestor b1f33a598d8462d1c1cd80e1f279469fa20d2b32 HEAD
+        git merge-base --is-ancestor 2bcda16d2dfa267f8042c859feda85048e91e655 HEAD
 
-        test -z "$(git diff --name-only b1f33a598d8462d1c1cd80e1f279469fa20d2b32 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 2bcda16d2dfa267f8042c859feda85048e91e655 HEAD -- . '':!.github/workflows'')"
 
         '
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
@@ -575,9 +575,9 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Cumulative mtfix69 = frozen mtfix68 plus client-only diagnostic correction: compact mode contains only actual completed frame rows, W is exclusive to those rows, all other flags are blank, and columns are plain aligned with two-space separators. No server/protocol change; existing mtfix68 server stays compatible.
+        Cumulative mtfix69 = frozen mtfix68 plus client-only diagnostic correction: compact mode contains only actual completed frame rows, W is exclusive to those rows, all other flags are blank, and columns are plain aligned with two-space separators and bare elapsed milliseconds. No server/protocol change; existing mtfix68 server stays compatible.
 
-        Product source: b1f33a598d8462d1c1cd80e1f279469fa20d2b32.
+        Product source: 2bcda16d2dfa267f8042c859feda85048e91e655.
 
         Explicit refresh now re-reads the ordered ABI twin used to pack the response and
 
@@ -721,7 +721,7 @@ jobs:
       shell: bash
       run: "cat > MTFIX69_LINUX_SERVER_TEST.md <<'NOTE'\n# 1.09.75-mtfix69-full-test - Linux x64 server test kit\n\
         \nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\n\nBuilt from fork branch release/mtfix69-full,\
-        \ commit b1f33a598d8462d1c1cd80e1f279469fa20d2b32\n(frozen mtfix68 plus client-only plain aligned W-exclusive trace formatting;\
+        \ commit 2bcda16d2dfa267f8042c859feda85048e91e655\n(frozen mtfix68 plus client-only plain aligned W-exclusive trace formatting;\
         \ compact frame-only; blank flags on non-frame rows).\nClient master OFF by default. See diagnostics-gate.md. No running server\n\
         update is required for client-only diagnostics; the cumulative mtfix68 append savings need a mtfix68-or-newer server, already installed on the proving box. On kit-installed boxes the upgrade script handles it: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix69-full-test (downloads + SHA-verifies this release, stops both 6262/6264, switches, starts detached; rollback: ~/start-openads.sh rollback; active clients disconnect). Do not deploy this kit\nwithout separately deciding\
         \ to change your running setup.\nThe full ctest suite passed on\nubuntu-24.04.\n\nKit contents: openads_serverd,\
@@ -811,9 +811,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix69-full
 
-        git merge-base --is-ancestor b1f33a598d8462d1c1cd80e1f279469fa20d2b32 HEAD
+        git merge-base --is-ancestor 2bcda16d2dfa267f8042c859feda85048e91e655 HEAD
 
-        test -z "$(git diff --name-only b1f33a598d8462d1c1cd80e1f279469fa20d2b32 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 2bcda16d2dfa267f8042c859feda85048e91e655 HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
@@ -904,9 +904,9 @@ jobs:
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
 
-        Cumulative mtfix69 = frozen mtfix68 plus client-only diagnostic correction: compact mode contains only actual completed frame rows, W is exclusive to those rows, all other flags are blank, and columns are plain aligned with two-space separators. No server/protocol change; existing mtfix68 server stays compatible.
+        Cumulative mtfix69 = frozen mtfix68 plus client-only diagnostic correction: compact mode contains only actual completed frame rows, W is exclusive to those rows, all other flags are blank, and columns are plain aligned with two-space separators and bare elapsed milliseconds. No server/protocol change; existing mtfix68 server stays compatible.
 
-        Product source: b1f33a598d8462d1c1cd80e1f279469fa20d2b32.
+        Product source: 2bcda16d2dfa267f8042c859feda85048e91e655.
 
         Explicit refresh now re-reads the ordered ABI twin used to pack the response and
 
@@ -982,7 +982,7 @@ jobs:
 
         sha256sum mtfix69-full-qt492-x86.zip mtfix69-full-x64.zip > WINDOWS_SHA256SUMS.txt
 
-        gh release create v1.09.75-mtfix69-full-test --target b1f33a598d8462d1c1cd80e1f279469fa20d2b32 --prerelease
+        gh release create v1.09.75-mtfix69-full-test --target 2bcda16d2dfa267f8042c859feda85048e91e655 --prerelease
         --latest=false --title "OpenADS mtfix69 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS
         universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix69-full-qt492-x86.zip mtfix69-full-x64.zip
         openads-1.09.75-mtfix69-full-test-linux-x64.tar.gz openads-1.09.75-mtfix69-full-test-linux-x64.tar.gz.sha256

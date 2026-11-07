@@ -29,6 +29,7 @@ int main(int argc,char**argv){
  ok(AdsConnect60(u.data(),ADS_REMOTE_SERVER,nullptr,nullptr,0,&c));if(mode=="late")ok(OAdsSetLogging(1));ok(AdsOpenTable(c,name,nullptr,ADS_CDX,0,0,0,0,&t));
  ok(AdsGotoTop(t));double val=0;ok(AdsGetDouble(t,fld,&val));if(val!=1234567)return 4;
  ok(AdsGetIndexHandle(t,tag,&ix));ok(AdsGotoTop(ix));
+ UNSIGNED16 found=0;ok(AdsSeek(ix,reinterpret_cast<UNSIGNED8*>(&val),sizeof(val),ADS_DOUBLEKEY,ADS_HARDSEEK,&found));if(!found)return 9;
  if(mode=="lifecycle"){
   ok(OAdsSetLogging(0));auto path=std::getenv("OPENADS_WIRE_TRACE_FILE");auto size=fs::exists(path)?fs::file_size(path):0;
   ok(AdsSkip(t,0));ok(AdsRefreshRecord(t));if((fs::exists(path)?fs::file_size(path):0)!=size)return 5;

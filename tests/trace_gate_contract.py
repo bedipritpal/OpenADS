@@ -32,6 +32,45 @@ with tempfile.TemporaryDirectory(prefix='openads_trace_contract_') as base:
     assert 'SAFE_ALIAS' in wire,(transport,mode)
    print(transport,mode,'PASS',p.stdout.strip())
 
+# Compact means frame rows only, including Seek: no duplicate API [W].
+# Compare deterministic wire operation/size sequences in separate processes;
+# timing and connection fingerprints are deliberately not compared.
+import re
+for transport in ('env','ini','both'):
+ sequences=[]
+ for compact in (False,True):
+  with tempfile.TemporaryDirectory(prefix='openads_compact_contract_') as base:
+   root=pathlib.Path(base);env=os.environ.copy()
+   for key in list(env):
+    if key.startswith('OPENADS_') and any(x in key for x in ('TRACE','LOG','DIAG','INI','OPDUMP')):env.pop(key)
+   settings={'wire_trace':'1','wire_trace_file':str(root/'wire.log'),'wire_trace_compact':str(int(compact))}
+   env['OPENADS_INI']=str(root/'openads.ini')
+   (root/'openads.ini').write_text('\n'.join(k+'='+v for k,v in settings.items()) if transport!='env' else '')
+   if transport!='ini':
+    for key,val in settings.items():env['OPENADS_'+key.upper()]=val
+   env['OPENADS_ERROR_LOG_PATH']=str(root/'errors')
+   p=subprocess.run([exe,'on'],env=env,capture_output=True,text=True,timeout=30)
+   assert p.returncode==0,(transport,compact,p.returncode,p.stdout,p.stderr)
+   wire=(root/'wire.log').read_text();lines=wire.splitlines()
+   frames=[line for line in lines if 'wire op=' in line]
+   assert all('[' not in line[:85] and ']' not in line[:85] for line in lines),(transport,compact,'decorative column brackets')
+   assert frames,(transport,compact)
+   assert [line for line in lines if re.search(r'  W  wire op=',line)]==frames,(transport,compact,'W not exclusive to frames')
+   for line in lines:
+    assert re.search(r'^.{23}  \+.{9}ms  .{20}  .{20}  (W| )  ',line),(transport,compact,'nonblank non-W flag',line)
+   assert any('wire op=0x90 ' in line for line in frames),(transport,compact,'missing Seek frame')
+   if compact:
+    assert lines==frames,(transport,'non-frame row in compact',wire)
+    assert 'AdsSeek ' not in wire,(transport,'duplicate Seek summary')
+   else:
+    assert 'AdsSeek ' in wire,(transport,'full API summary missing')
+    assert any('AdsSeek ' in line and re.search(r'  AdsSeek +   ',line) for line in lines),(transport,'Seek flag not blank')
+   for canary in ('PRIVATE_TABLE_CANARY','PRIVATE_ERROR_CANARY','FIELD_X','TAGX','1234567','openads_trace_gate_probe'):
+    assert canary not in wire+p.stderr,(transport,compact,canary)
+   sequences.append([re.search(r'wire op=(.*?) dur_us=',line).group(1) for line in frames])
+ assert sequences[0]==sequences[1],(transport,'wire sequence changed',sequences)
+ print(transport,'full_compact_same_frames',len(sequences[0]),'PASS')
+
 # Explicit master ON must not itself turn on an unselected wire channel.
 for value in ('0', 'false', 'off', 'no'):
  with tempfile.TemporaryDirectory(prefix='openads_trace_false_') as base:

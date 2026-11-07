@@ -1555,8 +1555,8 @@ static std::string cli_trace_label(const std::string& name,
 }
 
 // Compact mode (wire_trace_compact=1 / OPENADS_WIRE_TRACE_COMPACT=1):
-// only [W] lines print -- one line per server round trip, so the log
-// counts wire trips by line count. Local/bookkeeping lines drop out.
+// only actual frame-hook lines print, one per covered completed trip.
+// API summaries (including [W]) and local/bookkeeping lines drop out.
 static bool cli_trace_compact_on() {
     static const bool on = openads::util::client_setting_truthy(
         "OPENADS_WIRE_TRACE_COMPACT", "wire_trace_compact");
@@ -1615,7 +1615,7 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 #endif
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
-    std::fprintf(hf, "%s.%03lld [+%9lldms] [%-20.20s] [%-20.20s] [%c] %s\n",
+    std::fprintf(hf, "%s.%03lld  +%9lldms  %-20.20s  %-20.20s  %c  %s\n",
                  stamp, static_cast<long long>(epoch_ms % 1000), ms,
                  who ? who : "-", op ? op : "-", flag,
                  detail ? detail : "");
@@ -1624,12 +1624,14 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 static void cli_trace_line(long long ms, const char* who, const char* op,
                            char flag, const char* detail) {
     if (!cli_trace_on()) return;
-    if (flag != 'W' && cli_trace_compact_on()) return;
+    // The frame hook writes directly through cli_trace_write_locked.
+    // Everything routed here is an API/context summary, not a frame.
+    if (cli_trace_compact_on()) return;
     auto& trace = cli_trace_state();
     std::lock_guard<std::mutex> lk(trace.mu);
     FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
     if (!hf) return;
-    cli_trace_write_locked(hf, ms, who, op, flag, detail);
+    cli_trace_write_locked(hf, ms, who, op, ' ', detail);
     std::fclose(hf);
 }
 
@@ -1649,8 +1651,8 @@ static void cli_trace(char flag, const char* op, const char* fmt, ...) {
     buf[sizeof(buf) - 1] = 0;
     cli_trace_line(cli_trace_ms(), "-", op, flag, buf);
 }
-// flag: 'W' = this call made a server round trip, 'L' = answered
-// locally, ' ' = context line (neither; suppressed in compact mode).
+// Call sites retain legacy classification internally; API/local/context
+// rows always print a blank flag. Only actual frame-hook rows print W.
 static void cli_trace_tbl(const openads::network::RemoteTable* rt,
                           char flag, const char* op, const char* fmt, ...) {
     if (!cli_trace_on()) return;

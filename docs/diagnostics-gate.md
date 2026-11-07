@@ -38,3 +38,16 @@ Operational CLI responses remain: help/version, readiness/shutdown and safe
 startup/service failure status. The master gates diagnostics, not these
 management responses. Sensitive startup paths/raw errors are suppressed.
 OPDUMP's environment selector cannot start sampling while the master is OFF.
+
+## mtfix69 trace columns
+
+`cli_trace.log` uses plain fixed-width columns separated by two spaces,
+following the Vouch DBF_ADS log style. Only actual completed frame-hook
+rows carry `W`; every API summary, local call and context row has a blank
+flag. Compact mode (`wire_trace_compact=1`) prints only those frame rows.
+Full mode keeps the additional blank-flag rows. No A or L flags are printed.
+The full and compact frame sequence is the same; formatting changes do not
+remove requests. Existing masking and frame-coverage limits are unchanged:
+only completed request/reply pairs through RemoteConnection::request are
+covered; failed/incomplete pairs and separate auth transport are not a total
+network-traffic census.

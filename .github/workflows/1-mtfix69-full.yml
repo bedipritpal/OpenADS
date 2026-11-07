@@ -722,8 +722,8 @@ jobs:
       run: "cat > MTFIX69_LINUX_SERVER_TEST.md <<'NOTE'\n# 1.09.75-mtfix69-full-test - Linux x64 server test kit\n\
         \nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\n\nBuilt from fork branch release/mtfix69-full,\
         \ commit b1f33a598d8462d1c1cd80e1f279469fa20d2b32\n(frozen mtfix68 plus client-only plain aligned W-exclusive trace formatting;\
-        \ AdsRecNo and the follow-up record lock pay no round trip; legacy two-trip fallback kept).\nClient master OFF by default. See diagnostics-gate.md. No running server\n\
-        update is required for client-only diagnostics; mtfix69 append savings DO need a server update. On kit-installed boxes the upgrade script handles it: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix69-full-test (downloads + SHA-verifies this release, stops both 6262/6264, switches, starts detached; rollback: ~/start-openads.sh rollback; active clients disconnect). Do not deploy this kit\nwithout separately deciding\
+        \ compact frame-only; blank flags on non-frame rows).\nClient master OFF by default. See diagnostics-gate.md. No running server\n\
+        update is required for client-only diagnostics; the cumulative mtfix68 append savings need a mtfix68-or-newer server, already installed on the proving box. On kit-installed boxes the upgrade script handles it: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix69-full-test (downloads + SHA-verifies this release, stops both 6262/6264, switches, starts detached; rollback: ~/start-openads.sh rollback; active clients disconnect). Do not deploy this kit\nwithout separately deciding\
         \ to change your running setup.\nThe full ctest suite passed on\nubuntu-24.04.\n\nKit contents: openads_serverd,\
         \ openads_auth_worker, openads_bench,\nlibace64.so / libopenace64.so, openads.ini.sample, headers, contrib,\n\
         mutual-test-only.hrb (mock V2 auth module), run-mock-test.sh,\nsource-commit.txt, ldd-server.txt, ldd-worker.txt,\

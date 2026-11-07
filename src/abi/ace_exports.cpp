@@ -1615,13 +1615,32 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 #endif
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
-    std::fprintf(hf, "%s.%03lld  %10lld  %-20.20s  %-20.20s  %c  %s\n",
-                 stamp, static_cast<long long>(epoch_ms % 1000), ms,
+    // Only completed wire frames have a measured request/reply duration.
+    // API/context summaries pass -1 and leave this column blank.
+    char duration[32] = {};
+    if (ms >= 0) std::snprintf(duration, sizeof(duration), "%lld", ms);
+    // Called under trace.mu. Only printed rows advance this process-wide
+    // steady-clock interval; it includes application pauses and other work.
+    static bool have_previous_row = false;
+    static std::chrono::steady_clock::time_point previous_row;
+    const auto row_time = std::chrono::steady_clock::now();
+    char gap[32] = {};
+    if (have_previous_row) {
+        const auto gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            row_time - previous_row).count();
+        std::snprintf(gap, sizeof(gap), "%lld", static_cast<long long>(gap_ms));
+    }
+    const int printed = std::fprintf(hf, "%s.%03lld  %10s  %10s  %-20.20s  %-20.20s  %c  %s\n",
+                 stamp, static_cast<long long>(epoch_ms % 1000), duration, gap,
                  who ? who : "-", op ? op : "-", flag,
                  detail ? detail : "");
+    if (printed >= 0) {
+        previous_row = row_time;
+        have_previous_row = true;
+    }
 }
 
-static void cli_trace_line(long long ms, const char* who, const char* op,
+static void cli_trace_line(long long /*elapsed_ms*/, const char* who, const char* op,
                            char /*legacy_flag*/, const char* detail) {
     if (!cli_trace_on()) return;
     // The frame hook writes directly through cli_trace_write_locked.
@@ -1631,7 +1650,7 @@ static void cli_trace_line(long long ms, const char* who, const char* op,
     std::lock_guard<std::mutex> lk(trace.mu);
     FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
     if (!hf) return;
-    cli_trace_write_locked(hf, ms, who, op, ' ', detail);
+    cli_trace_write_locked(hf, -1, who, op, ' ', detail);
     std::fclose(hf);
 }
 
@@ -1813,7 +1832,7 @@ static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
     else tid = 0;
     char buf[200];
     std::snprintf(buf, sizeof(buf),
-                  "wire op=0x%02X tid=%u req=%lu ack=0x%02X ackb=%lu dur_us=%lld conn=%04X",
+                  "wire  op.0x%02X  tid.%-5u  req.%-7lu  ack.0x%02X  ackb.%-7lu  dur_us.%-10lld  conn.%04X",
                   static_cast<unsigned>(op), static_cast<unsigned>(tid),
                   static_cast<unsigned long>(req_bytes),
                   static_cast<unsigned>(rep_op),
@@ -1821,7 +1840,7 @@ static void cli_trace_frame_hook(const void* conn, std::uint8_t op,
                   static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(conn) & 0xFFFFu));
     FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
     if (!hf) return;
-    cli_trace_write_locked(hf, cli_trace_ms(), table.c_str(),
+    cli_trace_write_locked(hf, us / 1000, table.c_str(),
                            cli_trace_opcode(op), 'W', buf);
     std::fclose(hf);
 }

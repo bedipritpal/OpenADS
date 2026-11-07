@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='openads_trace_contract_') as base:
     assert not any((root/f).exists() for f in ('index.log','table.log','audit.log','lock.log')),(transport,mode)
    else:
     wire=(root/'wire.log').read_text()
-    assert 'wire op=' in wire,(transport,mode)
+    assert 'wire  op.' in wire,(transport,mode)
     assert 'SAFE_ALIAS' in wire,(transport,mode)
    print(transport,mode,'PASS',p.stdout.strip())
 
@@ -52,13 +52,22 @@ for transport in ('env','ini','both'):
    p=subprocess.run([exe,'on'],env=env,capture_output=True,text=True,timeout=30)
    assert p.returncode==0,(transport,compact,p.returncode,p.stdout,p.stderr)
    wire=(root/'wire.log').read_text();lines=wire.splitlines()
-   frames=[line for line in lines if 'wire op=' in line]
+   frames=[line for line in lines if 'wire  op.' in line]
    assert all('[' not in line[:85] and ']' not in line[:85] for line in lines),(transport,compact,'decorative column brackets')
    assert frames,(transport,compact)
-   assert [line for line in lines if re.search(r'  W  wire op=',line)]==frames,(transport,compact,'W not exclusive to frames')
-   for line in lines:
-    assert re.search(r'^.{23}  .{10}  .{20}  .{20}  (W| )  ',line),(transport,compact,'nonblank non-W flag',line)
-   assert any('wire op=0x90 ' in line for line in frames),(transport,compact,'missing Seek frame')
+   assert [line for line in lines if re.search(r'  W  wire  op.',line)]==frames,(transport,compact,'W not exclusive to frames')
+   for row_index,line in enumerate(lines):
+    duration=line[25:35].strip();gap=line[37:47].strip()
+    assert (gap=='' if row_index==0 else gap.isdigit()),('row gap',line)
+    if line in frames:
+     us=int(re.search(r'dur_us\.(\d+)',line).group(1))
+     assert duration==str(us//1000),('wire duration',line)
+     for key in ('op.','tid.','req.','ack.','ackb.','dur_us.','conn.'):
+      assert not line[line.index(key)+len(key)].isspace(),('split pair',key,line)
+    else:
+     assert duration=='',('unmeasured summary duration',line)
+    assert re.search(r'^.{23}  .{10}  .{10}  .{20}  .{20}  (W| )  ',line),(transport,compact,'nonblank non-W flag',line)
+   assert any('wire  op.0x90 ' in line for line in frames),(transport,compact,'missing Seek frame')
    if compact:
     assert lines==frames,(transport,'non-frame row in compact',wire)
     assert 'AdsSeek ' not in wire,(transport,'duplicate Seek summary')
@@ -67,7 +76,7 @@ for transport in ('env','ini','both'):
     assert any('AdsSeek ' in line and re.search(r'  AdsSeek +   ',line) for line in lines),(transport,'Seek flag not blank')
    for canary in ('PRIVATE_TABLE_CANARY','PRIVATE_ERROR_CANARY','FIELD_X','TAGX','1234567','openads_trace_gate_probe'):
     assert canary not in wire+p.stderr,(transport,compact,canary)
-   sequences.append([re.search(r'wire op=(.*?) dur_us=',line).group(1) for line in frames])
+   sequences.append([re.search(r'wire  op.(.*?) dur_us.',line).group(1) for line in frames])
  assert sequences[0]==sequences[1],(transport,'wire sequence changed',sequences)
  print(transport,'full_compact_same_frames',len(sequences[0]),'PASS')
 

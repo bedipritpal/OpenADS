@@ -57,7 +57,7 @@ for transport in ('env','ini','both'):
    assert frames,(transport,compact)
    assert [line for line in lines if re.search(r'  W  wire op=',line)]==frames,(transport,compact,'W not exclusive to frames')
    for line in lines:
-    assert re.search(r'^.{23}  \+.{9}ms  .{20}  .{20}  (W| )  ',line),(transport,compact,'nonblank non-W flag',line)
+    assert re.search(r'^.{23}  .{10}  .{20}  .{20}  (W| )  ',line),(transport,compact,'nonblank non-W flag',line)
    assert any('wire op=0x90 ' in line for line in frames),(transport,compact,'missing Seek frame')
    if compact:
     assert lines==frames,(transport,'non-frame row in compact',wire)

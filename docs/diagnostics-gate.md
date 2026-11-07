@@ -42,7 +42,9 @@ OPDUMP's environment selector cannot start sampling while the master is OFF.
 ## mtfix69 trace columns
 
 `cli_trace.log` uses plain fixed-width columns separated by two spaces,
-following the Vouch DBF_ADS log style. Only actual completed frame-hook
+following the Vouch DBF_ADS log style. The elapsed column is a bare
+millisecond number, with no plus sign or repeated ms suffix. Frame
+`dur_us` remains microseconds, unchanged. Only actual completed frame-hook
 rows carry `W`; every API summary, local call and context row has a blank
 flag. Compact mode (`wire_trace_compact=1`) prints only those frame rows.
 Full mode keeps the additional blank-flag rows. No A or L flags are printed.

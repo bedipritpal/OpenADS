@@ -1615,7 +1615,7 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
 #endif
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
-    std::fprintf(hf, "%s.%03lld  +%9lldms  %-20.20s  %-20.20s  %c  %s\n",
+    std::fprintf(hf, "%s.%03lld  %10lld  %-20.20s  %-20.20s  %c  %s\n",
                  stamp, static_cast<long long>(epoch_ms % 1000), ms,
                  who ? who : "-", op ? op : "-", flag,
                  detail ? detail : "");

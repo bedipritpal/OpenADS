@@ -744,8 +744,9 @@ jobs:
       run: ctest --test-dir build/ninja-clang --output-on-failure -C Release
     - name: Exact frozen70 and71 client/server commit-boundary matrix
       shell: bash
-      run: "set -euxo pipefail\nmkdir -p compat70\npython - <<'PYDOWNLOAD'\nimport hashlib,json,pathlib,urllib.request\n\
-        release=json.load(urllib.request.urlopen('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix70-full-test'))\n\
+      run: "set -euxo pipefail\nmkdir -p compat70\npython - <<'PYDOWNLOAD'\nimport hashlib,json,os,pathlib,urllib.request\n\
+        request=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix70-full-test',headers={'Authorization':'Bearer\
+        \ '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})\nrelease=json.load(urllib.request.urlopen(request))\n\
         assets={a['name']:a for a in release['assets']}\nname='openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz'\n\
         for n in (name,name+'.sha256'):\n with urllib.request.urlopen(assets[n]['browser_download_url']) as response:\n\
         \  pathlib.Path('compat70',n).write_bytes(response.read())\nexpected=pathlib.Path('compat70',name+'.sha256').read_text().split()[0]\n\
@@ -757,6 +758,8 @@ jobs:
         python tests/commit_boundary_compat.py --client \"$OLD/libopenace64.so\" --server \"$NEW/tools/serverd/openads_serverd\"\
         \ --expect-fusion 0 | tee compat70/old-new.txt\npython tests/commit_boundary_compat.py --client \"$OLD/libopenace64.so\"\
         \ --server \"$OLD/openads_serverd\" --expect-fusion 0 | tee compat70/old-old.txt\n"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - uses: actions/upload-artifact@v4
       if: always()
       with:

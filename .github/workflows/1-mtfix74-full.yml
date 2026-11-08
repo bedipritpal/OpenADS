@@ -36,7 +36,7 @@ jobs:
         & 7z x "$env:RUNNER_TEMP/qt492.7z" "-o$env:RUNNER_TEMP/qt492" -y
 
 
-        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+        Invoke-WebRequest -Headers @{Accept=''application/octet-stream''} ''https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966370''
         -OutFile "$env:RUNNER_TEMP/winlibs.7z"
 
         if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne ''019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907''){throw
@@ -45,7 +45,7 @@ jobs:
         & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
 
 
-        Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r4nvptx/winlibs-i686-posix-dwarf-gcc-10.2.0-mingw-w64-8.0.0-r4nvptx.7z''
+        Invoke-WebRequest -Headers @{Accept=''application/octet-stream''} ''https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/29234401''
         -OutFile "$env:RUNNER_TEMP/owner2351.7z"
 
         if((Get-FileHash "$env:RUNNER_TEMP/owner2351.7z" -Algorithm SHA256).Hash.ToLower() -ne ''5e18f786047c52b40392fe57f966bcb1a8acbc95d61da10796b13df63b9a1d95''){throw
@@ -597,7 +597,7 @@ jobs:
         '
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
       shell: pwsh
-      run: 'Invoke-WebRequest ''https://github.com/brechtsanders/winlibs_mingw/releases/download/10.2.0-11.0.0-8.0.0-r8/winlibs-x86_64-posix-seh-gcc-10.2.0-mingw-w64-8.0.0-r8.7z''
+      run: 'Invoke-WebRequest -Headers @{Accept=''application/octet-stream''} ''https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472''
         -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
 
         if((Get-FileHash "$env:RUNNER_TEMP/winlibs64.7z" -Algorithm SHA256).Hash.ToLower() -ne ''1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74''){throw
@@ -846,8 +846,27 @@ jobs:
         git log -1 --oneline
 
         '
-    - name: Install Ninja
-      uses: seanmiddleditch/gha-setup-ninja@v6
+    - name: Install exact Ninja1.12.1 via verified API asset
+      shell: bash
+      run: 'set -euo pipefail
+
+        curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/ninja-build/ninja/releases/assets/167333509
+        -o "$RUNNER_TEMP/ninja.zip"
+
+        echo ''6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  ''"$RUNNER_TEMP/ninja.zip"
+        | shasum -a 256 -c -
+
+        mkdir -p "$RUNNER_TEMP/ninja-exact"
+
+        unzip "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja-exact"
+
+        chmod +x "$RUNNER_TEMP/ninja-exact/ninja"
+
+        test "$("$RUNNER_TEMP/ninja-exact/ninja" --version)" = 1.12.1
+
+        echo "$RUNNER_TEMP/ninja-exact" >> "$GITHUB_PATH"
+
+        '
     - name: Cache Harbour SDK (Linux)
       uses: actions/cache@v4
       with:
@@ -889,7 +908,7 @@ jobs:
         request=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix70-full-test',headers={'Authorization':'Bearer\
         \ '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})\nrelease=json.load(urllib.request.urlopen(request))\n\
         assets={a['name']:a for a in release['assets']}\nname='openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz'\n\
-        for n in (name,name+'.sha256'):\n with urllib.request.urlopen(assets[n]['browser_download_url'])\
+        for n in (name,name+'.sha256'):\n with urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'}))\
         \ as response:\n  pathlib.Path('compat70',n).write_bytes(response.read())\nexpected=pathlib.Path('compat70',name+'.sha256').read_text().split()[0]\n\
         assert hashlib.sha256(pathlib.Path('compat70',name).read_bytes()).hexdigest()==expected\nPYDOWNLOAD\n\
         tar xzf compat70/openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz -C compat70\nOLD=\"$PWD/compat70/openads-1.09.75-mtfix70-full-test-linux-x64\"\
@@ -916,7 +935,7 @@ jobs:
         req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix71-full-test',headers={'Authorization':'Bearer\
         \ '+os.environ['GITHUB_TOKEN']})\nr=json.load(urllib.request.urlopen(req));assets={x['name']:x\
         \ for x in r['assets']};name='openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz'\nfor n in (name,name+'.sha256'):\n\
-        \ pathlib.Path('compat71',n).write_bytes(urllib.request.urlopen(assets[n]['browser_download_url']).read())\n\
+        \ pathlib.Path('compat71',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})).read())\n\
         assert hashlib.sha256(pathlib.Path('compat71',name).read_bytes()).hexdigest()==pathlib.Path('compat71',name+'.sha256').read_text().split()[0]=='74fd4ed1b0b4160b3ec8aca95ad47d8198c133d6819428a268d98573eee1eb08'\n\
         PYDOWNLOAD\ntar xzf compat71/openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz -C compat71\n\
         OLD=\"$PWD/compat71/openads-1.09.75-mtfix71-full-test-linux-x64\"\nNEW=\"$PWD/build/ninja-clang\"\
@@ -940,7 +959,7 @@ jobs:
         req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix72-full-test',headers={'Authorization':'Bearer\
         \ '+os.environ['GITHUB_TOKEN']})\nr=json.load(urllib.request.urlopen(req));assets={x['name']:x\
         \ for x in r['assets']};name='openads-1.09.75-mtfix72-full-test-linux-x64.tar.gz'\nfor n in (name,name+'.sha256'):\n\
-        \ pathlib.Path('compat72',n).write_bytes(urllib.request.urlopen(assets[n]['browser_download_url']).read())\n\
+        \ pathlib.Path('compat72',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})).read())\n\
         assert hashlib.sha256(pathlib.Path('compat72',name).read_bytes()).hexdigest()==pathlib.Path('compat72',name+'.sha256').read_text().split()[0]=='13cb2b12613bb7a999b1bec83eaccb5c13d37a8d50922bbe8e70a7fc1aa241bf'\n\
         PYDOWNLOAD\ntar xzf compat72/openads-1.09.75-mtfix72-full-test-linux-x64.tar.gz -C compat72\n\
         OLD=\"$PWD/compat72/openads-1.09.75-mtfix72-full-test-linux-x64\"\nNEW=\"$PWD/build/ninja-clang\"\
@@ -964,7 +983,7 @@ jobs:
         req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix73-full-test',headers={'Authorization':'Bearer\
         \ '+os.environ['GH_TOKEN']})\nr=json.load(urllib.request.urlopen(req));assets={x['name']:x for\
         \ x in r['assets']};name='openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz'\nfor n in (name,name+'.sha256'):\n\
-        \ pathlib.Path('compat73',n).write_bytes(urllib.request.urlopen(assets[n]['browser_download_url']).read())\n\
+        \ pathlib.Path('compat73',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})).read())\n\
         assert hashlib.sha256(pathlib.Path('compat73',name).read_bytes()).hexdigest()==pathlib.Path('compat73',name+'.sha256').read_text().split()[0]=='332ea631dddea014e4e8203f7f5406948816dd9a0150f54c77e846c6858ae84a'\n\
         PYDOWNLOAD\ntar xzf compat73/openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz -C compat73\n\
         OLD=\"$PWD/compat73/openads-1.09.75-mtfix73-full-test-linux-x64\"\nNEW=\"$PWD/build/ninja-clang\"\
@@ -1110,8 +1129,27 @@ jobs:
 
         '
       shell: bash
-    - name: Set up Ninja
-      uses: seanmiddleditch/gha-setup-ninja@v6
+    - name: Install exact Ninja1.12.1 via verified API asset
+      shell: bash
+      run: 'set -euo pipefail
+
+        curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/ninja-build/ninja/releases/assets/167333196
+        -o "$RUNNER_TEMP/ninja.zip"
+
+        echo ''89a287444b5b3e98f88a945afa50ce937b8ffd1dcc59c555ad9b1baf855298c9  ''"$RUNNER_TEMP/ninja.zip"
+        | shasum -a 256 -c -
+
+        mkdir -p "$RUNNER_TEMP/ninja-exact"
+
+        unzip "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja-exact"
+
+        chmod +x "$RUNNER_TEMP/ninja-exact/ninja"
+
+        test "$("$RUNNER_TEMP/ninja-exact/ninja" --version)" = 1.12.1
+
+        echo "$RUNNER_TEMP/ninja-exact" >> "$GITHUB_PATH"
+
+        '
     - name: Configure
       run: "cmake --preset default \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON \\\
         \n      -DOPENADS_VERSION_FORCE=$KIT_VERSION \\\n      -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\"\

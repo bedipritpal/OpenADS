@@ -36,7 +36,7 @@ struct KeySkipFixture {
   REQUIRE(AdsGetIndexHandleByOrder(table,1,&index)==0);
   REQUIRE(AdsSetIndexOrderByHandle(table,index)==0);
  }
- ~KeySkipFixture(){if(conn)AdsDisconnect(conn);server.stop();std::error_code ec;fs::remove_all(dir,ec);}
+ ~KeySkipFixture(){if(table)CHECK(AdsCloseTable(table)==0);if(conn)CHECK(AdsDisconnect(conn)==0);server.stop();std::error_code ec;fs::remove_all(dir,ec);}
  unsigned recno(){UNSIGNED32 n=0;REQUIRE(AdsGetRecordNum(table,0,&n)==0);return n;}
  void edit(unsigned row,const char* key){REQUIRE(AdsGotoRecord(table,row)==0);REQUIRE(AdsLockRecord(table,row)==0);REQUIRE(AdsSetString(table,(UNSIGNED8*)"K",(UNSIGNED8*)key,3)==0);}
  std::string disk_key(unsigned row){std::ifstream f(dir/"K.DBF",std::ios::binary);std::vector<unsigned char>b((std::istreambuf_iterator<char>(f)),{});auto h=b[8]+256*b[9],r=b[10]+256*b[11];return std::string((char*)b.data()+h+(row-1)*r+1,3);}

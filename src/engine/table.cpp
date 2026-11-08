@@ -306,6 +306,13 @@ util::Result<void> Table::sync_all_indexes_(
         const std::string& cond = idx->condition();
         const bool include =
             cond.empty() || evaluate_index_expr_truthy(*this, cond);
+        // A key replacement invalidates the B-tree cursor. Refresh the
+        // physical row's NEW key after all index maintenance, as Harbour
+        // hb_cdxCurKeyRefresh does before Skip. Also covers explicit
+        // WriteRecord followed by Skip: the edit need not still be hot.
+        if (!include) idx->require_record_reanchor(false);
+        else if (!s.prev_included || prev_key != new_key)
+            idx->require_record_reanchor();
         // Erase prior (recno, prev_key).
         //
         // On a genuine UPDATE of an indexed record the old entry MUST
@@ -891,6 +898,14 @@ util::Result<void> Table::goto_record(std::uint32_t recno) {
                 idx->invalidate_cursor();
             }
         }
+        // An absolute landing owns this view's cursor now. A physical
+        // Goto to a row outside a FOR tag is a legitimate missing key;
+        // leave its insertion-point semantics to the existing Skip path.
+        if (sk && ((sk.value().positioned && sk.value().recno == recno) ||
+            (!idx->condition().empty() &&
+             !evaluate_index_expr_truthy(*this, idx->condition())))) {
+            idx->require_record_reanchor(false);
+        }
     }
     return {};
 }
@@ -954,6 +969,26 @@ util::Result<void> Table::skip(std::int32_t delta) {
     // Settle dirty buffer before cursor motion (GoCold). load_record_
     // also commits, but EOF/BOF exits never load.
     if (auto r = commit_dirty_record(); !r) return r.error();
+    if (order_ && order_->index() &&
+        order_->index()->record_reanchor_pending() && state_ == State::Positioned) {
+        auto* idx = order_->index();
+        const auto key = compute_index_key_(idx);
+        auto at = idx->seek_key(key, false);
+        if (!at) { idx->invalidate_cursor(); return at.error(); }
+        // Equal keys can belong to many physical rows. Do not anchor on
+        // the first duplicate or impose an arbitrary duplicate limit.
+        while (at.value().positioned && at.value().recno != recno_ &&
+               idx->current_key() == key) {
+            at = idx->next();
+            if (!at) { idx->invalidate_cursor(); return at.error(); }
+        }
+        if (!at.value().positioned || at.value().recno != recno_) {
+            idx->invalidate_cursor();
+            return util::Error{5044, 0,
+                "updated record not found in active index", path_};
+        }
+        idx->require_record_reanchor(false);
+    }
     // Leaving the record ends the append key-sync window (see
     // append_pending_recno_ in table.h).
     append_pending_recno_ = 0;

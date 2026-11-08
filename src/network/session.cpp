@@ -2688,7 +2688,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             const std::uint16_t lookahead =
                 want_lookahead ? next_lookahead(id, depth_hint, dir) : 0;
             if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
-                (void)AdsSkip(cit->second, step);
+                const auto rc = AdsSkip(cit->second, step);
+                if (rc != 0) { reply = err("Skip: cursor failed", rc); break; }
                 reply.opcode = Opcode::SkipAck;
                 pack_row_trailer(reply, id, lookahead, dir);
                 break;
@@ -2709,7 +2710,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             ADSHANDLE hord =
                 ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
             if (hord != 0) {
-                (void)AdsSkip(hord, step);
+                const auto rc = AdsSkip(hord, step);
+                if (rc != 0) { reply = err("Skip: ordered failed", rc); break; }
                 { UNSIGNED16 _b = 9, _e = 9; AdsAtBOF(hord, &_b); AdsAtEOF(hord, &_e);
                   WTRACE("[wire] Skip twin hord bof=%u eof=%u\n", (unsigned)_b, (unsigned)_e); }
                 reply.opcode = Opcode::SkipAck;
@@ -2726,7 +2728,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                   WTRACE("[wire] Skip end id=%u twin bof=%u eof=%u\n", id, (unsigned)_b, (unsigned)_e); }
                 break;
             }
-            (void)tbl->skip(step);
+            auto skipped = tbl->skip(step);
+            if (!skipped) {
+                reply = err("Skip: failed", static_cast<UNSIGNED32>(skipped.error().code));
+                break;
+            }
             reply.opcode = Opcode::SkipAck;
             pack_row_trailer(reply, id, lookahead, dir);
             pack_bound_trailer(reply, id);

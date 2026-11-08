@@ -346,6 +346,7 @@ add_executable(openads_unit_tests
     unit/abi_fetch_where_test.cpp
     unit/abi_wire_caller_test.cpp
     unit/abi_remote_bottom_keycount_test.cpp
+    unit/abi_dirty_key_skip_test.cpp
     unit/abi_remote_setfields_commit_test.cpp
     unit/network_setfields_test.cpp
     unit/network_open_warm_test.cpp

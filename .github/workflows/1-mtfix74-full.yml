@@ -926,7 +926,8 @@ jobs:
         \n} >> \"$GITHUB_ENV\"\n"
     - name: Configure
       shell: bash
-      run: 'cmake --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+      run: 'cmake -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib"
+        --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
 
         '
     - name: Build
@@ -1193,8 +1194,9 @@ jobs:
 
         '
     - name: Configure
-      run: "cmake --preset default \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON \\\
-        \n      -DOPENADS_VERSION_FORCE=$KIT_VERSION \\\n      -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\"\
+      run: "cmake -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=\"$PWD/third_party/nlohmann_json\" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB=\"\
+        $PWD/third_party/cpp_httplib\" --preset default \\\n      -DOPENADS_WITH_TLS=ON \\\n      -DOPENADS_WITH_HTTP=ON\
+        \ \\\n      -DOPENADS_VERSION_FORCE=$KIT_VERSION \\\n      -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\"\
         \ \\\n      -DCMAKE_CXX_FLAGS=\"-I$PWD/third_party/minizip\"\n\n"
       shell: bash
     - name: Build

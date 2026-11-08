@@ -5,7 +5,7 @@ exe=sys.argv[1]
 import re
 source=pathlib.Path(__file__).resolve().parent.parent/'src/abi/ace_exports.cpp'
 if source.exists():
- text=source.read_text()
+ text=source.read_text(encoding='utf-8')
  entries=re.findall(r'(?:UNSIGNED32|UNSIGNED16|UNSIGNED8|SIGNED32|SIGNED16|SIGNED8|void|VOID|double|DOUBLE|int|BOOL)\s+ENTRYPOINT\s+(\w+)\s*\([^;{}]*\)\s*\{',text)
  scopes=re.findall(r'wire_caller::Entry wire_entry\("([A-Za-z0-9_]+)"',text)
  assert entries==scopes,('public caller boundary coverage',len(entries),len(scopes))

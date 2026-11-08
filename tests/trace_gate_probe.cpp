@@ -1,6 +1,7 @@
 // Synthetic, isolated-process regression probe. Run with all diagnostic envs set.
 #include "openads/ace.h"
 #include "network/server.h"
+#include "network/client.h"
 #include "util/log.h"
 #include "mgmt/error_log.h"
 #include <filesystem>
@@ -15,7 +16,7 @@ void checked(UNSIGNED32 rc,int line){if(rc)throw std::runtime_error("ACE failure
 int main(int argc,char**argv){
  std::string mode=argc>1?argv[1]:"default";
  bool was= openads::util::logging_enabled();
- if(mode=="on"||mode=="lifecycle")ok(OAdsSetLogging(1));
+ if(mode=="on"||mode=="lifecycle"||mode=="caller")ok(OAdsSetLogging(1));
  else if(mode=="off")ok(OAdsSetLogging(0));
  if(mode=="on" && !openads::util::logging_enabled())return 8;
  auto dir=fs::temp_directory_path()/"openads_trace_gate_probe";fs::remove_all(dir);fs::create_directories(dir);
@@ -30,6 +31,13 @@ int main(int argc,char**argv){
  ok(AdsGotoTop(t));double val=0;ok(AdsGetDouble(t,fld,&val));if(val!=1234567)return 4;
  ok(AdsGetIndexHandle(t,tag,&ix));ok(AdsGotoTop(ix));
  UNSIGNED16 found=0;ok(AdsSeek(ix,reinterpret_cast<UNSIGNED8*>(&val),sizeof(val),ADS_DOUBLEKEY,ADS_HARDSEEK,&found));if(!found)return 9;
+ if(mode=="caller"){
+  // Existing first field probes immediately; the repeated assignment batches.
+  ok(AdsAppendRecord(t));ok(AdsSetDouble(t,fld,1234567));ok(AdsSetDouble(t,fld,1234567));ok(AdsWriteRecord(t));ok(AdsUnlockTable(t));
+  ok(AdsAppendRecord(t));ok(AdsSetDouble(t,fld,1234567));ok(AdsSetDouble(t,fld,1234567));ok(AdsUnlockTable(t));
+  UNSIGNED32 count=0;ok(AdsGetRecordCount(t,0,&count));ok(AdsGotoRecord(t,1));
+  ok(AdsGotoBottom(ix));
+ }
  if(mode=="lifecycle"){
   ok(OAdsSetLogging(0));auto path=std::getenv("OPENADS_WIRE_TRACE_FILE");auto size=fs::exists(path)?fs::file_size(path):0;
   ok(AdsSkip(t,0));ok(AdsRefreshRecord(t));if((fs::exists(path)?fs::file_size(path):0)!=size)return 5;
@@ -37,7 +45,14 @@ int main(int argc,char**argv){
  }
  ok(AdsCloseTable(t));UNSIGNED8 alias[]="SAFE_ALIAS";ok(AdsOpenTable(c,name,alias,ADS_CDX,0,0,0,0,&t));ok(AdsGotoTop(t));ok(AdsCloseTable(t));
  openads::mgmt::ErrorLog::instance().log(5000,"ABI",99,"PRIVATE_ERROR_CANARY");
- ok(AdsDisconnect(c));server.stop();fs::remove_all(dir);
+ ok(AdsDisconnect(c));
+ if(mode=="caller"){
+  // No ACE entry at this direct transport use: do not reuse the last API.
+  openads::network::RemoteConnection direct;
+  if(!direct.connect("127.0.0.1",server.port(),ds))return 10;
+  direct.disconnect();
+ }
+ server.stop();fs::remove_all(dir);
  std::cout<<"initial_master="<<was<<" mode="<<mode<<" values_unchanged=1\n";
  return mode=="default" && was?7:0;
 }

@@ -53,3 +53,33 @@ remove requests. Existing masking and frame-coverage limits are unchanged:
 only completed request/reply pairs through RemoteConnection::request are
 covered; failed/incomplete pairs and separate auth transport are not a total
 network-traffic census.
+
+## mtfix73 ACE caller column
+
+One 48-character fixed-width column follows the W/blank flag. Completed
+frames show the outer synchronous ACE entry API plus a static dispatch
+reason, for example AdsWriteRecord/batch+commit,
+AdsUnlockTable/buffered-sets or AdsGotoBottom/internal-keycount.
+Request is the default reason: it does not claim a literal direct application
+call. Summary rows leave this column as a dash. Uninstrumented/direct
+transport callers show unknown, never a previous API's label.
+
+The detail includes process-local call and logical thread correlation IDs,
+and the currently executing nested ACE API. Nested calls retain their
+outer trigger's call ID; return and exception unwind restore prior context.
+IDs can have gaps, are not record IDs, and are not stable across process
+restarts or separate DLL copies. The IDs do not establish event ordering
+between threads. A batch labels what triggered its dispatch, not where its
+buffered assignments originated. Synchronous same-thread dispatch is covered;
+background/cross-thread work needs explicit context or remains unknown.
+
+This does not identify a Vouch PRG function/line, an RDD source call or a
+native call stack, and cannot by itself distinguish application from RDD.
+No stack walking, source paths, arguments or payloads are added. Existing
+masking, master OFF/default, opt-in and completed-frame limits still apply.
+All 663 public entries in ace_exports.cpp are scoped; other uninstrumented
+entry surfaces are not claimed covered. Disabled entries do no ID allocation
+or scope-stack update; the master/selector checks still have a cost. Enabled
+entries add TLS context, ID allocation on outer entries and longer log rows.
+No zero-overhead or production speed claim. No wire/protocol/server storage,
+Vouch source, commit, lock, navigation or count policy changes.

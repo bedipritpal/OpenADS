@@ -1,6 +1,18 @@
 """Generated-data process matrix; no customer source or data."""
 import os, pathlib, subprocess, sys, tempfile
 exe=sys.argv[1]
+# Fail if a newly added public entry escapes the scoped diagnostic boundary.
+import re
+source=pathlib.Path(__file__).resolve().parent.parent/'src/abi/ace_exports.cpp'
+if source.exists():
+ text=source.read_text()
+ entries=re.findall(r'(?:UNSIGNED32|UNSIGNED16|UNSIGNED8|SIGNED32|SIGNED16|SIGNED8|void|VOID|double|DOUBLE|int|BOOL)\s+ENTRYPOINT\s+(\w+)\s*\([^;{}]*\)\s*\{',text)
+ scopes=re.findall(r'wire_caller::Entry wire_entry\("([A-Za-z0-9_]+)"',text)
+ assert entries==scopes,('public caller boundary coverage',len(entries),len(scopes))
+ reasons=re.findall(r'wire_caller::Reason wire_reason\("([A-Za-z0-9_+\-]+)"',text)
+ assert max(len(api+'/'+reason) for api in entries for reason in reasons)<=48
+ print('caller public_entry_scope_coverage',len(entries),'PASS')
+
 with tempfile.TemporaryDirectory(prefix='openads_trace_contract_') as base:
  for transport in ('env','ini','both'):
   for mode in ('default','off','on','lifecycle','late'):
@@ -55,7 +67,7 @@ for transport in ('env','ini','both'):
    frames=[line for line in lines if 'wire  op.' in line]
    assert all('[' not in line[:85] and ']' not in line[:85] for line in lines),(transport,compact,'decorative column brackets')
    assert frames,(transport,compact)
-   assert [line for line in lines if re.search(r'  W  wire  op.',line)]==frames,(transport,compact,'W not exclusive to frames')
+   assert [line for line in lines if re.search(r'  W  .{48}  wire  op.',line)]==frames,(transport,compact,'W not exclusive to frames')
    for row_index,line in enumerate(lines):
     duration=line[25:35].strip();gap=line[37:47].strip()
     assert (gap=='' if row_index==0 else gap.isdigit()),('row gap',line)
@@ -66,7 +78,7 @@ for transport in ('env','ini','both'):
       assert not line[line.index(key)+len(key)].isspace(),('split pair',key,line)
     else:
      assert duration=='',('unmeasured summary duration',line)
-    assert re.search(r'^.{23}  .{10}  .{10}  .{20}  .{20}  (W| )  ',line),(transport,compact,'nonblank non-W flag',line)
+    assert re.search(r'^.{23}  .{10}  .{10}  .{20}  .{20}  (W| )  .{48}  ',line),(transport,compact,'nonblank non-W flag',line)
    assert any('wire  op.0x90 ' in line for line in frames),(transport,compact,'missing Seek frame')
    if compact:
     assert lines==frames,(transport,'non-frame row in compact',wire)
@@ -119,3 +131,26 @@ if len(sys.argv)>2:
   assert not list((root/'errors').glob('*'))
   assert not (root/'audit.log').exists()
   print('standalone_server_OFF_env_OPDUMP_and_wire PASS')
+
+# Provenance describes the synchronous ACE trigger, not PRG/RDD source lines.
+with tempfile.TemporaryDirectory(prefix='openads_caller_contract_') as base:
+ root=pathlib.Path(base);env=os.environ.copy()
+ env.update(OPENADS_INI=str(root/'empty.ini'),OPENADS_WIRE_TRACE='1',OPENADS_WIRE_TRACE_COMPACT='1',OPENADS_WIRE_TRACE_FILE=str(root/'wire.log'),OPENADS_NO_BOTTOM_KEYCOUNT_CAP='1')
+ (root/'empty.ini').write_text('')
+ p=subprocess.run([exe,'caller'],env=env,capture_output=True,text=True,timeout=30)
+ assert p.returncode==0,('caller',p.returncode,p.stdout,p.stderr)
+ rows=(root/'wire.log').read_text().splitlines()
+ assert rows and all('wire  op.' in x for x in rows)
+ assert any('AdsWriteRecord/batch+commit' in x and 'op.0x5E' in x for x in rows),rows
+ assert any('AdsUnlockTable/buffered-sets' in x and 'op.0x5E' in x for x in rows),rows
+ assert any('AdsGetRecordCount/request' in x and 'op.0x46' in x for x in rows),rows
+ assert any('AdsGotoRecord/request' in x and 'op.0x58' in x for x in rows),rows
+ assert any('AdsGotoBottom/internal-keycount' in x and 'op.0xB0' in x for x in rows),rows
+ unknown=[line for line in rows if '  unknown ' in line]
+ assert len(unknown)==2,unknown
+ assert all('call.0  thread.0  api.unknown' in line for line in unknown),unknown
+ for line in rows:
+  if line in unknown:continue
+  assert re.search(r'call\.[1-9][0-9]*  thread\.[1-9][0-9]*  api\.[A-Za-z0-9_]+$',line),line
+  assert 'unknown' not in line,line
+ print('caller trigger_batch_commit_unlock_count_bottom_unknown PASS')

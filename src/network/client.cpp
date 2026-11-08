@@ -1298,9 +1298,13 @@ util::Result<void> RemoteConnection::set_field(std::uint32_t id,
 
 util::Result<void> RemoteConnection::set_fields_batch(
         std::uint32_t id,
-        const std::vector<std::pair<std::string, std::string>>& fields) {
+        const std::vector<std::pair<std::string, std::string>>& fields,
+        bool commit) {
+    if (commit && !server_setfields_commit()) {
+        return util::Error{5000, 0, "SetFields: commit not supported", ""};
+    }
     note_nav_frame();
-    if (fields.empty()) return {};
+    if (fields.empty() && !commit) return {};
     if (fields.size() > kMaxWireFields) {
         return util::Error{5000, 0,
             "SetFields: too many fields", ""};
@@ -1323,9 +1327,14 @@ util::Result<void> RemoteConnection::set_fields_batch(
         req.payload.push_back(static_cast<std::uint8_t>((vlen >> 24) & 0xFFu));
         req.payload.insert(req.payload.end(), value.begin(), value.end());
     }
+    if (commit) req.payload.push_back(1);
     auto rep = request(req);
     if (!rep) return rep.error();
-    if (rep.value().opcode != Opcode::SetFieldsAck) {
+    if (rep.value().opcode != Opcode::SetFieldsAck ||
+        (commit && rep.value().payload != std::vector<std::uint8_t>{1})) {
+        // A missing/partial commit acknowledgement is ambiguous. Do not
+        // replay writes or send a compensating flush on this connection.
+        if (commit) transport_->close();
         return util::Error{5000, 0, "SetFields: server error", ""};
     }
     return {};

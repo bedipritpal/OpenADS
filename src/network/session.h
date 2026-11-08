@@ -302,6 +302,8 @@ private:
         UNSIGNED32 code = 0;
         bool       column_missing = false;
     };
+    util::Result<void> flush_table_record(std::uint32_t id,
+        openads::engine::Table* tbl);
     FieldWriteResult write_fields(std::uint32_t id,
         openads::engine::Table* tbl,
         const std::vector<std::pair<std::string, std::string>>& pairs);

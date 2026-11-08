@@ -110,6 +110,10 @@ public:
         return (server_caps_ & kCapSetFieldsBatch) != 0;
     }
 
+    bool server_setfields_commit() const noexcept {
+        return (server_caps_ & kCapSetFieldsCommit) != 0;
+    }
+
     // Server flushes inside CloseAllIndexes (see kCapFlushInCloseAll):
     // a deferred FlushFileBuffers merges into that single frame.
     bool server_flush_in_closeall() const noexcept {
@@ -528,7 +532,8 @@ public:
     // Empty input is a no-op success (no frame sent).
     util::Result<void>          set_fields_batch(
         std::uint32_t id,
-        const std::vector<std::pair<std::string, std::string>>& fields);
+        const std::vector<std::pair<std::string, std::string>>& fields,
+        bool commit = false);
     // M12.25 — raw DBF record image at the current cursor position.
     util::Result<std::vector<std::uint8_t>> get_record(std::uint32_t id);
     util::Result<std::uint32_t> get_record_crc(std::uint32_t id);

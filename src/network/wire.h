@@ -712,6 +712,14 @@ inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
 // Server behavior is otherwise unchanged: the auto-lock already exists.
 inline constexpr std::uint32_t kCapAppendMetadata = 0x00000800u;
 
+// Commit-boundary SetFields extension. With this capability only, a client
+// may append one byte (1) after the ordinary SetFields body. The server
+// applies the ordered fields, stops on error, then runs the SAME FlushTable
+// work. Success is SetFieldsAck payload {1}; an empty legacy ack is NOT
+// proof of commit and must never trigger a replay. Ordinary SetFields and
+// every older peer keep their existing packet/commit sequence.
+inline constexpr std::uint32_t kCapSetFieldsCommit = 0x00001000u;
+
 namespace OpenTableAckSections {
     constexpr std::uint8_t kRecordLength = 3;
     constexpr std::uint8_t kProductionIndex = 4;

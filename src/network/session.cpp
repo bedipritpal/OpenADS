@@ -1539,6 +1539,17 @@ UNSIGNED32 Session::install_table_order(std::uint32_t tid,
     return openads::AE_SUCCESS;
 }
 
+util::Result<void> Session::flush_table_record(std::uint32_t id,
+        openads::engine::Table* tbl) {
+    // Preserve FlushTable's twin-before-engine ordering. The pre-existing
+    // twin flush return policy is unchanged by this packet fusion.
+    if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+        (void)AdsFlushFileBuffers(hit->second);
+    }
+    tbl->set_pending_append(false);
+    return tbl->flush();
+}
+
 Session::FieldWriteResult Session::write_fields(std::uint32_t id,
         openads::engine::Table* tbl,
         const std::vector<std::pair<std::string, std::string>>& pairs) {
@@ -2121,6 +2132,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             {
                 std::uint32_t scaps =
                     openads::network::kCapSetFieldsBatch |
+                    openads::network::kCapSetFieldsCommit |
                     openads::network::kCapFlushInCloseAll |
                     openads::network::kCapNavOrderFuse |
                     openads::network::kCapFlushTableDurable |
@@ -2130,6 +2142,10 @@ DispatchResult Session::dispatch(const Frame& f) {
                 // that neither echoes kCapLockedRow nor answers the
                 // current-record flag with a row trailer, so the client
                 // negotiates down to the refresh-after-lock fallback.
+                // Compatibility test: emulate a server predating this
+                // commit extension without changing ordinary SetFields.
+                if (std::getenv("OPENADS_NO_SETFIELDS_COMMIT_CAP") != nullptr)
+                    scaps &= ~openads::network::kCapSetFieldsCommit;
                 if (std::getenv("OPENADS_NO_LOCKED_ROW_CAP") != nullptr)
                     scaps &= ~openads::network::kCapLockedRow;
                 reply.payload.push_back(
@@ -4999,12 +5015,23 @@ DispatchResult Session::dispatch(const Frame& f) {
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("SetFields: lookup failed"); break; }
 
+            const bool commit = f.payload.size() == pos + 1 &&
+                f.payload[pos] == 1;
             auto wr = write_fields(id, tbl, pairs);
-            if (wr.code != 0) {
+            if (wr.code != 0 || (commit && wr.column_missing)) {
                 reply = wr.column_missing
                     ? err("SetFields: column not found")
                     : err("SetFields: write failed", wr.code);
                 break;
+            }
+            if (commit) {
+                // No flush after any failed field. This is not a transaction:
+                // the applied prefix/error behavior remains ordered writes.
+                auto flushed = flush_table_record(id, tbl);
+                if (!flushed) {
+                    reply = err("FlushTable: flush failed"); break;
+                }
+                reply.payload.push_back(1);
             }
             reply.opcode = Opcode::SetFieldsAck;
             break;
@@ -5110,16 +5137,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("FlushTable: lookup failed"); break; }
-            // Flush the ABI twin first (holds open index bags), then engine.
-            if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
-                (void)AdsFlushFileBuffers(hit->second);
-            }
-            // Remote AdsWriteRecord lands here: the append is now committed,
-            // so drop the pending-append marker (mirrors the local
-            // AdsWriteRecord which clears it). Without this the flag stayed
-            // set for the life of the server-side table.
-            tbl->set_pending_append(false);
-            auto r = tbl->flush();
+            auto r = flush_table_record(id, tbl);
             if (!r) { reply = err("FlushTable: flush failed"); break; }
             reply.opcode = Opcode::FlushTableAck;
             break;

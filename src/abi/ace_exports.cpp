@@ -14088,7 +14088,23 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
         // pages, 1 RTT each, 16 of them after a Vouch voucher save.
         const bool had_writes =
             !rt->pending_sets.empty() || rt->write_dirty;
-        if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
+        bool committed_batch = false;
+        if (rt->pending_sets.size() > 1 && rt->cursor_lag == 0 &&
+            !rt->pending_order && !rt->flush_file_pending &&
+            !rt->close_all_indexes_pending &&
+            rt->conn->server_setfields_commit()) {
+            const std::vector<std::pair<std::string, std::string>> rest(
+                rt->pending_sets.begin() + 1, rt->pending_sets.end());
+            auto applied = rt->conn->set_fields_batch(rt->id, rest, true);
+            // Same disposition as the old SetFields stage on error,
+            // including transport ambiguity: never retry a partial apply.
+            rt->pending_sets.clear();
+            rt->row_valid = false;
+            if (!applied) return fail(applied.error());
+            committed_batch = true;
+        } else {
+            if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;
+        }
         rt->row_valid = false;                      // M12.17 cache invalidation
         // A write can move the row in/out of a conditional order or
         // scope: the cached key count may have changed with it.
@@ -14105,8 +14121,10 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
             cli_trace_tbl(rt, 'L', "AdsWriteRecord", "clean: flush skipped");
             return ok();
         }
-        auto r = rt->conn->flush_table(rt->id);
-        if (!r) return fail(r.error());
+        if (!committed_batch) {
+            auto r = rt->conn->flush_table(rt->id);
+            if (!r) return fail(r.error());
+        }
         cli_trace_tbl(rt, 'W', "AdsWriteRecord", "flushed%s",
                       rt->conn->server_flush_table_durable()
                           ? " (durable)" : " (file-buffers follow)");

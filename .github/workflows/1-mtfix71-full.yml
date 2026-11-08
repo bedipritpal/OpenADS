@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix71-full-test
-  PINNED_SOURCE: f45668a0e564849d70c16398eb430b567a97c8d4
+  PINNED_SOURCE: 0c221f84725553bc66a82e73daac41e6f7985a1d
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -20,9 +20,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor f45668a0e564849d70c16398eb430b567a97c8d4 HEAD
+        git merge-base --is-ancestor 0c221f84725553bc66a82e73daac41e6f7985a1d HEAD
 
-        test -z "$(git diff --name-only f45668a0e564849d70c16398eb430b567a97c8d4 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 0c221f84725553bc66a82e73daac41e6f7985a1d HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
@@ -430,7 +430,7 @@ jobs:
         \ then FlushTable. No Vouch source change, new C code, on-disk format change, lock or count policy change.\n\
         Failed fields stop the ordered batch without commit; applied prefixes are not rolled back. Missing/malformed/lost\
         \ commit ACK returns an error and never replays writes. Existing per-setter buffering limitations and ignored\
-        \ twin-flush result are unchanged, not certified by this candidate.\nProduct source: f45668a0e564849d70c16398eb430b567a97c8d4.\n\
+        \ twin-flush result are unchanged, not certified by this candidate.\nProduct source: 0c221f84725553bc66a82e73daac41e6f7985a1d.\n\
         \nTrace columns are plain aligned with two-space separators and two bare millisecond columns: wire-call\
         \ duration then preceding printed-row interval; contiguous dot key/value pairs. W marks actual completed\
         \ frame rows only; all API/local/context flags are blank. Set wire_trace_compact=1 (or env OPENADS_WIRE_TRACE_COMPACT=1)\
@@ -518,9 +518,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor f45668a0e564849d70c16398eb430b567a97c8d4 HEAD
+        git merge-base --is-ancestor 0c221f84725553bc66a82e73daac41e6f7985a1d HEAD
 
-        test -z "$(git diff --name-only f45668a0e564849d70c16398eb430b567a97c8d4 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 0c221f84725553bc66a82e73daac41e6f7985a1d HEAD -- . '':!.github/workflows'')"
 
         '
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
@@ -598,7 +598,7 @@ jobs:
         commit ACK returns an error and never replays writes. Existing per-setter buffering limitations and ignored
         twin-flush result are unchanged, not certified by this candidate.
 
-        Product source: f45668a0e564849d70c16398eb430b567a97c8d4.
+        Product source: 0c221f84725553bc66a82e73daac41e6f7985a1d.
 
         Inherited explicit refresh re-reads the ordered ABI twin used to pack the response and
 
@@ -767,7 +767,7 @@ jobs:
       shell: bash
       run: "cat > MTFIX71_LINUX_SERVER_TEST.md <<'NOTE'\n# 1.09.75-mtfix71-full-test - Linux x64 server test kit\n\
         \nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\n\nBuilt from fork branch release/mtfix70-full,\
-        \ commit f45668a0e564849d70c16398eb430b567a97c8d4\n(frozen mtfix70 plus capability-gated field-batch/commit\
+        \ commit 0c221f84725553bc66a82e73daac41e6f7985a1d\n(frozen mtfix70 plus capability-gated field-batch/commit\
         \ fusion; each explicit commit and existing lock/error boundaries retained).\nClient diagnostics master\
         \ OFF by default. See diagnostics-gate.md. Both client and server71 are required for commit-fusion savings;\
         \ older combinations retain the existing path. On kit-installed boxes the upgrade script handles it: bash\
@@ -861,9 +861,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor f45668a0e564849d70c16398eb430b567a97c8d4 HEAD
+        git merge-base --is-ancestor 0c221f84725553bc66a82e73daac41e6f7985a1d HEAD
 
-        test -z "$(git diff --name-only f45668a0e564849d70c16398eb430b567a97c8d4 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 0c221f84725553bc66a82e73daac41e6f7985a1d HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
@@ -965,7 +965,7 @@ jobs:
         commit ACK returns an error and never replays writes. Existing per-setter buffering limitations and ignored
         twin-flush result are unchanged, not certified by this candidate.
 
-        Product source: f45668a0e564849d70c16398eb430b567a97c8d4.
+        Product source: 0c221f84725553bc66a82e73daac41e6f7985a1d.
 
         Inherited explicit refresh re-reads the ordered ABI twin used to pack the response and
 
@@ -1044,7 +1044,7 @@ jobs:
 
         sha256sum mtfix71-full-qt492-x86.zip mtfix71-full-x64.zip > WINDOWS_SHA256SUMS.txt
 
-        gh release create v1.09.75-mtfix71-full-test --target f45668a0e564849d70c16398eb430b567a97c8d4 --prerelease
+        gh release create v1.09.75-mtfix71-full-test --target 0c221f84725553bc66a82e73daac41e6f7985a1d --prerelease
         --latest=false --title "OpenADS mtfix71 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS
         universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix71-full-qt492-x86.zip mtfix71-full-x64.zip
         openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz.sha256

@@ -2133,6 +2133,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 std::uint32_t scaps =
                     openads::network::kCapSetFieldsBatch |
                     openads::network::kCapSetFieldsCommit |
+                    openads::network::kCapBottomKeyCount |
                     openads::network::kCapFlushInCloseAll |
                     openads::network::kCapNavOrderFuse |
                     openads::network::kCapFlushTableDurable |
@@ -2144,6 +2145,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 // negotiates down to the refresh-after-lock fallback.
                 // Compatibility test: emulate a server predating this
                 // commit extension without changing ordinary SetFields.
+                if (std::getenv("OPENADS_NO_BOTTOM_KEYCOUNT_CAP") != nullptr)
+                    scaps &= ~openads::network::kCapBottomKeyCount;
                 if (std::getenv("OPENADS_NO_SETFIELDS_COMMIT_CAP") != nullptr)
                     scaps &= ~openads::network::kCapSetFieldsCommit;
                 if (std::getenv("OPENADS_NO_LOCKED_ROW_CAP") != nullptr)
@@ -3114,9 +3117,12 @@ DispatchResult Session::dispatch(const Frame& f) {
             // boundary-pair request.
             bool fused_order = false;
             bool want_pair = false;
+            bool want_count = false;
             if (f.payload.size() >= 5) {
                 const std::uint8_t fl = f.payload[4];
                 want_pair = (fl & 0x02) != 0;
+                want_count = (fl & 0x04) != 0 &&
+                    std::getenv("OPENADS_NO_BOTTOM_KEYCOUNT_CAP") == nullptr;
                 if ((fl & 0x01) != 0 && f.payload.size() >= 9) {
                     std::uint32_t oiid = read_u32_le(f.payload.data() + 5);
                     UNSIGNED32 oorc = install_table_order(id, oiid);
@@ -3132,8 +3138,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!tbl) { reply = err("GotoBottom: lookup failed"); break; }
             ADSHANDLE hord =
                 ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
+            UNSIGNED32 bottom_rc = 0;
             if (hord != 0) {
-                (void)AdsGotoBottom(hord);
+                bottom_rc = AdsGotoBottom(hord);
                 sync_engine_cursor(id);
             } else {
                 auto rb = tbl->goto_bottom();
@@ -3172,6 +3179,26 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             if (want_pair) {
                 pack_boundary_pair(reply, id, 2, hord, tbl);
+            }
+            if (want_count) {
+                // Same ordered ABI count as the legacy B0 dependency. Never
+                // certify physical count after a failed ordered count. Preserve
+                // legacy nav/error disposition: a failed optional certification
+                // sends status only and the client retains its ordinary B0 path.
+                UNSIGNED32 kc = 0;
+                UNSIGNED32 krc = bottom_rc;
+                if (krc == 0) {
+                    krc = hord != 0 ? AdsGetKeyCount(hord, 0, &kc)
+                                    : openads::AE_INTERNAL_ERROR;
+                }
+                Frame wrapped;
+                write_u32_le(kBottomKeyCountMagic, wrapped.payload);
+                write_u32_le(krc, wrapped.payload);
+                write_u32_le(kc, wrapped.payload);
+                write_u32_le(id, wrapped.payload);
+                wrapped.payload.insert(wrapped.payload.end(), reply.payload.begin(),
+                                       reply.payload.end());
+                reply.payload.swap(wrapped.payload);
             }
             break;
         }

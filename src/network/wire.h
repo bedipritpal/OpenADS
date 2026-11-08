@@ -720,6 +720,15 @@ inline constexpr std::uint32_t kCapAppendMetadata = 0x00000800u;
 // every older peer keep their existing packet/commit sequence.
 inline constexpr std::uint32_t kCapSetFieldsCommit = 0x00001000u;
 
+// Ordinary ordered GoBottom may request same-landing key-count metadata.
+// Request flag 0x04 is sent only after this server capability is advertised.
+// Requested ACK wraps the unchanged old body with a 16-byte prefix:
+// [u32 magic BKC1][u32 count-status][u32 count][u32 table-id].
+// Nonzero count-status is not a certification: retain the legacy B0 path.
+// Explicit later count APIs remain live requests.
+inline constexpr std::uint32_t kCapBottomKeyCount = 0x00002000u;
+inline constexpr std::uint32_t kBottomKeyCountMagic = 0x31434b42u;
+
 namespace OpenTableAckSections {
     constexpr std::uint8_t kRecordLength = 3;
     constexpr std::uint8_t kProductionIndex = 4;

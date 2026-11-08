@@ -140,6 +140,10 @@ public:
         return (server_caps_ & kCapNavBoundaryPair) != 0;
     }
 
+    bool server_bottom_key_count() const noexcept {
+        return (server_caps_ & kCapBottomKeyCount) != 0;
+    }
+
     // Current cursor-generation sequence (see nav_seq_). Relaxed load
     // is enough: it only orders the ABI layer's own duplicate
     // detection, never data.
@@ -934,6 +938,9 @@ struct RemoteTable {
     // and every write that invalidates rec_count_cached.
     std::uint32_t            cached_key_count   = 0;
     bool                     key_count_cached   = false;
+    // One landing only: never a persistent explicit-count certification.
+    bool                     bottom_count_valid = false;
+    std::uint32_t            bottom_count = 0;
     // Per-order key counts: an order switch does not change any
     // order's count, so rotation revisits serve from here while the
     // single slot above still bounces per switch. Second-chance

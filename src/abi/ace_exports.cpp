@@ -2081,6 +2081,9 @@ std::string remote_record_length_key(const openads::network::RemoteTable* rt) {
 
 void remote_sync_keyno_gotobottom(openads::network::RemoteTable* rt) {
     if (rt == nullptr) return;
+    const bool same_landing_count = rt->bottom_count_valid;
+    const std::uint32_t landing_count = rt->bottom_count;
+    rt->bottom_count_valid = false;
     remote_clear_nav_boundaries(rt);
     if (remote_table_has_index(rt)) {
         // An ordered GotoBottom that the server certified empty (no row,
@@ -2096,7 +2099,8 @@ void remote_sync_keyno_gotobottom(openads::network::RemoteTable* rt) {
         }
         // Bottom of the ORDER, not of the file: with a scope active the
         // last key is key #scoped_key_count, not #physical_rec_count.
-        const std::uint32_t kc = remote_ensure_key_count(rt);
+        const std::uint32_t kc = same_landing_count
+            ? landing_count : remote_ensure_key_count(rt);
         rt->current_keyno = kc > 0 ? kc : 1u;
         rt->keyno_valid   = true;
     } else if (rt->row_valid) {

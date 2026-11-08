@@ -1408,18 +1408,44 @@ util::Result<void> RemoteConnection::goto_record(RemoteTable* rt,
 }
 
 util::Result<void> RemoteConnection::goto_bottom(RemoteTable* rt) {
+    rt->bottom_count_valid = false;
     note_nav_frame();
     Frame req;
     req.opcode = Opcode::GotoBottom;
     write_u32_le(rt->id, req.payload);
     // mtfix12 R1: opposite-boundary certification (see goto_top).
     const bool want_pair = server_nav_boundary_pair();
-    if (want_pair) req.payload.push_back(0x02);
+    // Request only for the exact internal cold ordered-count dependency.
+    // Existing warm-count and natural-order behavior is untouched.
+    const bool want_count = server_bottom_key_count() &&
+        rt->active_index_id != 0 && !rt->key_count_cached &&
+        rt->key_counts.find(rt->active_index_id) == rt->key_counts.end();
+    if (want_pair || want_count)
+        req.payload.push_back(static_cast<std::uint8_t>(
+            (want_pair ? 0x02 : 0) | (want_count ? 0x04 : 0)));
     rt->pair_valid = false;
     auto rep = request(req);
     if (!rep) return rep.error();
     if (rep.value().opcode != Opcode::GotoBottomAck) {
         return util::Error{5000, 0, "GotoBottom: server error", ""};
+    }
+    bool certified_count = false;
+    std::uint32_t count = 0;
+    if (want_count) {
+        auto& pl = rep.value().payload;
+        if (pl.size() < 16 || read_u32_le(pl.data()) != kBottomKeyCountMagic ||
+            read_u32_le(pl.data() + 12) != rt->id) {
+            rt->row_valid = false;
+            rt->keyno_valid = false;
+            rt->bound_bof_ok = rt->bound_eof_ok = false;
+            rt->recno_bound_ok = rt->count_bound_ok = false;
+            rt->last_nav = 0;
+            rt->invalidate_prefetch();
+            return util::Error{5000, 0, "GotoBottom: invalid count metadata", ""};
+        }
+        certified_count = read_u32_le(pl.data() + 4) == 0;
+        count = read_u32_le(pl.data() + 8);
+        pl.erase(pl.begin(), pl.begin() + 16);
     }
     const std::size_t tend =
         parse_row_trailer_into(rt, rep.value().payload, 0);
@@ -1432,6 +1458,12 @@ util::Result<void> RemoteConnection::goto_bottom(RemoteTable* rt) {
                         rep.value().payload, off);
     } else {
         apply_bound_tail(rt, rep.value().payload, tend);
+    }
+    if (certified_count) {
+        // Consume only in this landing's key-position synchronization.
+        // Do not seed the older persistent explicit-count caches.
+        rt->bottom_count = count;
+        rt->bottom_count_valid = true;
     }
     return {};
 }

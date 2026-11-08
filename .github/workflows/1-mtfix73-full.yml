@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix73-full-test
-  PINNED_SOURCE: cd4d9997b27cc69f2e32e280960636766811e593
+  PINNED_SOURCE: 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -20,9 +20,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor cd4d9997b27cc69f2e32e280960636766811e593 HEAD
+        git merge-base --is-ancestor 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf HEAD
 
-        test -z "$(git diff --name-only cd4d9997b27cc69f2e32e280960636766811e593 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
@@ -555,9 +555,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor cd4d9997b27cc69f2e32e280960636766811e593 HEAD
+        git merge-base --is-ancestor 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf HEAD
 
-        test -z "$(git diff --name-only cd4d9997b27cc69f2e32e280960636766811e593 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf HEAD -- . '':!.github/workflows'')"
 
         '
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
@@ -909,7 +909,7 @@ jobs:
       shell: bash
       run: "cat > MTFIX73_LINUX_SERVER_TEST.md <<'NOTE'\n# 1.09.75-mtfix73-full-test - Linux x64 server test kit\n\
         \nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\n\nBuilt from fork branch release/mtfix70-full,\
-        \ commit cd4d9997b27cc69f2e32e280960636766811e593\n(frozen72 plus client-only ACE caller-column diagnostics;\
+        \ commit 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf\n(frozen72 plus client-only ACE caller-column diagnostics;\
         \ existing commit/lock/error boundaries retained).\nClient diagnostics master OFF by default. See diagnostics-gate.md.\
         \ Both client and server72 are required for GoBottom metadata savings; older combinations retain the existing\
         \ path. On kit-installed boxes the upgrade script handles it: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix73-full-test\
@@ -1002,9 +1002,9 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor cd4d9997b27cc69f2e32e280960636766811e593 HEAD
+        git merge-base --is-ancestor 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf HEAD
 
-        test -z "$(git diff --name-only cd4d9997b27cc69f2e32e280960636766811e593 HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
@@ -1243,7 +1243,7 @@ jobs:
 
         sha256sum mtfix73-full-qt492-x86.zip mtfix73-full-x64.zip > WINDOWS_SHA256SUMS.txt
 
-        gh release create v1.09.75-mtfix73-full-test --target cd4d9997b27cc69f2e32e280960636766811e593 --prerelease
+        gh release create v1.09.75-mtfix73-full-test --target 36a39fcf7be29a8a2bd9a398dfe25ecbfb41facf --prerelease
         --latest=false --title "OpenADS mtfix73 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS
         universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix73-full-qt492-x86.zip mtfix73-full-x64.zip
         openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz.sha256

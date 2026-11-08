@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix74-full-test
-  PINNED_SOURCE: 6ac72020d88e2cd239aacfb813cffdaab7c07a8f
+  PINNED_SOURCE: 13dd99e43736ac4dac09094225f30b54eebfe139
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -20,32 +20,21 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor 6ac72020d88e2cd239aacfb813cffdaab7c07a8f HEAD
+        git merge-base --is-ancestor 13dd99e43736ac4dac09094225f30b54eebfe139 HEAD
 
-        test -z "$(git diff --name-only 6ac72020d88e2cd239aacfb813cffdaab7c07a8f HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 13dd99e43736ac4dac09094225f30b54eebfe139 HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
     - name: Prefetch exact zlib1.3.1 through verified API asset
       shell: bash
-      run: 'set -euo pipefail
-
-        curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
-        -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-
-        python - <<''PYHASH''
-
-        import hashlib,os,pathlib
-
-        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
-
-        PYHASH
-
-        mkdir -p third_party/zlib
-
-        tar -xzf "$RUNNER_TEMP/zlib-1.3.1.tar.gz" --strip-components=1 -C third_party/zlib
-
-        '
+      run: "set -euo pipefail\ncurl --fail --location --retry 3 --header 'Accept: application/octet-stream'\
+        \ https://api.github.com/repos/madler/zlib/releases/assets/147136750 -o \"$RUNNER_TEMP/zlib-1.3.1.tar.gz\"\
+        \npython - <<'PYHASH'\nimport hashlib,os,pathlib\nassert hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz').read_bytes()).hexdigest()=='9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'\n\
+        PYHASH\nmkdir -p third_party/zlib\npython - <<'PYEXTRACT'\nimport os,pathlib,tarfile\nwith tarfile.open(pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz')\
+        \ as z:\n for member in z.getmembers():\n  parts=pathlib.PurePosixPath(member.name).parts[1:]\n\
+        \  if not parts:continue\n  assert '..' not in parts\n  member.name=str(pathlib.PurePosixPath(*parts))\n\
+        \  z.extract(member,'third_party/zlib')\nPYEXTRACT\n"
     - name: Download exact historical Qt compiler
       run: 'Invoke-WebRequest ''https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z''
         -OutFile "$env:RUNNER_TEMP/qt492.7z"
@@ -610,31 +599,20 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor 6ac72020d88e2cd239aacfb813cffdaab7c07a8f HEAD
+        git merge-base --is-ancestor 13dd99e43736ac4dac09094225f30b54eebfe139 HEAD
 
-        test -z "$(git diff --name-only 6ac72020d88e2cd239aacfb813cffdaab7c07a8f HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 13dd99e43736ac4dac09094225f30b54eebfe139 HEAD -- . '':!.github/workflows'')"
 
         '
     - name: Prefetch exact zlib1.3.1 through verified API asset
       shell: bash
-      run: 'set -euo pipefail
-
-        curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
-        -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-
-        python - <<''PYHASH''
-
-        import hashlib,os,pathlib
-
-        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
-
-        PYHASH
-
-        mkdir -p third_party/zlib
-
-        tar -xzf "$RUNNER_TEMP/zlib-1.3.1.tar.gz" --strip-components=1 -C third_party/zlib
-
-        '
+      run: "set -euo pipefail\ncurl --fail --location --retry 3 --header 'Accept: application/octet-stream'\
+        \ https://api.github.com/repos/madler/zlib/releases/assets/147136750 -o \"$RUNNER_TEMP/zlib-1.3.1.tar.gz\"\
+        \npython - <<'PYHASH'\nimport hashlib,os,pathlib\nassert hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz').read_bytes()).hexdigest()=='9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'\n\
+        PYHASH\nmkdir -p third_party/zlib\npython - <<'PYEXTRACT'\nimport os,pathlib,tarfile\nwith tarfile.open(pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz')\
+        \ as z:\n for member in z.getmembers():\n  parts=pathlib.PurePosixPath(member.name).parts[1:]\n\
+        \  if not parts:continue\n  assert '..' not in parts\n  member.name=str(pathlib.PurePosixPath(*parts))\n\
+        \  z.extract(member,'third_party/zlib')\nPYEXTRACT\n"
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
       shell: pwsh
       run: 'Invoke-WebRequest -Headers @{Accept=''application/octet-stream''} ''https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472''
@@ -888,24 +866,13 @@ jobs:
         '
     - name: Prefetch exact zlib1.3.1 through verified API asset
       shell: bash
-      run: 'set -euo pipefail
-
-        curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
-        -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-
-        python - <<''PYHASH''
-
-        import hashlib,os,pathlib
-
-        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
-
-        PYHASH
-
-        mkdir -p third_party/zlib
-
-        tar -xzf "$RUNNER_TEMP/zlib-1.3.1.tar.gz" --strip-components=1 -C third_party/zlib
-
-        '
+      run: "set -euo pipefail\ncurl --fail --location --retry 3 --header 'Accept: application/octet-stream'\
+        \ https://api.github.com/repos/madler/zlib/releases/assets/147136750 -o \"$RUNNER_TEMP/zlib-1.3.1.tar.gz\"\
+        \npython - <<'PYHASH'\nimport hashlib,os,pathlib\nassert hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz').read_bytes()).hexdigest()=='9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'\n\
+        PYHASH\nmkdir -p third_party/zlib\npython - <<'PYEXTRACT'\nimport os,pathlib,tarfile\nwith tarfile.open(pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz')\
+        \ as z:\n for member in z.getmembers():\n  parts=pathlib.PurePosixPath(member.name).parts[1:]\n\
+        \  if not parts:continue\n  assert '..' not in parts\n  member.name=str(pathlib.PurePosixPath(*parts))\n\
+        \  z.extract(member,'third_party/zlib')\nPYEXTRACT\n"
     - name: Install exact Ninja1.12.1 via verified API asset
       shell: bash
       run: 'set -euo pipefail
@@ -1063,7 +1030,7 @@ jobs:
       shell: bash
       run: "cat > MTFIX74_LINUX_SERVER_TEST.md <<'NOTE'\n# 1.09.75-mtfix74-full-test - Linux x64 server\
         \ test kit\n\nPritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.\n\nBuilt from\
-        \ fork branch release/mtfix70-full, commit 6ac72020d88e2cd239aacfb813cffdaab7c07a8f\n(frozen73\
+        \ fork branch release/mtfix70-full, commit 13dd99e43736ac4dac09094225f30b54eebfe139\n(frozen73\
         \ plus indexed-key Skip engine re-anchor and checked movement errors).\nRemote key-edit navigation\
         \ repair requires the74 server. Locks remain held; no forced hard flush.\nGoTop/Seek error masking,\
         \ broad conditional navigation and remote descending are not certified.\nClient diagnostics master\
@@ -1164,32 +1131,21 @@ jobs:
 
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
 
-        git merge-base --is-ancestor 6ac72020d88e2cd239aacfb813cffdaab7c07a8f HEAD
+        git merge-base --is-ancestor 13dd99e43736ac4dac09094225f30b54eebfe139 HEAD
 
-        test -z "$(git diff --name-only 6ac72020d88e2cd239aacfb813cffdaab7c07a8f HEAD -- . '':!.github/workflows'')"
+        test -z "$(git diff --name-only 13dd99e43736ac4dac09094225f30b54eebfe139 HEAD -- . '':!.github/workflows'')"
 
         '
       shell: bash
     - name: Prefetch exact zlib1.3.1 through verified API asset
       shell: bash
-      run: 'set -euo pipefail
-
-        curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
-        -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-
-        python - <<''PYHASH''
-
-        import hashlib,os,pathlib
-
-        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
-
-        PYHASH
-
-        mkdir -p third_party/zlib
-
-        tar -xzf "$RUNNER_TEMP/zlib-1.3.1.tar.gz" --strip-components=1 -C third_party/zlib
-
-        '
+      run: "set -euo pipefail\ncurl --fail --location --retry 3 --header 'Accept: application/octet-stream'\
+        \ https://api.github.com/repos/madler/zlib/releases/assets/147136750 -o \"$RUNNER_TEMP/zlib-1.3.1.tar.gz\"\
+        \npython - <<'PYHASH'\nimport hashlib,os,pathlib\nassert hashlib.sha256((pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz').read_bytes()).hexdigest()=='9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'\n\
+        PYHASH\nmkdir -p third_party/zlib\npython - <<'PYEXTRACT'\nimport os,pathlib,tarfile\nwith tarfile.open(pathlib.Path(os.environ['RUNNER_TEMP'])/'zlib-1.3.1.tar.gz')\
+        \ as z:\n for member in z.getmembers():\n  parts=pathlib.PurePosixPath(member.name).parts[1:]\n\
+        \  if not parts:continue\n  assert '..' not in parts\n  member.name=str(pathlib.PurePosixPath(*parts))\n\
+        \  z.extract(member,'third_party/zlib')\nPYEXTRACT\n"
     - name: Record supported runner and compiler provenance
       run: 'set -euo pipefail
 
@@ -1457,7 +1413,7 @@ jobs:
 
         sha256sum mtfix74-full-qt492-x86.zip mtfix74-full-x64.zip > WINDOWS_SHA256SUMS.txt
 
-        gh release create v1.09.75-mtfix74-full-test --target 6ac72020d88e2cd239aacfb813cffdaab7c07a8f
+        gh release create v1.09.75-mtfix74-full-test --target 13dd99e43736ac4dac09094225f30b54eebfe139
         --prerelease --latest=false --title "OpenADS mtfix74 full test kit - Windows x86 + Windows x64
         + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix74-full-qt492-x86.zip
         mtfix74-full-x64.zip openads-1.09.75-mtfix74-full-test-linux-x64.tar.gz openads-1.09.75-mtfix74-full-test-linux-x64.tar.gz.sha256

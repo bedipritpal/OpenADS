@@ -33,8 +33,13 @@ jobs:
         curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
         -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
 
-        echo ''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23  ''"$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-        | shasum -a 256 -c -
+        python - <<''PYHASH''
+
+        import hashlib,os,pathlib
+
+        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
+
+        PYHASH
 
         mkdir -p third_party/zlib
 
@@ -617,8 +622,13 @@ jobs:
         curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
         -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
 
-        echo ''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23  ''"$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-        | shasum -a 256 -c -
+        python - <<''PYHASH''
+
+        import hashlib,os,pathlib
+
+        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
+
+        PYHASH
 
         mkdir -p third_party/zlib
 
@@ -883,8 +893,13 @@ jobs:
         curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
         -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
 
-        echo ''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23  ''"$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-        | shasum -a 256 -c -
+        python - <<''PYHASH''
+
+        import hashlib,os,pathlib
+
+        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
+
+        PYHASH
 
         mkdir -p third_party/zlib
 
@@ -1162,8 +1177,13 @@ jobs:
         curl --fail --location --retry 3 --header ''Accept: application/octet-stream'' https://api.github.com/repos/madler/zlib/releases/assets/147136750
         -o "$RUNNER_TEMP/zlib-1.3.1.tar.gz"
 
-        echo ''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23  ''"$RUNNER_TEMP/zlib-1.3.1.tar.gz"
-        | shasum -a 256 -c -
+        python - <<''PYHASH''
+
+        import hashlib,os,pathlib
+
+        assert hashlib.sha256((pathlib.Path(os.environ[''RUNNER_TEMP''])/''zlib-1.3.1.tar.gz'').read_bytes()).hexdigest()==''9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23''
+
+        PYHASH
 
         mkdir -p third_party/zlib
 

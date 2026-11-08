@@ -640,7 +640,7 @@ public:
 private:
     std::string auth_dir_;
     bool auth_pending_ = false;
-    util::Result<Frame> request(const Frame& f);
+    util::Result<Frame> request(const Frame& f, bool require_commit_ack = false);
 
     // Record a cursor/visibility-affecting frame. Called at the top of
     // every method that can move the server cursor or change what it

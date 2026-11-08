@@ -281,7 +281,7 @@ void RemoteConnection::note_all_tables_nav() {
     for (auto& [id, v] : tbl_nav_seqs_) ++v;
 }
 
-util::Result<Frame> RemoteConnection::request(const Frame& f) {
+util::Result<Frame> RemoteConnection::request(const Frame& f, bool require_commit_ack) {
     std::lock_guard<std::mutex> lk(mu_);
     frame_seq_.fetch_add(1, std::memory_order_relaxed);
     switch (f.opcode) {
@@ -392,6 +392,15 @@ util::Result<Frame> RemoteConnection::request(const Frame& f) {
         }
         return util::Error{static_cast<std::int32_t>(code), 0,
                            std::move(msg), ""};
+    }
+    if (require_commit_ack &&
+        (rep.value().opcode != Opcode::SetFieldsAck ||
+         rep.value().payload != std::vector<std::uint8_t>{1})) {
+        // Poison while mu_ still excludes every other shared-connection
+        // caller. Nobody can send a later request after ambiguous commit
+        // success but before the connection is marked unusable.
+        transport_->close();
+        return util::Error{5000, 0, "SetFields: commit acknowledgement invalid", ""};
     }
     return rep;
 }
@@ -1328,13 +1337,9 @@ util::Result<void> RemoteConnection::set_fields_batch(
         req.payload.insert(req.payload.end(), value.begin(), value.end());
     }
     if (commit) req.payload.push_back(1);
-    auto rep = request(req);
+    auto rep = request(req, commit);
     if (!rep) return rep.error();
-    if (rep.value().opcode != Opcode::SetFieldsAck ||
-        (commit && rep.value().payload != std::vector<std::uint8_t>{1})) {
-        // A missing/partial commit acknowledgement is ambiguous. Do not
-        // replay writes or send a compensating flush on this connection.
-        if (commit) transport_->close();
+    if (rep.value().opcode != Opcode::SetFieldsAck) {
         return util::Error{5000, 0, "SetFields: server error", ""};
     }
     return {};

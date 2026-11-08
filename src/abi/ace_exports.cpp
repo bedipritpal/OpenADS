@@ -14100,7 +14100,16 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
             // including transport ambiguity: never retry a partial apply.
             rt->pending_sets.clear();
             rt->row_valid = false;
-            if (!applied) return fail(applied.error());
+            if (!applied) {
+                // The apply may have succeeded before a flush failure or
+                // lost acknowledgement. Do not leave pre-write order/row
+                // certifications alive on that ambiguous failure path.
+                rt->key_count_cached = false;
+                rt->key_counts.clear();
+                rt->keyno_valid = false;
+                rt->invalidate_prefetch();
+                return fail(applied.error());
+            }
             committed_batch = true;
         } else {
             if (UNSIGNED32 frc = remote_flush_pending(rt); frc != 0) return frc;

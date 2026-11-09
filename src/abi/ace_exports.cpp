@@ -695,6 +695,16 @@ UNSIGNED32 remote_buffered_set(openads::network::RemoteTable* rt,
     remote_settle_cursor(rt);
     rt->row_valid = false;                      // M12.17 cache invalidation
     if (rt->pending_sets.empty()) {
+        const bool acknowledged_append = rt->append_batch_recno != 0 &&
+            rt->append_batch_nav_seq == rt->conn->tbl_nav_seq(rt->id) &&
+            rt->recno_bound_ok && rt->recno_bound == rt->append_batch_recno &&
+            (rt->open_exclusive || rt->table_lock_held ||
+             rt->held_recs.count(rt->append_batch_recno) != 0);
+        rt->pending_first_applied = !acknowledged_append;
+        if (acknowledged_append) {
+            rt->pending_sets.emplace_back(fname, val);
+            return ok();
+        }
         // Probe: the first set of a run goes out immediately so
         // write-guard errors surface on the writing call itself (see
         // above). The value is ALSO buffered: after a twin-path append
@@ -830,17 +840,17 @@ UNSIGNED32 remote_flush_sets(openads::network::RemoteTable* rt) {
     // locally the server cursor lags behind, and the batch must apply to
     // the row the buffered sets targeted — not where the server sits.
     remote_settle_cursor(rt);
-    // pending[0] is always the probe (already applied server-side at
-    // buffer time), so the flush covers pending[1:]. A lone probe needs
-    // no frame at all — single-field edits cost exactly what they did
-    // before coalescing existed.
-    if (rt->pending_sets.size() == 1) {
+    // Existing-row runs have an already-applied first probe. Acknowledged
+    // append runs contain only unapplied values, so include their first
+    // value even for a one-field batch. Never silently drop that value.
+    if (rt->pending_first_applied && rt->pending_sets.size() == 1) {
         rt->pending_sets.clear();
         rt->row_valid = false;
         return ok();
     }
     const std::vector<std::pair<std::string, std::string>> rest(
-        rt->pending_sets.begin() + 1, rt->pending_sets.end());
+        rt->pending_sets.begin() + (rt->pending_first_applied ? 1 : 0),
+        rt->pending_sets.end());
     if (rt->conn->server_setfields_batch()) {
         if (auto r = rt->conn->set_fields_batch(rt->id, rest);
             !r) {
@@ -12987,11 +12997,11 @@ UNSIGNED32 ENTRYPOINT AdsGetLong(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED32
         if (i == std::numeric_limits<std::size_t>::max()) {
             return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
-        if (!rt->row_valid) {
-            (void)rt->conn->fetch_current_row(rt);
-        }
         std::string vstr;
         const bool overlaid = remote_pending_overlay(rt, i, vstr);
+        if (!overlaid && !rt->row_valid) {
+            (void)rt->conn->fetch_current_row(rt);
+        }
         if (!overlaid && rt->row_valid && i < rt->current_row.size()) {
             vstr = rt->current_row[i];
         } else if (!overlaid && i < rt->fields.size()) {
@@ -13041,11 +13051,11 @@ UNSIGNED32 ENTRYPOINT AdsGetDouble(ADSHANDLE hTable, UNSIGNED8* pucField, double
         if (i == std::numeric_limits<std::size_t>::max()) {
             return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
-        if (!rt->row_valid) {
-            (void)rt->conn->fetch_current_row(rt);
-        }
         std::string vstr;
         const bool overlaid = remote_pending_overlay(rt, i, vstr);
+        if (!overlaid && !rt->row_valid) {
+            (void)rt->conn->fetch_current_row(rt);
+        }
         if (!overlaid && rt->row_valid && i < rt->current_row.size()) {
             vstr = rt->current_row[i];
         } else if (!overlaid && i < rt->fields.size()) {
@@ -13195,11 +13205,11 @@ UNSIGNED32 ENTRYPOINT AdsGetJulian(ADSHANDLE hTable, UNSIGNED8* pucField, SIGNED
         if (i == std::numeric_limits<std::size_t>::max()) {
             return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
-        if (!rt->row_valid) {
-            (void)rt->conn->fetch_current_row(rt);
-        }
         std::string vstr;
         const bool overlaid = remote_pending_overlay(rt, i, vstr);
+        if (!overlaid && !rt->row_valid) {
+            (void)rt->conn->fetch_current_row(rt);
+        }
         if (!overlaid && rt->row_valid && i < rt->current_row.size()) {
             vstr = rt->current_row[i];
         } else if (!overlaid && i < rt->fields.size()) {
@@ -13501,9 +13511,6 @@ UNSIGNED32 ENTRYPOINT AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         // standalone FetchCurrentRow call here on first access.
         // xbrowse-style W cols Ãƒâ€” H rows repaint: 1 RTT per row,
         // zero RTT per cell.
-        if (!rt->row_valid) {
-            (void)rt->conn->fetch_current_row(rt);
-        }
         auto fi = remote_field_index(rt, pucField);
         if (fi == std::numeric_limits<std::size_t>::max()) {
             return fail(openads::AE_COLUMN_NOT_FOUND, "");
@@ -13514,6 +13521,9 @@ UNSIGNED32 ENTRYPOINT AdsGetField(ADSHANDLE hTable, UNSIGNED8* pucField,
         {
             std::string val;
             const bool overlaid = remote_pending_overlay(rt, fi, val);
+            if (!overlaid && !rt->row_valid) {
+                (void)rt->conn->fetch_current_row(rt);
+            }
             if (!overlaid && rt->row_valid && fi < rt->current_row.size()) {
                 val = rt->current_row[fi];
             }
@@ -14037,6 +14047,8 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
             // a full UnlockTable/close proves them gone.
             rt->held_recs.insert(amr.value().recno);
         }
+        rt->append_batch_recno = amr.value().present ? amr.value().recno : 0;
+        rt->append_batch_nav_seq = rt->conn->tbl_nav_seq(rt->id);
         rt->write_dirty = true;
         openads::abi::create_diag::log("client-append-ok");
         return ok();
@@ -14157,6 +14169,13 @@ UNSIGNED32 ENTRYPOINT AdsAppendRecord(ADSHANDLE hTable) {
     return ok();
 }
 
+UNSIGNED32 ENTRYPOINT AdsFlushPendingFields(ADSHANDLE hTable) {
+    openads::abi::wire_caller::Entry wire_entry("AdsFlushPendingFields", cli_trace_on());
+    if (auto* rt = get_remote_table(hTable)) return remote_flush_sets(rt);
+    if (get_table(hTable) != nullptr) return ok();
+    return fail(openads::AE_INTERNAL_ERROR, "AdsFlushPendingFields: invalid table handle");
+}
+
 UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
     openads::abi::wire_caller::Entry wire_entry("AdsWriteRecord", cli_trace_on());
     arc2_trace("AdsWriteRecord");
@@ -14169,12 +14188,14 @@ UNSIGNED32 ENTRYPOINT AdsWriteRecord(ADSHANDLE hTable) {
         const bool had_writes =
             !rt->pending_sets.empty() || rt->write_dirty;
         bool committed_batch = false;
-        if (rt->pending_sets.size() > 1 && rt->cursor_lag == 0 &&
+        if (rt->pending_sets.size() > (rt->pending_first_applied ? 1u : 0u) &&
+            rt->cursor_lag == 0 &&
             !rt->pending_order && !rt->flush_file_pending &&
             !rt->close_all_indexes_pending &&
             rt->conn->server_setfields_commit()) {
             const std::vector<std::pair<std::string, std::string>> rest(
-                rt->pending_sets.begin() + 1, rt->pending_sets.end());
+                rt->pending_sets.begin() + (rt->pending_first_applied ? 1 : 0),
+                rt->pending_sets.end());
             openads::abi::wire_caller::Reason wire_reason("batch+commit");
             auto applied = rt->conn->set_fields_batch(rt->id, rest, true);
             // Same disposition as the old SetFields stage on error,

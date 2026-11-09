@@ -764,6 +764,14 @@ struct RemoteTable {
     // ace_exports.cpp). Empty = clean. Reads overlay these values onto
     // current_row so same-handle read-after-write stays exact.
     std::vector<std::pair<std::string, std::string>> pending_sets;
+    // Acknowledged append context only. Commit ends a batch, not this
+    // current-record context. Any later cursor-generation change expires it.
+    std::uint32_t append_batch_recno = 0;
+    std::uint64_t append_batch_nav_seq = 0;
+    // Existing-row runs still probe their first value immediately.
+    // Append-context runs send ALL values, including the first, at a boundary.
+    bool pending_first_applied = true;
+
     // Lazy-close pooling (USE latency): eligibility observed over the
     // handle lifetime. Parked only when every line below still reads
     // fresh-open equivalent at close time.

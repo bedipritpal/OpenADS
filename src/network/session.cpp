@@ -1,3 +1,4 @@
+#include "network/checked_record_flush.h"
 #include "network/session.h"
 #include "util/log.h"
 #include "util/client_config.h"
@@ -1541,13 +1542,14 @@ UNSIGNED32 Session::install_table_order(std::uint32_t tid,
 
 util::Result<void> Session::flush_table_record(std::uint32_t id,
         openads::engine::Table* tbl) {
-    // Preserve FlushTable's twin-before-engine ordering. The pre-existing
-    // twin flush return policy is unchanged by this packet fusion.
-    if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
-        (void)AdsFlushFileBuffers(hit->second);
-    }
-    tbl->set_pending_append(false);
-    return tbl->flush();
+    return checked_record_flush([&]() -> UNSIGNED32 {
+        if (auto hit = tbls_h_.find(id); hit != tbls_h_.end())
+            return AdsFlushFileBuffers(hit->second);
+        return 0;
+    }, [&]() -> util::Result<void> {
+        tbl->set_pending_append(false);
+        return tbl->flush();
+    });
 }
 
 Session::FieldWriteResult Session::write_fields(std::uint32_t id,
@@ -5051,9 +5053,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             const bool commit = f.payload.size() == pos + 1 &&
                 f.payload[pos] == 1;
             auto wr = write_fields(id, tbl, pairs);
-            if (wr.code != 0 || (commit && wr.column_missing)) {
+            if (wr.code != 0 || wr.column_missing) {
                 reply = wr.column_missing
-                    ? err("SetFields: column not found")
+                    ? err("SetFields: column not found", openads::AE_COLUMN_NOT_FOUND)
                     : err("SetFields: write failed", wr.code);
                 break;
             }
@@ -5062,7 +5064,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 // the applied prefix/error behavior remains ordered writes.
                 auto flushed = flush_table_record(id, tbl);
                 if (!flushed) {
-                    reply = err("FlushTable: flush failed"); break;
+                    reply = err("FlushTable: flush failed", flushed.error().code); break;
                 }
                 reply.payload.push_back(1);
             }
@@ -5171,7 +5173,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("FlushTable: lookup failed"); break; }
             auto r = flush_table_record(id, tbl);
-            if (!r) { reply = err("FlushTable: flush failed"); break; }
+            if (!r) { reply = err("FlushTable: flush failed", r.error().code); break; }
             reply.opcode = Opcode::FlushTableAck;
             break;
         }

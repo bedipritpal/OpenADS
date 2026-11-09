@@ -5064,7 +5064,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 // the applied prefix/error behavior remains ordered writes.
                 auto flushed = flush_table_record(id, tbl);
                 if (!flushed) {
-                    reply = err("FlushTable: flush failed", flushed.error().code); break;
+                    reply = err("FlushTable: flush failed", static_cast<UNSIGNED32>(flushed.error().code)); break;
                 }
                 reply.payload.push_back(1);
             }
@@ -5173,7 +5173,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("FlushTable: lookup failed"); break; }
             auto r = flush_table_record(id, tbl);
-            if (!r) { reply = err("FlushTable: flush failed", r.error().code); break; }
+            if (!r) { reply = err("FlushTable: flush failed", static_cast<UNSIGNED32>(r.error().code)); break; }
             reply.opcode = Opcode::FlushTableAck;
             break;
         }

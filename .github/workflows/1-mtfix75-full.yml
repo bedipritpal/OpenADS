@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix75-full-test
-  PINNED_SOURCE: 8db6b0bc719a2d7692a20c5798c12a66c521c01d
+  PINNED_SOURCE: 933288c10e09f3a8008ccaab02724c87a2171a49
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD
-        test -z "$(git diff --name-only 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 933288c10e09f3a8008ccaab02724c87a2171a49 HEAD
+        test -z "$(git diff --name-only 933288c10e09f3a8008ccaab02724c87a2171a49 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -47,10 +47,16 @@ jobs:
          print(name,sha,'verified')
         PYDEPS
     - name: Download exact historical Qt compiler
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         function Download-Exact($url,$out) {
          for($i=0;$i -lt 4;$i++) {
-          try { Invoke-WebRequest -Headers @{Accept='application/octet-stream'} $url -OutFile $out; return }
+          try {
+            $headers=@{Accept='application/octet-stream'}
+            if(([uri]$url).Host -eq 'api.github.com'){$headers.Authorization="Bearer $env:GH_TOKEN"}
+            Invoke-WebRequest -Headers $headers $url -OutFile $out; return
+          }
           catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
          }
         }
@@ -612,6 +618,8 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
         tests/harbour_batch/run.sh "$(cygpath -u "$RUNNER_TEMP/harbour-old")" build-legacy
     - name: Matched DLL import library and unsupported old-DLL guard
+      env:
+        GH_TOKEN: ${{ github.token }}
       shell: bash
       run: |
         set -euxo pipefail
@@ -624,9 +632,9 @@ jobs:
         cp output/openace32.dll output/import-new/
         (cd output/import-new && ./probe.exe) | tee output/import-proof.txt
         python - <<'PYOLD'
-        import hashlib,pathlib,urllib.request,zipfile,io
+        import hashlib,pathlib,urllib.request,zipfile,io,os
         u='https://api.github.com/repos/bedipritpal/OpenADS/releases/assets/722812042'
-        b=urllib.request.urlopen(urllib.request.Request(u,headers={'Accept':'application/octet-stream'}),timeout=120).read()
+        b=urllib.request.urlopen(urllib.request.Request(u,headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']}),timeout=120).read()
         assert hashlib.sha256(b).hexdigest()=='f1281ea85425288b0bcf470183dd6d7ee6a7030ea82dff9a673a095e04cf8ee0'
         z=zipfile.ZipFile(io.BytesIO(b));n=[n for n in z.namelist() if n.endswith('/bin/openace32.dll')];assert len(n)==1,n
         pathlib.Path('output/import-old/openace32.dll').write_bytes(z.read(n[0]))
@@ -813,8 +821,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD
-        test -z "$(git diff --name-only 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 933288c10e09f3a8008ccaab02724c87a2171a49 HEAD
+        test -z "$(git diff --name-only 933288c10e09f3a8008ccaab02724c87a2171a49 HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -840,9 +848,11 @@ jobs:
          print(name,sha,'verified')
         PYDEPS
     - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
+      env:
+        GH_TOKEN: ${{ github.token }}
       shell: pwsh
       run: |
-        Invoke-WebRequest -Headers @{Accept='application/octet-stream'} 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
+        Invoke-WebRequest -Headers @{Accept='application/octet-stream';Authorization="Bearer $env:GH_TOKEN"} 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
         if((Get-FileHash "$env:RUNNER_TEMP/winlibs64.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs x64 hash mismatch'}
         & 7z x "$env:RUNNER_TEMP/winlibs64.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
     - name: Build Harbour (x64) and the x64 engine, DLL, server and auth worker
@@ -1140,7 +1150,7 @@ jobs:
         assets={a['name']:a for a in release['assets']}
         name='openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz'
         for n in (name,name+'.sha256'):
-         with urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})) as response:
+         with urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']})) as response:
           pathlib.Path('compat70',n).write_bytes(response.read())
         expected=pathlib.Path('compat70',name+'.sha256').read_text().split()[0]
         assert hashlib.sha256(pathlib.Path('compat70',name).read_bytes()).hexdigest()==expected
@@ -1148,8 +1158,8 @@ jobs:
         tar xzf compat70/openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz -C compat70
         OLD="$PWD/compat70/openads-1.09.75-mtfix70-full-test-linux-x64"
         NEW="$PWD/build/ninja-clang"
-        python tests/commit_boundary_compat.py --client "$NEW/src/libopenace64.so" --server "$NEW/tools/serverd/openads_serverd" --expect-fusion 1 | tee compat70/new-new.txt
-        python tests/commit_boundary_compat.py --client "$NEW/src/libopenace64.so" --server "$OLD/openads_serverd" --expect-fusion 0 | tee compat70/new-old.txt
+        python tests/commit_boundary_compat.py --client "$NEW/src/libopenace64.so" --server "$NEW/tools/serverd/openads_serverd" --expect-fusion 1 --expect-append-batch 1 | tee compat70/new-new.txt
+        python tests/commit_boundary_compat.py --client "$NEW/src/libopenace64.so" --server "$OLD/openads_serverd" --expect-fusion 0 --expect-append-batch 1 | tee compat70/new-old.txt
         python tests/commit_boundary_compat.py --client "$OLD/libopenace64.so" --server "$NEW/tools/serverd/openads_serverd" --expect-fusion 0 | tee compat70/old-new.txt
         python tests/commit_boundary_compat.py --client "$OLD/libopenace64.so" --server "$OLD/openads_serverd" --expect-fusion 0 | tee compat70/old-old.txt
       env:
@@ -1172,7 +1182,7 @@ jobs:
         req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix71-full-test',headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})
         r=json.load(urllib.request.urlopen(req));assets={x['name']:x for x in r['assets']};name='openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz'
         for n in (name,name+'.sha256'):
-         pathlib.Path('compat71',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})).read())
+         pathlib.Path('compat71',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})).read())
         assert hashlib.sha256(pathlib.Path('compat71',name).read_bytes()).hexdigest()==pathlib.Path('compat71',name+'.sha256').read_text().split()[0]=='74fd4ed1b0b4160b3ec8aca95ad47d8198c133d6819428a268d98573eee1eb08'
         PYDOWNLOAD
         tar xzf compat71/openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz -C compat71
@@ -1182,7 +1192,8 @@ jobs:
          C="$NEW/src/libopenace64.so"; S="$NEW/tools/serverd/openads_serverd"; expect=0
          case "$combo" in new-new) expect=1;; new-old) S="$OLD/openads_serverd";; old-new) C="$OLD/libopenace64.so";; old-old) C="$OLD/libopenace64.so"; S="$OLD/openads_serverd";; esac
          python tests/bottom_count_compat.py --client "$C" --server "$S" --expect-bottom "$expect" | tee "compat71/$combo-bottom.txt"
-         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 | tee "compat71/$combo-commit.txt"
+         batch=0; case "$combo" in new-new|new-old) batch=1;; esac
+         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 --expect-append-batch "$batch" | tee "compat71/$combo-commit.txt"
         done
     - uses: actions/upload-artifact@v4
       if: always()
@@ -1202,7 +1213,7 @@ jobs:
         req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix72-full-test',headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})
         r=json.load(urllib.request.urlopen(req));assets={x['name']:x for x in r['assets']};name='openads-1.09.75-mtfix72-full-test-linux-x64.tar.gz'
         for n in (name,name+'.sha256'):
-         pathlib.Path('compat72',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})).read())
+         pathlib.Path('compat72',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})).read())
         assert hashlib.sha256(pathlib.Path('compat72',name).read_bytes()).hexdigest()==pathlib.Path('compat72',name+'.sha256').read_text().split()[0]=='13cb2b12613bb7a999b1bec83eaccb5c13d37a8d50922bbe8e70a7fc1aa241bf'
         PYDOWNLOAD
         tar xzf compat72/openads-1.09.75-mtfix72-full-test-linux-x64.tar.gz -C compat72
@@ -1212,7 +1223,8 @@ jobs:
          C="$NEW/src/libopenace64.so"; S="$NEW/tools/serverd/openads_serverd"
          case "$combo" in new-old) S="$OLD/openads_serverd";; old-new) C="$OLD/libopenace64.so";; old-old) C="$OLD/libopenace64.so"; S="$OLD/openads_serverd";; esac
          python tests/bottom_count_compat.py --client "$C" --server "$S" --expect-bottom 1 | tee "compat72/$combo-bottom.txt"
-         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 | tee "compat72/$combo-commit.txt"
+         batch=0; case "$combo" in new-new|new-old) batch=1;; esac
+         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 --expect-append-batch "$batch" | tee "compat72/$combo-commit.txt"
         done
     - uses: actions/upload-artifact@v4
       if: always()
@@ -1232,7 +1244,7 @@ jobs:
         req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix73-full-test',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
         r=json.load(urllib.request.urlopen(req));assets={x['name']:x for x in r['assets']};name='openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz'
         for n in (name,name+'.sha256'):
-         pathlib.Path('compat73',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream'})).read())
+         pathlib.Path('compat73',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']})).read())
         assert hashlib.sha256(pathlib.Path('compat73',name).read_bytes()).hexdigest()==pathlib.Path('compat73',name+'.sha256').read_text().split()[0]=='332ea631dddea014e4e8203f7f5406948816dd9a0150f54c77e846c6858ae84a'
         PYDOWNLOAD
         tar xzf compat73/openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz -C compat73
@@ -1242,7 +1254,8 @@ jobs:
          C="$NEW/src/libopenace64.so"; S="$NEW/tools/serverd/openads_serverd"; REPAIR=1
          case "$combo" in new-old) S="$OLD/openads_serverd"; REPAIR=0;; old-new) C="$OLD/libopenace64.so";; old-old) C="$OLD/libopenace64.so"; S="$OLD/openads_serverd"; REPAIR=0;; esac
          python tests/keyskip_compat.py --client "$C" --server "$S" --expect-repair "$REPAIR" | tee "compat73/$combo-keyskip.txt"
-         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 | tee "compat73/$combo-commit.txt"
+         batch=0; case "$combo" in new-new|new-old) batch=1;; esac
+         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 --expect-append-batch "$batch" | tee "compat73/$combo-commit.txt"
          python tests/bottom_count_compat.py --client "$C" --server "$S" --expect-bottom 1 | tee "compat73/$combo-bottom.txt"
         done
     - uses: actions/upload-artifact@v4
@@ -1258,7 +1271,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit 8db6b0bc719a2d7692a20c5798c12a66c521c01d
+        Built from fork branch release/mtfix70-full, commit 933288c10e09f3a8008ccaab02724c87a2171a49
         (frozen73 plus indexed-key Skip engine re-anchor and checked movement errors).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1405,8 +1418,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD
-        test -z "$(git diff --name-only 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 933288c10e09f3a8008ccaab02724c87a2171a49 HEAD
+        test -z "$(git diff --name-only 933288c10e09f3a8008ccaab02724c87a2171a49 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1445,9 +1458,11 @@ jobs:
       shell: bash
     - name: Install exact Ninja1.12.1 via verified API asset
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        curl --fail --location --retry 3 --header 'Accept: application/octet-stream' https://api.github.com/repos/ninja-build/ninja/releases/assets/167333196 -o "$RUNNER_TEMP/ninja.zip"
+        curl --fail --location --retry 3 --header 'Accept: application/octet-stream' --header "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/ninja-build/ninja/releases/assets/167333196 -o "$RUNNER_TEMP/ninja.zip"
         echo '89a287444b5b3e98f88a945afa50ce937b8ffd1dcc59c555ad9b1baf855298c9  '"$RUNNER_TEMP/ninja.zip" | shasum -a 256 -c -
         mkdir -p "$RUNNER_TEMP/ninja-exact"
         unzip "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja-exact"
@@ -1630,7 +1645,7 @@ jobs:
         ls -la
         sha256sum mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz
         sha256sum mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix75-full-test --target 8db6b0bc719a2d7692a20c5798c12a66c521c01d --prerelease --latest=false --title "OpenADS mtfix75 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz.sha256 MTFIX75_LINUX_SERVER_TEST.md openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix75-full-test --target 933288c10e09f3a8008ccaab02724c87a2171a49 --prerelease --latest=false --title "OpenADS mtfix75 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz.sha256 MTFIX75_LINUX_SERVER_TEST.md openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix75-full-test --json tagName,isPrerelease,url,assets
   stdcallABI:
     name: MSVC x86 exact additive stdcall wrapper ABI

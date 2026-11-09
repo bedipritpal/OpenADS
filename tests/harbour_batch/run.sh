@@ -20,14 +20,16 @@ for unit in ads1 adsfunc adsmgmnt adsx;do
   -I"$HBINC" -I"$RDD" -I"$ROOT/include/openads" -o "$OUT/$unit.o"
 done
 ar rcs "$OUT/librddads.a" "$OUT/ads1.o" "$OUT/adsfunc.o" "$OUT/adsmgmnt.o" "$OUT/adsx.o"
-g++ -std=c++17 -c "$ROOT/tests/harbour_batch/integration.cpp" \
+EXTRA=()
+if [ -f "$ROOT/tests/legacy-native-temp.h" ];then EXTRA=(-include "$ROOT/tests/legacy-native-temp.h");fi
+g++ -std=c++17 "${EXTRA[@]}" -c "$ROOT/tests/harbour_batch/integration.cpp" \
  -I"$HBINC" -I"$RDD" -I"$ROOT/src" -I"$ROOT/include" -I"$ROOT/include/openads" -o "$OUT/integration.o"
 mapfile -t LIBS < <(find "$BUILD" -name '*.a' ! -name '*dll.a' ! -path '*/CMakeFiles/*' | sort)
 LINKS=(-ldflag=-Wl,--start-group)
 for lib in "${LIBS[@]}";do LINKS+=("-ldflag=$lib");done
 LINKS+=(-ldflag=-Wl,--end-group -lstdc++ -lpthread)
 if [[ "${OS:-}" == Windows_NT ]];then LINKS+=(-lws2_32 -lbcrypt -lpsapi);else LINKS+=(-ldl);fi
-"$HBBIN" "$ROOT/tests/harbour_batch/integration.prg" "$OUT/integration.o" -L"$OUT" -lrddads "${LINKS[@]}" -gtstd -o"$OUT/harbour-batch"
+"$HBBIN" "$ROOT/tests/harbour_batch/integration.prg" "$OUT/integration.o" -L"$OUT" -lrddads "${LINKS[@]}" -mt -gtstd -o"$OUT/harbour-batch"
 "$OUT/harbour-batch" > "$OUT/runtime.log" 2>&1
 cat "$OUT/runtime.log"
 grep -q HARBOUR-BATCH-ERROR-PASS "$OUT/runtime.log"

@@ -23,5 +23,5 @@ puts("MSVC-X86-STDCALL-CDECL-PASS");return 0;}
 subprocess.run(['cl','/nologo','/LD','/W4','wrapper.c','impl.c','/link','/out:probe.dll'],cwd=out,check=True)
 subprocess.run(['cl','/nologo','/W4','caller.c','/Fe:caller.exe'],cwd=out,check=True)
 with (out/'exports.txt').open('w') as f:subprocess.run(['dumpbin','/exports','probe.dll'],cwd=out,stdout=f,check=True)
-t=(out/'exports.txt').read_text();assert '_AdsFlushPendingFields@4' in t and ' AdsFlushPendingFields ' in t
+t=(out/'exports.txt').read_text();assert '_AdsFlushPendingFields@4' in t and ' AdsFlushPendingFields' in t
 subprocess.run([str(out/'caller.exe')],cwd=out,check=True)

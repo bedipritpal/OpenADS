@@ -1,6 +1,6 @@
 """Isolated synthetic ACE client/server version-mix proof, no customer data."""
 import argparse, ctypes as C, json, os, pathlib, re, socket, subprocess, sys, tempfile, time
-p=argparse.ArgumentParser();p.add_argument('--client',required=True);p.add_argument('--server');p.add_argument('--child',action='store_true');p.add_argument('--root');p.add_argument('--port',type=int);p.add_argument('--expect-fusion',type=int,required=True);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--client',required=True);p.add_argument('--server');p.add_argument('--child',action='store_true');p.add_argument('--root');p.add_argument('--port',type=int);p.add_argument('--expect-fusion',type=int,required=True);p.add_argument('--expect-append-batch',type=int,choices=(0,1),default=0);a=p.parse_args()
 if not a.child:
  with tempfile.TemporaryDirectory(prefix='openads_commit_compat_') as root:
   root=pathlib.Path(root); data=root/'data';data.mkdir()
@@ -17,7 +17,7 @@ if not a.child:
      time.sleep(.05)
    else:raise RuntimeError('daemon did not listen')
    env.update(OPENADS_WIRE_TRACE='1',OPENADS_WIRE_TRACE_COMPACT='1',OPENADS_WIRE_TRACE_FILE=str(root/'wire.log'))
-   subprocess.run([sys.executable,__file__,'--child','--client',str(pathlib.Path(a.client).resolve()),'--root',str(root),'--port',str(port),'--expect-fusion',str(a.expect_fusion)],check=True,env=env,cwd=root,timeout=30)
+   subprocess.run([sys.executable,__file__,'--child','--client',str(pathlib.Path(a.client).resolve()),'--root',str(root),'--port',str(port),'--expect-fusion',str(a.expect_fusion),'--expect-append-batch',str(a.expect_append_batch)],check=True,env=env,cwd=root,timeout=30)
   finally:
    proc.terminate()
    try:proc.wait(timeout=10)
@@ -41,6 +41,11 @@ frames=[]
 for line in (root/'wire.log').read_text().splitlines():
  m=re.search(r'wire  op\.(0x[0-9A-F]+).*ackb\.(\d+)',line)
  if m:frames.append((m[1],int(m[2])))
-assert sum(op=='0x5A' for op,n in frames)==(1 if a.expect_fusion else 2),frames
-assert sum(op=='0x5E' and n==1 for op,n in frames)==a.expect_fusion,frames
-print(json.dumps({'client':str(pathlib.Path(a.client).name),'fused_commit':a.expect_fusion,'key_commit_then_whole_record':True,'disk_bytes_exact':True,'frames':frames}))
+# Frozen clients probe before each commit run. 75 qualifies the successful
+# append and buffers the first field in BOTH distinct commit batches.
+expected_fused=a.expect_fusion*(1+a.expect_append_batch)
+assert sum(op=='0x5A' for op,n in frames)==2-expected_fused,frames
+assert sum(op=='0x5E' and n==1 for op,n in frames)==expected_fused,frames
+assert sum(op=='0x5E' for op,n in frames)==1+a.expect_append_batch,frames
+assert sum(op=='0x52' for op,n in frames)==(0 if a.expect_append_batch else 2),frames
+print(json.dumps({'client':str(pathlib.Path(a.client).name),'fused_commit':a.expect_fusion,'append_batch':a.expect_append_batch,'key_commit_then_whole_record':True,'disk_bytes_exact':True,'frames':frames}))

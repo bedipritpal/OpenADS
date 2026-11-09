@@ -48,7 +48,8 @@ else:
 assert flags,'No core flags recovered'
 pathlib.Path(sys.argv[2]).write_text('\n'.join(flags)+'\n')
 PYFLAGS
-mapfile -t CORE_FLAGS < "$OUT/core-flags.txt"
+# Windows Python writes CRLF; Bash mapfile strips LF only.
+mapfile -t CORE_FLAGS < <(tr -d '\r' < "$OUT/core-flags.txt")
 EXTRA=()
 if [ -f "$ROOT/tests/legacy-native-temp.h" ];then EXTRA=(-include "$ROOT/tests/legacy-native-temp.h");fi
 g++ -std=c++17 "${CORE_FLAGS[@]}" "${EXTRA[@]}" -c "$ROOT/tests/harbour_batch/integration.cpp" \

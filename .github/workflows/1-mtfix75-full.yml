@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix75-full-test
-  PINNED_SOURCE: b959281f324f82f7b9c6b0fc5251eba89baba6f3
+  PINNED_SOURCE: 8db6b0bc719a2d7692a20c5798c12a66c521c01d
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD
-        test -z "$(git diff --name-only b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD
+        test -z "$(git diff --name-only 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -813,8 +813,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD
-        test -z "$(git diff --name-only b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD
+        test -z "$(git diff --name-only 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -1049,9 +1049,11 @@ jobs:
         PYDEPS
     - name: Install exact Ninja1.12.1 via verified API asset
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        curl --fail --location --retry 3 --header 'Accept: application/octet-stream' https://api.github.com/repos/ninja-build/ninja/releases/assets/167333509 -o "$RUNNER_TEMP/ninja.zip"
+        curl --fail --location --retry 3 --header 'Accept: application/octet-stream' --header "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/ninja-build/ninja/releases/assets/167333509 -o "$RUNNER_TEMP/ninja.zip"
         echo '6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  '"$RUNNER_TEMP/ninja.zip" | shasum -a 256 -c -
         mkdir -p "$RUNNER_TEMP/ninja-exact"
         unzip "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja-exact"
@@ -1256,7 +1258,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit b959281f324f82f7b9c6b0fc5251eba89baba6f3
+        Built from fork branch release/mtfix70-full, commit 8db6b0bc719a2d7692a20c5798c12a66c521c01d
         (frozen73 plus indexed-key Skip engine re-anchor and checked movement errors).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1403,8 +1405,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD
-        test -z "$(git diff --name-only b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD
+        test -z "$(git diff --name-only 8db6b0bc719a2d7692a20c5798c12a66c521c01d HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1628,7 +1630,7 @@ jobs:
         ls -la
         sha256sum mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz
         sha256sum mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix75-full-test --target b959281f324f82f7b9c6b0fc5251eba89baba6f3 --prerelease --latest=false --title "OpenADS mtfix75 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz.sha256 MTFIX75_LINUX_SERVER_TEST.md openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix75-full-test --target 8db6b0bc719a2d7692a20c5798c12a66c521c01d --prerelease --latest=false --title "OpenADS mtfix75 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz.sha256 MTFIX75_LINUX_SERVER_TEST.md openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix75-full-test --json tagName,isPrerelease,url,assets
   stdcallABI:
     name: MSVC x86 exact additive stdcall wrapper ABI

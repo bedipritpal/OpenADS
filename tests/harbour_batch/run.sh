@@ -31,7 +31,7 @@ import pathlib,json,shlex,sys
 build=pathlib.Path(sys.argv[1]);flags=[]
 p=build/'compile_commands.json'
 if p.exists():
- rows=json.loads(p.read_text());row=next(r for r in rows if r['file'].endswith('/network/server.cpp'))
+ rows=json.loads(p.read_text());row=next(r for r in rows if r['file'].replace('\\','/').endswith('/network/server.cpp'))
  args=row.get('arguments') or shlex.split(row['command'])
  i=0
  while i<len(args):

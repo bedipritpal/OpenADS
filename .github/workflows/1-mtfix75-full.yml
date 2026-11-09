@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix75-full-test
-  PINNED_SOURCE: 2e4757fd7c061a53523acbaeebb9e381a4c725fe
+  PINNED_SOURCE: b959281f324f82f7b9c6b0fc5251eba89baba6f3
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 2e4757fd7c061a53523acbaeebb9e381a4c725fe HEAD
-        test -z "$(git diff --name-only 2e4757fd7c061a53523acbaeebb9e381a4c725fe HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD
+        test -z "$(git diff --name-only b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -94,7 +94,7 @@ jobs:
 
         PYHARNESS
 
-        cmake -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.75-mtfix75-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.75-mtfix75-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
         cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe auth_spike_abi_probe auth_spike_transport_probe auth_mutual_probe auth_resource_probe openads_unit_tests -j2
       shell: bash
     - name: Build Harbour with unchanged Qt4.9.2
@@ -813,8 +813,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 2e4757fd7c061a53523acbaeebb9e381a4c725fe HEAD
-        test -z "$(git diff --name-only 2e4757fd7c061a53523acbaeebb9e381a4c725fe HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD
+        test -z "$(git diff --name-only b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -862,7 +862,7 @@ jobs:
         HBBIN="$RUNNER_TEMP/harbour-x64/bin/win/mingw64"
         test -f "$HBBIN/harbour.exe"
         printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
-        cmake -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-x64 -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release \
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-x64 -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
           -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
           -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON \
@@ -1103,7 +1103,7 @@ jobs:
     - name: Configure
       shell: bash
       run: |
-        cmake -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
     - name: Build
       run: cmake --build build/ninja-clang --config Release
     - name: Test (full suite)
@@ -1256,7 +1256,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit 2e4757fd7c061a53523acbaeebb9e381a4c725fe
+        Built from fork branch release/mtfix70-full, commit b959281f324f82f7b9c6b0fc5251eba89baba6f3
         (frozen73 plus indexed-key Skip engine re-anchor and checked movement errors).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1403,8 +1403,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 2e4757fd7c061a53523acbaeebb9e381a4c725fe HEAD
-        test -z "$(git diff --name-only 2e4757fd7c061a53523acbaeebb9e381a4c725fe HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD
+        test -z "$(git diff --name-only b959281f324f82f7b9c6b0fc5251eba89baba6f3 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1454,7 +1454,7 @@ jobs:
         echo "$RUNNER_TEMP/ninja-exact" >> "$GITHUB_PATH"
     - name: Configure
       run: |+
-        cmake -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" --preset default \
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" --preset default \
               -DOPENADS_WITH_TLS=ON \
               -DOPENADS_WITH_HTTP=ON \
               -DOPENADS_VERSION_FORCE=$KIT_VERSION \
@@ -1628,7 +1628,7 @@ jobs:
         ls -la
         sha256sum mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz
         sha256sum mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix75-full-test --target 2e4757fd7c061a53523acbaeebb9e381a4c725fe --prerelease --latest=false --title "OpenADS mtfix75 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz.sha256 MTFIX75_LINUX_SERVER_TEST.md openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix75-full-test --target b959281f324f82f7b9c6b0fc5251eba89baba6f3 --prerelease --latest=false --title "OpenADS mtfix75 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix75-full-qt492-x86.zip mtfix75-full-x64.zip openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz openads-1.09.75-mtfix75-full-test-linux-x64.tar.gz.sha256 MTFIX75_LINUX_SERVER_TEST.md openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz openads-1.09.75-mtfix75-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix75-full-test --json tagName,isPrerelease,url,assets
   stdcallABI:
     name: MSVC x86 exact additive stdcall wrapper ABI

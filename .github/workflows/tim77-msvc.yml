@@ -1,0 +1,210 @@
+name: mtfix77 MSVC matched kit for Tim (x64 + x86)
+permissions:
+  contents: write
+concurrency:
+  group: mtfix77-tim-msvc
+  cancel-in-progress: false
+env:
+  KIT_TAG: v1.09.75-mtfix77-msvc-tim
+  PINNED_SOURCE: 4eff01215c4735b049fb421c584b3a771809b8c6
+jobs:
+  msvc:
+    name: Native MSVC ${{ matrix.arch }}
+    runs-on: windows-2022
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - arch: x64
+          platform: x64
+          bits: 64
+        - arch: x86
+          platform: Win32
+          bits: 32
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ env.PINNED_SOURCE }}
+        fetch-depth: 0
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+        path: recipe
+        sparse-checkout: .github/workflows/tim77-support
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        architecture: ${{ matrix.arch }}
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.arch }}
+    - name: Verify exact cumulative source
+      shell: bash
+      run: |
+        test "$(git rev-parse HEAD)" = "$PINNED_SOURCE"
+        git log -1 --oneline
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
+          except Exception:
+           if attempt==2:raise
+           time.sleep(3)
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Configure (Tim's flags)
+      shell: pwsh
+      run: |
+        cmake -S . -B build\mls-${{ matrix.arch }} -G "Visual Studio 17 2022" -A ${{ matrix.platform }} -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_TLS=OFF -DOPENADS_WITH_HTTP=ON -DOPENADS_WITH_SQLITE=ON
+        Select-String -Path build\mls-${{ matrix.arch }}\CMakeCache.txt -Pattern 'OPENADS_WITH_HTTP|OPENADS_WITH_SQLITE|OPENADS_WITH_TLS|OPENADS_BUILD_TESTS|CMAKE_GENERATOR:|CMAKE_GENERATOR_PLATFORM'
+
+        if($LASTEXITCODE -ne 0){throw "Configure failed"}
+    - name: Build
+      shell: pwsh
+      run: |
+        cmake --build build\mls-${{ matrix.arch }} --config Release
+        if($LASTEXITCODE -ne 0){throw "Build failed"}
+    - name: Stage
+      shell: pwsh
+      run: |
+        $s = "mtfix77-msvc-${{ matrix.arch }}"
+        New-Item -ItemType Directory -Force $s | Out-Null
+        Get-ChildItem build\mls-${{ matrix.arch }} -Recurse -File | Where-Object { $_.FullName -match '\\Release\\' -and $_.Name -match '^(openace(32|64)\.(dll|lib)|openads_serverd\.exe|openads_auth_worker\.exe)$' } | ForEach-Object { Copy-Item $_.FullName $s; Write-Host "staged $($_.FullName)" }
+        foreach ($required in @("openace${{ matrix.bits }}.dll", "openace${{ matrix.bits }}.lib", "openads_serverd.exe")) {
+          if (-not (Test-Path "$s\$required")) { throw "missing $required" }
+        }
+        Get-ChildItem $s | Format-Table Name, Length
+        "built from $env:PINNED_SOURCE with VS 2022, ${{ matrix.platform }}, HTTP on, SQLite on, full tests off; targeted native probes separate; recipe ${{ github.sha }}" | Out-File "$s\BUILD.txt" -Encoding ascii
+
+        Copy-Item -Recurse include "$s\include"
+        Copy-Item include/openads/ace.h "$s\include/ace.h"
+        New-Item -ItemType Directory -Force "$s\contrib/oads_hb", "$s\patches/harbour", "$s\docs" | Out-Null
+        Copy-Item contrib/oads_hb/oads_hb.c "$s\contrib/oads_hb/"
+        Copy-Item patches/harbour/rddads-pending-fields.patch "$s\patches/harbour/"
+        Copy-Item recipe/.github/workflows/tim77-support/README-TIM.txt,recipe/.github/workflows/tim77-support/build-harbour-libs.cmd $s
+        Copy-Item release-notes-1.09.75-mtfix75.md,release-notes-1.09.75-mtfix77.md,docs/diagnostics-gate.md,LICENSE,NOTICE "$s\docs/"
+        Copy-Item openads.ini.sample "$s\openads.ini.sample"
+    - name: Smoke test, server answers on both ports (HTTP on)
+      shell: pwsh
+      run: |
+        $s = "mtfix77-msvc-${{ matrix.arch }}"
+        $d = Join-Path $env:RUNNER_TEMP "smoke-data"
+        New-Item -ItemType Directory -Force $d | Out-Null
+        $p = Start-Process -FilePath "$s\openads_serverd.exe" -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','6264','--http-port','6265','--data',$d) -PassThru -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+        Start-Sleep -Seconds 6
+        $tcp = Test-NetConnection -ComputerName 127.0.0.1 -Port 6264 -WarningAction SilentlyContinue
+        $http = Test-NetConnection -ComputerName 127.0.0.1 -Port 6265 -WarningAction SilentlyContinue
+        Write-Host "port 6264 open: $($tcp.TcpTestSucceeded)  port 6265 open: $($http.TcpTestSucceeded)"
+        Get-Content out.txt, err.txt -ErrorAction SilentlyContinue
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        if (-not $tcp.TcpTestSucceeded) { throw "tcp port 6264 not open" }
+        if (-not $http.TcpTestSucceeded) { throw "http port 6265 not open" }
+    - name: Native DLL import and local marker tests
+      shell: pwsh
+      run: |
+        $s="mtfix77-msvc-${{ matrix.arch }}"
+        cl /nologo /Iinclude tests/harbour_batch/abi_probe.c /Fe:"$s/pending-probe.exe" /link "$s/openace${{ matrix.bits }}.lib"
+        if($LASTEXITCODE -ne 0){throw "Import probe compile failed"}
+        & "$s/pending-probe.exe" | Tee-Object "$s/docs/pending-import-proof.txt"
+        if($LASTEXITCODE -ne 0){throw "Import probe failed"}
+        python recipe/.github/workflows/tim77-support/verify-marker.py "$s/openace${{ matrix.bits }}.dll" | Tee-Object "$s/docs/marker-native-proof.txt"
+        if($LASTEXITCODE -ne 0){throw "Marker probe failed"}
+        dumpbin /exports "$s/openace${{ matrix.bits }}.dll" | Out-File "$s/docs/exports.txt"
+        dumpbin /dependents "$s/openace${{ matrix.bits }}.dll" | Out-File "$s/docs/dependencies.txt"
+        $e=Get-Content "$s/docs/exports.txt" -Raw
+        foreach($name in @('OAdsTraceMark','OAdsTraceMarkEx','AdsFlushPendingFields')){if(-not $e.Contains($name)){throw "Missing export $name"}}
+        if('${{ matrix.bits }}' -eq '32'){foreach($name in @('_OAdsTraceMark@8','_OAdsTraceMarkEx@24','_AdsFlushPendingFields@4')){if(-not $e.Contains($name)){throw "Missing stdcall $name"}}}
+        Remove-Item "$s/pending-probe.exe"
+    - name: Matched remote commit and bottom capabilities
+      shell: pwsh
+      run: |
+        $s="mtfix77-msvc-${{ matrix.arch }}"
+        python tests/commit_boundary_compat.py --client "$s/openace${{ matrix.bits }}.dll" --server "$s/openads_serverd.exe" --expect-fusion 1 --expect-append-batch 1 | Tee-Object "$s/docs/commit-remote-proof.txt"
+        if($LASTEXITCODE -ne 0){throw "Remote commit proof failed"}
+        python tests/bottom_count_compat.py --client "$s/openace${{ matrix.bits }}.dll" --server "$s/openads_serverd.exe" --expect-bottom 1 | Tee-Object "$s/docs/bottom-remote-proof.txt"
+        if($LASTEXITCODE -ne 0){throw "Remote bottom proof failed"}
+    - name: Build supplied Harbour wrapper and patched RDD libraries with native MSVC
+      shell: pwsh
+      run: |
+        $s="mtfix77-msvc-${{ matrix.arch }}"
+        git clone https://github.com/harbour/core.git "$env:RUNNER_TEMP/harbour-headers"
+        if($LASTEXITCODE -ne 0){throw "Harbour checkout failed"}
+        git -C "$env:RUNNER_TEMP/harbour-headers" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+        if($LASTEXITCODE -ne 0){throw "Harbour pin failed"}
+        & "$s/build-harbour-libs.cmd" "$env:RUNNER_TEMP/harbour-headers" '${{ matrix.bits }}' | Tee-Object "$s/docs/harbour-library-build-proof.txt"
+        if($LASTEXITCODE -ne 0){throw "Harbour library build helper failed"}
+        # These compile-verified libraries are not installed over Tim's own Harbour ABI.
+        Remove-Item -Recurse "$s/harbour-lib${{ matrix.bits }}"
+    - name: Zip and hash
+      shell: pwsh
+      run: |
+        $s="mtfix77-msvc-${{ matrix.arch }}"
+        Compress-Archive -Path "$s/*" -DestinationPath "$s.zip"
+        (Get-FileHash "$s.zip" -Algorithm SHA256).Hash.ToLower() + "  $s.zip" | Out-File "$s.zip.sha256" -Encoding ascii
+        Get-Content "$s.zip.sha256"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-${{ matrix.arch }}
+        path: |-
+          mtfix77-msvc-${{ matrix.arch }}.zip
+          mtfix77-msvc-${{ matrix.arch }}.zip.sha256
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: proof-${{ matrix.arch }}
+        path: |-
+          mtfix77-msvc-${{ matrix.arch }}/docs/
+          out.txt
+          err.txt
+  publish:
+    runs-on: ubuntu-24.04
+    needs:
+    - msvc
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: kit-*
+        merge-multiple: true
+    - name: Create new immutable prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        cat > NOTES.md <<'NOTES'
+        # OpenADS cumulative77 matched MSVC kit for Tim
+        Pritpal Bedi. bedipritpal/OpenADS fork of FiveTechSoft/OpenADS.
+        Exact source4eff01215c4735b049fb421c584b3a771809b8c6, the cumulative77 line; no engine changes for this compiler packaging. Separate from the MinGW full kit. New release, frozen64/52/76/77-full assets unchanged.
+        Matched MSVC x64 and x86 client DLL/import library and server. x64 for Tim's reported setup. HTTP/SQLite ON, TLS OFF as his64 MSVC kit. Read README-TIM.txt before replacing any test binaries.
+        Includes wrapper source, matching headers/import library, pending-field RDD patch and a compile-verified build helper for his own matching Harbour ABI. NO prebuilt Harbour RDD/VM substitution. OADS marker and RDD error bridge require application relink; DLL swap alone does not add Harbour symbols. OptionalIDs and both trace flavors retained. No running server/data changed.
+        Native tests cover startup TCP/HTTP, imports/exports, old/new C marker full/compact/gates/maxIDs/alignment, matched remote commit batching/durability/retained locks and bottom counts. Supplied helper compiles Harbour wrapper and patched RDD with both native MSVC architectures against pinned Harbour headers. That is a compile check, not a full native Harbour VM/application runtime test. Full native MSVC unit suite NOT run. Cumulative77 all-platform gates passed separately; MinGWx86 has197 known baseline failures, not clean full suite. Does not establish Tim's SAP speed gap is fixed or C(8)scope fixed. Test-only, no production clearance or auto deployment.
+        NOTES
+        sha256sum -c mtfix77-msvc-x64.zip.sha256
+        sha256sum -c mtfix77-msvc-x86.zip.sha256
+        gh release create "$KIT_TAG" --target "$PINNED_SOURCE" --prerelease --latest=false --title 'OpenADS cumulative77 MSVC kit for Tim (x64 + x86), test only' --notes-file NOTES.md mtfix77-msvc-x64.zip mtfix77-msvc-x64.zip.sha256 mtfix77-msvc-x86.zip mtfix77-msvc-x86.zip.sha256
+        gh release view "$KIT_TAG" --json tagName,isPrerelease,url,assets
+'on':
+  push:
+    branches:
+    - release/mtfix70-full
+    paths:
+    - .github/workflows/tim77-msvc.yml
+    - .github/workflows/tim77-support/**
+  workflow_dispatch: {}

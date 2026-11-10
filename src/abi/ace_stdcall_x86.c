@@ -6060,6 +6060,16 @@ __declspec(dllexport) UNSIGNED32 __stdcall AdsMutexDestroy(ADSHANDLE a0, UNSIGNE
     return rc;
 }
 
+/* Local marker: do not arc-log label pointers or alter database last error. */
+#define OAdsTraceMark oadsimpl_OAdsTraceMark
+extern UNSIGNED32 OAdsTraceMark(const UNSIGNED8*, UNSIGNED32);
+#undef OAdsTraceMark
+#pragma comment(linker, "/alternatename:_oadsimpl_OAdsTraceMark=_OAdsTraceMark")
+#pragma comment(linker, "/export:OAdsTraceMark=_OAdsTraceMark")
+__declspec(dllexport) UNSIGNED32 __stdcall OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes) {
+    return oadsimpl_OAdsTraceMark(label, bytes);
+}
+
 /* ---- OAdsSetLogging ---- */
 #define OAdsSetLogging oadsimpl_OAdsSetLogging
 extern UNSIGNED32 OAdsSetLogging(UNSIGNED16 usOn);

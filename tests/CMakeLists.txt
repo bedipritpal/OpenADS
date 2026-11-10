@@ -633,3 +633,19 @@ if(Python3_Interpreter_FOUND AND TARGET openads_serverd)
         ${CMAKE_CURRENT_SOURCE_DIR}/trace_gate_contract.py $<TARGET_FILE:openads_trace_gate_probe>
         $<TARGET_FILE:openads_serverd>)
 endif()
+
+# Pure-local marker gates plus the existing remote sequence with markers inserted.
+add_executable(openads_trace_marker_probe trace_marker_probe.cpp)
+target_link_libraries(openads_trace_marker_probe PRIVATE openads_core)
+if(OPENADS_WITH_SQLITE)
+    target_link_libraries(openads_trace_marker_probe PRIVATE openads_sqlite3)
+endif()
+if(OPENADS_WITH_HARBOUR_UDF)
+    target_link_libraries(openads_trace_marker_probe PRIVATE ${HARBOUR_LINK_LIBRARIES})
+endif()
+add_dependencies(openads_unit_tests openads_trace_marker_probe)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME trace_marker_contract COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/trace_marker_contract.py
+        $<TARGET_FILE:openads_trace_marker_probe> $<TARGET_FILE:openads_trace_gate_probe>)
+endif()

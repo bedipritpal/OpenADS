@@ -1583,6 +1583,9 @@ UNSIGNED32 ENTRYPOINT OAdsCompleteAuth(ADSHANDLE pending, const UNSIGNED8* blob,
 UNSIGNED32 ENTRYPOINT OAdsBeginMutualAuth(const char* url,const char* selector,ADSHANDLE* pending,UNSIGNED8* challenge32,UNSIGNED8* binding32,UNSIGNED8* proof,UNSIGNED32* proofBytes);
 UNSIGNED32 ENTRYPOINT OAdsCancelAuth(ADSHANDLE pending);
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn);
+// Local wire-trace marker, no server/RDD action. 1..120 bytes, no C0/DEL/C1 control bytes.
+// AE_SUCCESS only when written; otherwise nonzero, last DB error unchanged.
+UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes);
 // Aggregate health JSON from an AdsMgConnect handle (NOT a data connection).
 // *pulLen is buffer capacity incl. NUL; out is required size incl. NUL.
 // NULL/short buffer: AE_INSUFFICIENT_BUFFER, no partial JSON written.

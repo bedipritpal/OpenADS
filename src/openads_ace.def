@@ -327,6 +327,7 @@ EXPORTS
     OAdsBeginAuth
     OAdsCompleteAuth
     OAdsCancelAuth
+    OAdsTraceMark
     OAdsSetLogging
     AdsSetEpoch
     AdsSetExact

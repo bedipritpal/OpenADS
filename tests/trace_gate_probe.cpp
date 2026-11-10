@@ -15,10 +15,17 @@ void checked(UNSIGNED32 rc,int line){if(rc)throw std::runtime_error("ACE failure
 #define ok(x) checked((x),__LINE__)
 int main(int argc,char**argv){
  std::string mode=argc>1?argv[1]:"default";
+ const bool marks = mode == "markers";
+ if (marks) mode = "caller";
+ auto mark = [&](const char* label) {
+  if (marks) ok(OAdsTraceMark(reinterpret_cast<const UNSIGNED8*>(label), static_cast<UNSIGNED32>(std::strlen(label))));
+ };
+
  bool was= openads::util::logging_enabled();
  if(mode=="on"||mode=="lifecycle"||mode=="caller")ok(OAdsSetLogging(1));
  else if(mode=="off")ok(OAdsSetLogging(0));
  if(mode=="on" && !openads::util::logging_enabled())return 8;
+ mark("APP_BEGIN");
  auto dir=fs::temp_directory_path()/"openads_trace_gate_probe";fs::remove_all(dir);fs::create_directories(dir);
  auto ds=dir.string();std::vector<UNSIGNED8> srv(ds.begin(),ds.end());srv.push_back(0);ADSHANDLE c=0,t=0,ix=0;
  ok(AdsConnect60(srv.data(),ADS_LOCAL_SERVER,nullptr,nullptr,0,&c));
@@ -33,8 +40,8 @@ int main(int argc,char**argv){
  UNSIGNED16 found=0;ok(AdsSeek(ix,reinterpret_cast<UNSIGNED8*>(&val),sizeof(val),ADS_DOUBLEKEY,ADS_HARDSEEK,&found));if(!found)return 9;
  if(mode=="caller"){
   // Existing first field probes immediately; the repeated assignment batches.
-  ok(AdsAppendRecord(t));ok(AdsSetDouble(t,fld,1234567));ok(AdsSetDouble(t,fld,1234567));ok(AdsWriteRecord(t));ok(AdsUnlockTable(t));
-  ok(AdsAppendRecord(t));ok(AdsSetDouble(t,fld,1234567));ok(AdsSetDouble(t,fld,1234567));ok(AdsUnlockTable(t));
+  ok(AdsAppendRecord(t));ok(AdsSetDouble(t,fld,1234567));ok(AdsSetDouble(t,fld,1234567));mark("PENDING_BEFORE_COMMIT");ok(AdsWriteRecord(t));ok(AdsUnlockTable(t));
+  ok(AdsAppendRecord(t));ok(AdsSetDouble(t,fld,1234567));ok(AdsSetDouble(t,fld,1234567));mark("PENDING_BEFORE_UNLOCK");ok(AdsUnlockTable(t));
   UNSIGNED32 count=0;ok(AdsGetRecordCount(t,0,&count));ok(AdsGotoRecord(t,1));
   ok(AdsGotoBottom(ix));
  }
@@ -52,7 +59,7 @@ int main(int argc,char**argv){
   if(!direct.connect("127.0.0.1",server.port(),ds))return 10;
   direct.disconnect();
  }
- server.stop();fs::remove_all(dir);
+ server.stop();fs::remove_all(dir);mark("APP_END");
  std::cout<<"initial_master="<<was<<" mode="<<mode<<" values_unchanged=1\n";
  return mode=="default" && was?7:0;
 }

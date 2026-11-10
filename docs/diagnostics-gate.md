@@ -83,3 +83,15 @@ or scope-stack update; the master/selector checks still have a cost. Enabled
 entries add TLS context, ID allocation on outer entries and longer log rows.
 No zero-overhead or production speed claim. No wire/protocol/server storage,
 Vouch source, commit, lock, navigation or count policy changes.
+
+## Application boundary markers (mtfix76)
+
+`OAds_TraceMark(cLabel)` writes a client-local M row into cli_trace.log, in BOTH
+full and compact modes. It requires wire_trace and the master gate; it never
+enables them. No connection or RDD action occurs. The label is 1..120 bytes with
+no C0/DEL/C1 control bytes. Use ASCII developer labels, never private data.
+The result is diagnostic only, not application-save status. See
+`release-notes-1.09.75-mtfix76.md` for the full contract and measured-time limits.
+Count only W rows as wire frames. M rows have no wire duration and advance the
+previous-row gap column. Thread IDs and steady tick_us pair application scopes;
+local file writes have overhead and markers are not cross-thread wire barriers.

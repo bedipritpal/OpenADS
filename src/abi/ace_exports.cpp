@@ -1612,7 +1612,7 @@ static void cli_trace_table_close(const openads::network::RemoteTable* rt) {
         trace.indexes.erase({rt->conn, entry.second});
 }
 
-static void cli_trace_write_locked(FILE* hf, long long ms,
+static bool cli_trace_write_locked(FILE* hf, long long ms,
                                    const char* who, const char* op,
                                    char flag, const char* detail,
                                    const char* caller = "-") {
@@ -1651,6 +1651,7 @@ static void cli_trace_write_locked(FILE* hf, long long ms,
         previous_row = row_time;
         have_previous_row = true;
     }
+    return printed >= 0;
 }
 
 static void cli_trace_line(long long /*elapsed_ms*/, const char* who, const char* op,
@@ -40271,6 +40272,40 @@ UNSIGNED32 ENTRYPOINT AdsSetDefaultConnection(ADSHANDLE hConn) {
 // Default OFF. Environment and INI cannot enable this master.
 // Process-local: affects this client DLL instance (and the engine when
 // running in local-server mode, since it shares the process).
+// Local application boundary only. Length-bearing input rejects embedded NUL.
+// Never call fail(): diagnostics must preserve the last database error/state.
+UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes) {
+    try {
+        openads::abi::wire_caller::Entry wire_entry("OAdsTraceMark", cli_trace_on());
+        if (!cli_trace_on() || !label || bytes == 0 || bytes > 120)
+            return openads::AE_INTERNAL_ERROR;
+        for (UNSIGNED32 i = 0; i < bytes; ++i)
+            if (label[i] < 0x20 || (label[i] >= 0x7F && label[i] <= 0x9F))
+                return openads::AE_INTERNAL_ERROR;
+        auto& trace = cli_trace_state();
+        std::lock_guard<std::mutex> lk(trace.mu);
+        FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
+        if (!hf) return openads::AE_INTERNAL_ERROR;
+        // Same process-relative monotonic origin for all marker threads.
+        static const auto origin = std::chrono::steady_clock::now();
+        const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - origin).count();
+        const auto scope = openads::abi::wire_caller::snapshot();
+        char detail[256];
+        std::snprintf(detail, sizeof(detail), "thread.%llu  tick_us.%lld  label.%.*s",
+                      static_cast<unsigned long long>(scope.thread),
+                      static_cast<long long>(tick), static_cast<int>(bytes),
+                      reinterpret_cast<const char*>(label));
+        const bool written = cli_trace_write_locked(hf, -1, "-", "Marker", 'M',
+                                                    detail, "OAdsTraceMark");
+        const int closed = std::fclose(hf);
+        return written && closed == 0 ? openads::AE_SUCCESS : openads::AE_INTERNAL_ERROR;
+    } catch (...) {
+        // Allocation/config/file-system failures are diagnostic failure only.
+        return openads::AE_INTERNAL_ERROR;
+    }
+}
+
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn) {
     openads::abi::wire_caller::Entry wire_entry("OAdsSetLogging", cli_trace_on());
     openads::util::set_logging_enabled(usOn != 0);

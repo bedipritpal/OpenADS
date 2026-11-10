@@ -205,6 +205,16 @@ HB_FUNC( OADS_GETCONNECTION )
 /*  ace_calls.log traces). Call OAds_SetLogging( .F. ) once at startup */
 /*  Default OFF. .T. permits env/ini diagnostics; .F. stops them.       */
 /* ------------------------------------------------------------------ */
+/* OAds_TraceMark(cLabel) -> lWritten. No default-connection lookup/RDD call.
+   Validate length before narrowing HB_SIZE; binary Harbour strings retain NUL. */
+extern UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8*, UNSIGNED32);
+HB_FUNC( OADS_TRACEMARK )
+{
+    HB_SIZE len = hb_parclen(1);
+    hb_retl( HB_ISCHAR(1) && len > 0 && len <= 120 &&
+             OAdsTraceMark((const UNSIGNED8*) hb_parc(1), (UNSIGNED32) len) == 0 );
+}
+
 HB_FUNC( OADS_SETLOGGING )
 {
     hb_retl( OAdsSetLogging( ( UNSIGNED16 ) hb_parl( 1 ) ) == 0 );

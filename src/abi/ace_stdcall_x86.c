@@ -6070,6 +6070,17 @@ __declspec(dllexport) UNSIGNED32 __stdcall OAdsTraceMark(const UNSIGNED8* label,
     return oadsimpl_OAdsTraceMark(label, bytes);
 }
 
+/* Additive optional-ID bridge, preserving the old two-argument entry. */
+#define OAdsTraceMarkEx oadsimpl_OAdsTraceMarkEx
+extern UNSIGNED32 OAdsTraceMarkEx(const UNSIGNED8*, UNSIGNED32, UNSIGNED64, UNSIGNED64);
+#undef OAdsTraceMarkEx
+#pragma comment(linker, "/alternatename:_oadsimpl_OAdsTraceMarkEx=_OAdsTraceMarkEx")
+#pragma comment(linker, "/export:OAdsTraceMarkEx=_OAdsTraceMarkEx")
+__declspec(dllexport) UNSIGNED32 __stdcall OAdsTraceMarkEx(const UNSIGNED8* label, UNSIGNED32 bytes,
+                                                        UNSIGNED64 instance, UNSIGNED64 app_thread) {
+    return oadsimpl_OAdsTraceMarkEx(label, bytes, instance, app_thread);
+}
+
 /* ---- OAdsSetLogging ---- */
 #define OAdsSetLogging oadsimpl_OAdsSetLogging
 extern UNSIGNED32 OAdsSetLogging(UNSIGNED16 usOn);

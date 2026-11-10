@@ -95,3 +95,12 @@ The result is diagnostic only, not application-save status. See
 Count only W rows as wire frames. M rows have no wire duration and advance the
 previous-row gap column. Thread IDs and steady tick_us pair application scopes;
 local file writes have overhead and markers are not cross-thread wire barriers.
+
+## Optional instance/thread IDs (mtfix77)
+
+The SAME Harbour function accepts `OAds_TraceMark(cMark [,nInstId [,nThreadId]])`.
+Omitted IDs are0; explicit NIL/type/range errors return .F. Exact integers accept
+0..9999999999999999; floats must be finite/integral and <=9007199254740991.
+Both flavors have right-aligned instance/thread fields, then marker, with
+separate auto_thread and tick_us. The old C ABI remains; an additive Ex bridge
+carries IDs. See `release-notes-1.09.75-mtfix77.md` for the full contract.

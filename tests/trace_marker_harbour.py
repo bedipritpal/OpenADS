@@ -1,5 +1,5 @@
 """Run the actual linked Harbour executable with both trace flavors and gates."""
-import os,pathlib,subprocess,sys,tempfile
+import os,pathlib,re,subprocess,sys,tempfile
 exe=str(pathlib.Path(sys.argv[1]).resolve())
 for compact in ('0','1'):
  for mode in ('on','off'):
@@ -14,8 +14,20 @@ for compact in ('0','1'):
    path=root/'wire.log'
    if mode=='on':
     rows=path.read_text().splitlines();marks=[x for x in rows if '  M  ' in x]
-    assert len(marks)==3 and any('L'*120 in x for x in marks),rows
-    assert 'label.HB_SAVE_BEGIN' in marks[0] and 'label.HB_SAVE_END' in marks[-1]
+    assert len(marks)==8 and any('L'*120 in x for x in marks),rows
+    assert 'marker.HB_SAVE_BEGIN' in marks[0] and 'marker.HB_SAVE_END' in marks[-1]
     assert not any('wire  op.' in x for x in rows)
+    details={};positions=[]
+    for line in marks:
+     m=re.search(r'instance\.(.{16})  thread\.(.{16})  marker\.(.*)$',line);assert m,line
+     details[m[3]]=(int(m[1]),int(m[2]))
+     positions.append(tuple(line.index(k) for k in ('instance.','thread.','marker.')))
+    assert len(set(positions))==1,positions
+    assert details['HB_SAVE_BEGIN']==details['HB_SAVE_END']==(0,0)
+    assert details['HB_IDS']==(12,34)
+    assert details['HB_INST_ONLY']==(56,0)
+    assert details['HB_MAX_INT']==(9999999999999999,9999999999999999)
+    assert details['HB_MAX_FLOAT']==(9007199254740991,42)
+    assert details['HB_ZERO']==(0,0)
    else:assert not path.exists()
    print('Harbour marker',compact,mode,'PASS')

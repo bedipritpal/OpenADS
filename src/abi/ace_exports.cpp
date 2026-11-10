@@ -40272,12 +40272,14 @@ UNSIGNED32 ENTRYPOINT AdsSetDefaultConnection(ADSHANDLE hConn) {
 // Default OFF. Environment and INI cannot enable this master.
 // Process-local: affects this client DLL instance (and the engine when
 // running in local-server mode, since it shares the process).
-// Local application boundary only. Length-bearing input rejects embedded NUL.
+// Local application boundary only. Common origin/format for old and extended ABI.
 // Never call fail(): diagnostics must preserve the last database error/state.
-UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes) {
+static UNSIGNED32 cli_trace_marker(const UNSIGNED8* label, UNSIGNED32 bytes,
+                                   UNSIGNED64 instance, UNSIGNED64 app_thread) {
     try {
-        openads::abi::wire_caller::Entry wire_entry("OAdsTraceMark", cli_trace_on());
-        if (!cli_trace_on() || !label || bytes == 0 || bytes > 120)
+        constexpr UNSIGNED64 max_id = 9999999999999999ULL;
+        if (!cli_trace_on() || !label || bytes == 0 || bytes > 120 ||
+            instance > max_id || app_thread > max_id)
             return openads::AE_INTERNAL_ERROR;
         for (UNSIGNED32 i = 0; i < bytes; ++i)
             if (label[i] < 0x20 || (label[i] >= 0x7F && label[i] <= 0x9F))
@@ -40286,24 +40288,42 @@ UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes) {
         std::lock_guard<std::mutex> lk(trace.mu);
         FILE* hf = std::fopen(cli_trace_path().c_str(), "a");
         if (!hf) return openads::AE_INTERNAL_ERROR;
-        // Same process-relative monotonic origin for all marker threads.
         static const auto origin = std::chrono::steady_clock::now();
         const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - origin).count();
         const auto scope = openads::abi::wire_caller::snapshot();
-        char detail[256];
-        std::snprintf(detail, sizeof(detail), "thread.%llu  tick_us.%lld  label.%.*s",
+        char detail[384];
+        std::snprintf(detail, sizeof(detail),
+                      "tick_us.%20lld  auto_thread.%20llu  instance.%16llu  thread.%16llu  marker.%.*s",
+                      static_cast<long long>(tick),
                       static_cast<unsigned long long>(scope.thread),
-                      static_cast<long long>(tick), static_cast<int>(bytes),
-                      reinterpret_cast<const char*>(label));
+                      static_cast<unsigned long long>(instance),
+                      static_cast<unsigned long long>(app_thread),
+                      static_cast<int>(bytes), reinterpret_cast<const char*>(label));
         const bool written = cli_trace_write_locked(hf, -1, "-", "Marker", 'M',
                                                     detail, "OAdsTraceMark");
         const int closed = std::fclose(hf);
         return written && closed == 0 ? openads::AE_SUCCESS : openads::AE_INTERNAL_ERROR;
     } catch (...) {
-        // Allocation/config/file-system failures are diagnostic failure only.
         return openads::AE_INTERNAL_ERROR;
     }
+}
+
+// Preserve the published two-argument C ABI. One-arg Harbour calls use IDs0/0.
+UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes) {
+    try {
+        openads::abi::wire_caller::Entry wire_entry("OAdsTraceMark", cli_trace_on());
+        return cli_trace_marker(label, bytes, 0, 0);
+    } catch (...) { return openads::AE_INTERNAL_ERROR; }
+}
+
+// Additive C bridge for the SAME Harbour function's optional application IDs.
+UNSIGNED32 ENTRYPOINT OAdsTraceMarkEx(const UNSIGNED8* label, UNSIGNED32 bytes,
+                                     UNSIGNED64 instance, UNSIGNED64 app_thread) {
+    try {
+        openads::abi::wire_caller::Entry wire_entry("OAdsTraceMarkEx", cli_trace_on());
+        return cli_trace_marker(label, bytes, instance, app_thread);
+    } catch (...) { return openads::AE_INTERNAL_ERROR; }
 }
 
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn) {

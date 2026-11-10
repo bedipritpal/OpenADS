@@ -1586,6 +1586,9 @@ UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn);
 // Local wire-trace marker, no server/RDD action. 1..120 bytes, no C0/DEL/C1 control bytes.
 // AE_SUCCESS only when written; otherwise nonzero, last DB error unchanged.
 UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes);
+// Additive optional-ID bridge, each integer0..9999999999999999. No wire action.
+UNSIGNED32 ENTRYPOINT OAdsTraceMarkEx(const UNSIGNED8* label, UNSIGNED32 bytes,
+                                     UNSIGNED64 instance, UNSIGNED64 app_thread);
 // Aggregate health JSON from an AdsMgConnect handle (NOT a data connection).
 // *pulLen is buffer capacity incl. NUL; out is required size incl. NUL.
 // NULL/short buffer: AE_INSUFFICIENT_BUFFER, no partial JSON written.

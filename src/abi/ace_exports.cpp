@@ -14983,6 +14983,13 @@ UNSIGNED32 ENTRYPOINT AdsGetMemoLength(ADSHANDLE hTable, UNSIGNED8* pucField,
         if (i == std::numeric_limits<std::size_t>::max() || i >= rt->fields.size()) {
             return fail(openads::AE_COLUMN_NOT_FOUND, "");
         }
+        // A local lookahead step changes the logical row without moving the
+        // server. Memo length must describe that logical row. Do not read a
+        // different server row when settling fails.
+        if (rt->cursor_lag != 0) {
+            auto settled = rt->conn->skip(rt, 0);
+            if (!settled) return fail(settled.error());
+        }
         auto v = rt->conn->get_field(rt->id, rt->fields[i].name);
         if (!v) return fail(v.error());
         *pulLen = static_cast<UNSIGNED32>(v.value().size());

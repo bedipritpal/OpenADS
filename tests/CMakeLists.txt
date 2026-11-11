@@ -156,6 +156,7 @@ add_executable(openads_unit_tests
     unit/cdx_prev_empty_leaf_test.cpp
     unit/cdx_empty_tree_test.cpp
     unit/abi_ntx_numeric_edge_test.cpp
+    unit/abi_remote_memo_position_test.cpp
     unit/abi_memo_large_test.cpp
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp

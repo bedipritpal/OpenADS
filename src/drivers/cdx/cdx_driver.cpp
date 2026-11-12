@@ -95,17 +95,17 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     openads::util::open_phase::driver_open();
     auto fres = [&] {
         openads::util::open_phase::Phase phase(openads::util::open_phase::Part::Handle);
-        auto fres = platform::File::open(path, map_mode(mode));
+        auto opened = platform::File::open(path, map_mode(mode));
         for (int attempt = 0;
-             !fres && fres.error().sub_code == 32 /* ERROR_SHARING_VIOLATION */
+             !opened && opened.error().sub_code == 32 /* ERROR_SHARING_VIOLATION */
                  && attempt < 200;
              ++attempt) {
             const auto us = 50 + (attempt * 25);
             std::this_thread::sleep_for(std::chrono::microseconds(
                 us > 5000 ? 5000 : us));
-            fres = platform::File::open(path, map_mode(mode));
+            opened = platform::File::open(path, map_mode(mode));
         }
-        return fres;
+        return opened;
     }();
     if (!fres) return fres.error();
     file_ = std::move(fres).value();

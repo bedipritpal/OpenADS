@@ -88,3 +88,9 @@ This noisy loopback test cannot resolve small end-to-end overhead; it is NOT
 evidence that the timer makes opens faster or that logging is free. All70,000
 ON opens emitted their expected rows. These timings do not describe Windows,
 WAN, cold storage, antivirus, many-thread contention or the production load.
+
+Isolated capture/sink helper (same O1 build,7trials x10,000captures, normal
+local file/fflush, no database work): OFF median35.62ns/capture, ON median
+2679.70ns (2.68microseconds). This measures fixed helper cost only, not the
+server's full multi-thread cost; file-lock contention/slow storage can add
+more. OFF is clock/file/lock-free in the helper; not a zero-instruction claim.

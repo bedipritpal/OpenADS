@@ -86,10 +86,11 @@ void set_audit_details_enabled(bool on);
 void reset_audit_config();
 bool audit_details_enabled();
 
-// Master kill-switch for every log line the library can emit (audit
+// Master kill-switch for general library diagnostics (audit
 // file/console + the arc bring-up traces in the ABI). Production apps
 // call OAdsSetLogging(1) only for approved diagnostics; paths and record data
-// never reach end-user machines. Default: disabled.
+// never reach end-user machines. Default: disabled. The standalone server
+// open-phase sink has its own explicit admin opt-in; it never enables this.
 void set_logging_enabled(bool on);
 bool logging_enabled();
 

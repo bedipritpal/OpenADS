@@ -651,3 +651,10 @@ if(Python3_Interpreter_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/trace_marker_contract.py
         $<TARGET_FILE:openads_trace_marker_probe> $<TARGET_FILE:openads_trace_gate_probe>)
 endif()
+
+# mtfix81: native frozen80 resolver parity and lookup-only measurement.
+add_executable(openads_case_lookup81_native case_lookup81_native.cpp)
+target_link_libraries(openads_case_lookup81_native PRIVATE openads_core)
+add_test(NAME case_lookup81_native COMMAND openads_case_lookup81_native 300)
+
+target_include_directories(openads_case_lookup81_native PRIVATE ${PROJECT_SOURCE_DIR}/src)

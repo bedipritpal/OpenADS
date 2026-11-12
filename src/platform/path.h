@@ -6,9 +6,10 @@
 
 namespace openads::platform {
 
-// On Windows the filesystem is already case-insensitive; on POSIX this
-// scans the parent directory once to find a case-folded match. Returns
-// the input unchanged if no match exists.
+// Fresh single directory pass, exact spelling preferred over folded matches.
+// Duplicate folded candidates or iteration errors use the legacy two-pass path.
+// No retained existence state; the caller's current stat/open is authoritative.
+// Returns input unchanged on a miss. Enumeration is not a concurrent snapshot.
 std::string resolve_case_insensitive(const std::string& path);
 
 // Resolve `client_path` under `root` (relative paths are joined first),

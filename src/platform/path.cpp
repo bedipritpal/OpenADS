@@ -50,8 +50,7 @@ std::string safe_path_string(const fs::path& p) {
 
 } // namespace
 
-std::string resolve_case_insensitive(const std::string& path) {
-    openads::util::open_phase::Detail case_timer(openads::util::open_phase::Metric::Case);
+static std::string resolve_case_insensitive_two_pass(const std::string& path) {
     fs::path p(path);
     fs::path parent = p.parent_path();
     if (parent.empty()) parent = ".";
@@ -93,6 +92,40 @@ std::string resolve_case_insensitive(const std::string& path) {
     return path;
 }
 
+
+std::string resolve_case_insensitive(const std::string& path) {
+    openads::util::open_phase::Detail case_timer(openads::util::open_phase::Metric::Case);
+    fs::path p(path);
+    fs::path parent = p.parent_path();
+    if (parent.empty()) parent = ".";
+    std::error_code ec;
+    if (!fs::is_directory(parent, ec)) return path;
+    const std::string leaf = p.filename().string();
+    const std::string leaf_low = to_lower(leaf);
+    // Only this call owns the candidate. No cached existence or path state.
+    // Keep looking after a folded match: a later exact spelling must win.
+    std::string candidate;
+    bool found = false;
+    bool ambiguous = false;
+    openads::util::open_phase::count(openads::util::open_phase::Metric::DirPass);
+    fs::directory_iterator entries(parent, ec);
+    if (ec) return resolve_case_insensitive_two_pass(path);
+    // Retain the original throwing increment/error policy.
+    for (const auto& entry : entries) {
+        openads::util::open_phase::count(openads::util::open_phase::Metric::DirEntry);
+        const std::string name = safe_path_string(entry.path().filename());
+        if (name.empty()) continue;
+        if (name == leaf) return safe_path_string(entry.path());
+        if (to_lower(name) == leaf_low) {
+            if (found) ambiguous = true;
+            else { candidate = safe_path_string(entry.path()); found = true; }
+        }
+    }
+    if (ec || ambiguous) return resolve_case_insensitive_two_pass(path);
+    // As before, the listing is not a lock or proof of continued existence.
+    // The caller's existing stat/open remains authoritative after return.
+    return found ? candidate : path;
+}
 
 bool path_has_prefix(const std::string& path, const std::string& root,
                      bool ignore_case) {

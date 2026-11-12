@@ -2343,6 +2343,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 return sess_conn_->open_table(rel, openads::engine::TableType::Cdx, open_mode);
             }();
             openads::util::open_phase::Phase reply_timer(openads::util::open_phase::Part::Reply);
+            openads::util::open_phase::Context reply_context(openads::util::open_phase::Lane::Other);
+            openads::util::open_phase::Detail book_timer(openads::util::open_phase::Metric::Book);
             if (!th) {
                 openads::abi::create_diag::log("server-open-fail", th.error().code,
                                               "table-open", th.error().sub_code);
@@ -2381,6 +2383,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             srv_->add_session_table(sid_, +1, rel);
             reply.opcode = Opcode::OpenTableAck;
             write_u32_le(id, reply.payload);
+            book_timer.stop();
             // M-AOF.6 mirror: detect the production CDX/ADI on the server
             // filesystem and include it in the ack so the client can skip
             // the speculative AdsOpenIndex round-trip.  We only STAT the
@@ -2388,6 +2391,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             // embedded-server case (the client holds s.mu while waiting
             // for this ack).
             {
+                openads::util::open_phase::Detail discovery_timer(openads::util::open_phase::Metric::Discover);
                 auto* tbl = sess_conn_->lookup_table(th.value());
                 std::string bag;
                 if (tbl) {
@@ -2442,7 +2446,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                     reply.payload.insert(reply.payload.end(),
                                          bag.begin(), bag.end());
                 }
-                append_open_warm_sections(reply.payload, id, tbl);
+                discovery_timer.stop();
+                {
+                    openads::util::open_phase::Detail warm_timer(openads::util::open_phase::Metric::Warm);
+                    append_open_warm_sections(reply.payload, id, tbl);
+                }
                 if (client_open_setup_metadata_ok_ && tbl != nullptr) {
                     // Reuse the exact OpenIndex handler: per-session bindings,
                     // rollback on failed index open and unchanged tag metadata.
@@ -2466,6 +2474,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                         if (index_reply.reply && index_reply.reply->opcode == Opcode::OpenIndexAck) {
                             add(OpenTableAckSections::kProductionIndex, index_reply.reply->payload);
                             if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
+                                openads::util::open_phase::Detail reset_timer(openads::util::open_phase::Metric::Reset);
                                 (void)install_table_order(id, 0);
                                 (void)AdsGotoTop(hit->second);
                             }
@@ -3848,7 +3857,11 @@ DispatchResult Session::dispatch(const Frame& f) {
             // fetch packs the engine table — same-handle read-after-write
             // then serves stale blanks until a nav reloads from disk.
             const bool had_twin = tbls_h_.find(tid) != tbls_h_.end();
-            ADSHANDLE ht = ensure_abi_handle(tid);
+            ADSHANDLE ht;
+            {
+                openads::util::open_phase::Detail twin_timer(openads::util::open_phase::Metric::Twin);
+                ht = ensure_abi_handle(tid);
+            }
             {
                 auto& t = oi_st.op_timing_oi[0];
                 auto us = oi_us(oi_t0, std::chrono::steady_clock::now());
@@ -3864,7 +3877,12 @@ DispatchResult Session::dispatch(const Frame& f) {
             ADSHANDLE arr[64] = {0};
             UNSIGNED16 alen = 64;
             auto oi_t1 = std::chrono::steady_clock::now();
-            UNSIGNED32 rrc = AdsOpenIndex(ht, pb.data(), arr, &alen);
+            UNSIGNED32 rrc;
+            {
+                openads::util::open_phase::Detail explicit_timer(openads::util::open_phase::Metric::Explicit);
+                openads::util::open_phase::Context explicit_context(openads::util::open_phase::Lane::Explicit);
+                rrc = AdsOpenIndex(ht, pb.data(), arr, &alen);
+            }
             {
                 auto& t = oi_st.op_timing_oi[1];
                 auto us = oi_us(oi_t1, std::chrono::steady_clock::now());
@@ -3889,6 +3907,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 }
                 reply = err("OpenIndex: " + path, rrc); break;
             }
+            openads::util::open_phase::Detail metadata_timer(openads::util::open_phase::Metric::Metadata);
             reply.opcode = Opcode::OpenIndexAck;
             reply.payload.push_back(static_cast<std::uint8_t>( alen       & 0xFFu));
             reply.payload.push_back(static_cast<std::uint8_t>((alen >> 8) & 0xFFu));

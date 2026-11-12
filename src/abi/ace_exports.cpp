@@ -1,3 +1,4 @@
+#include "util/open_phase.h"
 #include "engine/sql_input_limits.h"
 #include "engine/sql_work_limits.h"
 #include "engine/sql_execution_budget.h"
@@ -9280,6 +9281,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenTable(ADSHANDLE  hConnect,
     // across it serialises every USE behind INDEX ON and can deadlock.
     lk.unlock();
 
+    openads::util::open_phase::Context auto_context(openads::util::open_phase::Lane::Auto);
     // M-AOF.6 -- production-CDX auto-open. ADS / rddads convention:
     // opening `<base>.dbf` auto-binds `<base>.cdx` if it exists, so
     // every tag inside it becomes navigable on this Table without
@@ -16279,11 +16281,14 @@ void heal_stale_bag_on_open(Table* t,
         // server time, 6.8 s/call). A partially-maintained bag cannot be
         // detected reliably under concurrency and stays the app's
         // reindex responsibility.
+        openads::util::open_phase::Detail heal_timer(openads::util::open_phase::Metric::Heal);
         bool stale = v->empty();
+        heal_timer.stop();
         if (!stale) continue;
         arc2_log("IDXHEAL stale tag '%s' on %s (recs=%u) -> reindex",
                  v->name().c_str(), t->path().c_str(),
                  (unsigned)t->record_count());
+        openads::util::open_phase::Detail reindex_timer(openads::util::open_phase::Metric::Reindex);
         (void)t->reindex();
         return;
     }
@@ -16579,7 +16584,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     // Hold the create mutex ONLY for the exists check. Opening every tag
     // under it serialised 7000 B_BIG OpenIndex calls and starved INDEX ON.
     {
+        openads::util::open_phase::Detail bag_wait(openads::util::open_phase::Metric::BagWait);
         std::lock_guard<std::mutex> bag_lk(create_path_mu_for(path));
+        bag_wait.stop();
         std::error_code ec;
         if (!fs::exists(p, ec)) {
             return fail(openads::AE_NO_FILE_FOUND, path.c_str());
@@ -16598,7 +16605,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     ADSHANDLE active_h = 0;
     bool      had_active = false;
     {
+        openads::util::open_phase::Detail bind_wait(openads::util::open_phase::Metric::BindWait);
         std::lock_guard<std::recursive_mutex> _oi_lk(index_bindings_mu());
+        bind_wait.stop();
+        openads::util::open_phase::Detail bind_work(openads::util::open_phase::Metric::BindWork);
         auto& m   = index_bindings();
         auto& act = active_binding_for();
 
@@ -16635,6 +16645,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
 
     // Enumerate tags. CDX/ADI expose list_tags; NTX has only its single
     // tag, which open() reports via name().
+    openads::util::open_phase::Detail tag_list_timer(openads::util::open_phase::Metric::TagList);
     std::vector<std::string> tags;
     bool is_adi = path_ends_with_ci(path, ".adi");
     bool is_cdx = path_ends_with_ci(path, ".cdx");
@@ -16668,7 +16679,9 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         if (!r) return fail(r.error());
         tags = std::move(r).value();
     }
+    tag_list_timer.stop();
     if (tags.empty()) {
+        openads::util::open_phase::Detail tag_open_timer(openads::util::open_phase::Metric::TagOpen);
         // NTX or empty CDX: open once via the legacy path. M9.14 lets
         // multiple NTX files coexist on the same Table -- when the
         // table already has an active order, the new NTX parks as an
@@ -16677,6 +16690,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
         if (auto r = idx->open(path, openads::drivers::IndexOpenMode::Shared); !r) {
             return fail(r.error());
         }
+        tag_open_timer.stop();
         std::string tag_name = idx->name();
         if (path_ends_with_ci(path, ".ntx"))
             mark_ntx_key_encoding(t, idx.get());
@@ -16684,7 +16698,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             ? old_handles[tag_name] : next_index_handle();
         // Map mutations only (storm fix -- see the refresh snapshot).
         {
+            openads::util::open_phase::Detail bind_wait(openads::util::open_phase::Metric::BindWait);
             std::lock_guard<std::recursive_mutex> _oi_lk(index_bindings_mu());
+            bind_wait.stop();
+            openads::util::open_phase::Detail bind_work(openads::util::open_phase::Metric::BindWork);
             auto& m   = index_bindings();
             auto& act = active_binding_for();
             if (!table_has_active) {
@@ -16724,6 +16741,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     };
     std::vector<PendingBind> to_bind;
     for (const auto& name : tags) {
+        openads::util::open_phase::Detail tag_open_timer(openads::util::open_phase::Metric::TagOpen);
         std::unique_ptr<openads::drivers::IIndex> sub;
         // A rerouted bag was listed through CdxIndex above, so it must be
         // opened through CdxIndex too -- handing a CDX-format .adi to the
@@ -16747,6 +16765,7 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
             apply_cdx_oem_collation(t, idx.get());
             sub = std::move(idx);
         }
+        tag_open_timer.stop();
         ADSHANDLE h = old_handles.count(name)
             ? old_handles[name] : next_index_handle();
         to_bind.push_back({h, name, sub.release()});
@@ -16756,7 +16775,10 @@ UNSIGNED32 ENTRYPOINT AdsOpenIndex(ADSHANDLE hTable, UNSIGNED8* pucName,
     // register_extra_index_view) is per-connection state, safe here too:
     // this Table belongs to this session alone.
     {
+        openads::util::open_phase::Detail bind_wait(openads::util::open_phase::Metric::BindWait);
         std::lock_guard<std::recursive_mutex> _oi_lk(index_bindings_mu());
+        bind_wait.stop();
+        openads::util::open_phase::Detail bind_work(openads::util::open_phase::Metric::BindWork);
         auto& m   = index_bindings();
         auto& act = active_binding_for();
         for (auto& pb : to_bind) {

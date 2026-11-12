@@ -28,6 +28,22 @@ TEST_CASE("open phase opt-in bounded numeric sink and nested thread capture") {
     {
         diag::Request outer(7, true);
         diag::driver_open();
+        // Fine counters are scoped to the reply, then split by index pass.
+        { diag::Context reply(diag::Lane::Other);
+          diag::Detail stage(diag::Metric::Twin);
+          { diag::Context automatic(diag::Lane::Auto);
+            diag::Detail tag(diag::Metric::TagOpen);
+            diag::count(diag::Metric::DirEntry);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+          { diag::Context refresh(diag::Lane::Explicit);
+            diag::Detail tag(diag::Metric::TagOpen);
+            diag::count(diag::Metric::DirEntry); }
+          diag::count(diag::Metric::DirEntry); }
+        // Neither an engine-stage operation nor an auto context with no
+        // enclosing reply context may be assigned to the reply lanes.
+        diag::count(diag::Metric::DirEntry);
+        { diag::Context automatic(diag::Lane::Auto);
+          diag::count(diag::Metric::DirEntry); }
         { diag::Phase p(diag::Part::Header); }
         { diag::Request inner(8, true); diag::driver_open(); inner.result(99); }
         diag::driver_open(); outer.result(14);
@@ -45,6 +61,15 @@ TEST_CASE("open phase opt-in bounded numeric sink and nested thread capture") {
     diag::configure("");
     auto text = contents(log);
     CHECK(text.find("session=7") != std::string::npos);
+    auto outer_start = text.find("OPEN80 session=7 ");
+    REQUIRE(outer_start != std::string::npos);
+    auto outer_row = text.substr(outer_start, text.find('\n', outer_start) - outer_start);
+    CHECK(outer_row.find("auto_tag_open_n=1") != std::string::npos);
+    CHECK(outer_row.find("refresh_tag_open_n=1") != std::string::npos);
+    CHECK(outer_row.find("auto_dir_entry_n=1") != std::string::npos);
+    CHECK(outer_row.find("refresh_dir_entry_n=1") != std::string::npos);
+    CHECK(outer_row.find("other_dir_entry_n=1") != std::string::npos);
+    CHECK(outer_row.find("stage_twin_n=1") != std::string::npos);
     CHECK(text.find("drivers=2 reply_opcode=14") != std::string::npos);
     CHECK(text.find("session=8") != std::string::npos);
     CHECK(text.find("drivers=1 reply_opcode=99") != std::string::npos);
@@ -52,10 +77,10 @@ TEST_CASE("open phase opt-in bounded numeric sink and nested thread capture") {
     std::istringstream rows(text); std::string row; unsigned count = 0;
     while (std::getline(rows,row)) {
         ++count;
-        CHECK(row.rfind("OPEN79 session=", 0) == 0);
+        CHECK(row.rfind("OPEN80 session=", 0) == 0);
         CHECK(row.find("reply_submit_us=") != std::string::npos);
         CHECK(row.find("fields_us=") != std::string::npos);
-        CHECK(row.size() < 600);
+        CHECK(row.size() < 4096);
     }
     CHECK(count == 402);
     // A sink failure only disables diagnostics; no exception escapes.

@@ -1,4 +1,5 @@
 #include "platform/path.h"
+#include "util/open_phase.h"
 #include "platform/file.h"
 
 #include <algorithm>
@@ -50,6 +51,7 @@ std::string safe_path_string(const fs::path& p) {
 } // namespace
 
 std::string resolve_case_insensitive(const std::string& path) {
+    openads::util::open_phase::Detail case_timer(openads::util::open_phase::Metric::Case);
     fs::path p(path);
     fs::path parent = p.parent_path();
     if (parent.empty()) parent = ".";
@@ -65,7 +67,9 @@ std::string resolve_case_insensitive(const std::string& path) {
 
     // First pass: prefer an exact-case match if one exists. This keeps
     // the input verbatim when the case is already correct.
+    openads::util::open_phase::count(openads::util::open_phase::Metric::DirPass);
     for (const auto& entry : fs::directory_iterator(parent, ec)) {
+        openads::util::open_phase::count(openads::util::open_phase::Metric::DirEntry);
         if (ec) break;
         const std::string name = safe_path_string(entry.path().filename());
         if (name.empty()) continue;   // unconvertible neighbour: skip it
@@ -75,7 +79,9 @@ std::string resolve_case_insensitive(const std::string& path) {
     }
 
     // Second pass: case-insensitive match returns the on-disk casing.
+    openads::util::open_phase::count(openads::util::open_phase::Metric::DirPass);
     for (const auto& entry : fs::directory_iterator(parent, ec)) {
+        openads::util::open_phase::count(openads::util::open_phase::Metric::DirEntry);
         if (ec) break;
         const std::string name = safe_path_string(entry.path().filename());
         if (name.empty()) continue;   // unconvertible neighbour: skip it

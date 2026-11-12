@@ -42,12 +42,13 @@ Request::~Request() noexcept {
     try {
         std::lock_guard<std::mutex> lock(sink_mutex);
         if (!sink || !enabled()) return;
-        if (std::fseek(sink, 0, SEEK_END) != 0 || std::ftell(sink) < 0 || std::ftell(sink) > cap - 600) {
+        if (std::fseek(sink, 0, SEEK_END) != 0 || std::ftell(sink) < 0 || std::ftell(sink) > cap - 4096) {
             on.store(false, std::memory_order_relaxed); return;
         }
         // Numeric columns only. Driver phases are nested within engine/reply.
-        const int rc = std::fprintf(sink,
-            "OPEN79 session=%llu request=%llu drivers=%u reply_opcode=%u total_us=%llu engine_us=%llu handle_us=%llu share_us=%llu header_us=%llu fields_us=%llu reply_build_us=%llu reply_submit_us=%llu\n",
+        char row[4096];
+        const int rc = std::snprintf(row, sizeof(row),
+            "OPEN80 session=%llu request=%llu drivers=%u reply_opcode=%u total_us=%llu engine_us=%llu handle_us=%llu share_us=%llu header_us=%llu fields_us=%llu reply_build_us=%llu reply_submit_us=%llu",
             static_cast<unsigned long long>(value_.session),
             static_cast<unsigned long long>(value_.request), value_.drivers, value_.opcode,
             static_cast<unsigned long long>(total),
@@ -58,7 +59,28 @@ Request::~Request() noexcept {
             static_cast<unsigned long long>(value_.us[4]),
             static_cast<unsigned long long>(value_.us[5]),
             static_cast<unsigned long long>(value_.us[6]));
-        if (rc < 0 || std::fflush(sink) != 0) on.store(false, std::memory_order_relaxed);
+        if (rc < 0 || static_cast<unsigned>(rc) >= sizeof(row)) {
+            on.store(false, std::memory_order_relaxed); return;
+        }
+        std::size_t used = static_cast<std::size_t>(rc);
+        static const char* coarse[] = {"book", "discover", "warm", "twin", "explicit", "metadata", "reset"};
+        static const char* detail[] = {"case", "dir_pass", "dir_entry", "tag_list", "tag_open", "bag_wait", "bind_wait", "bind_work", "heal", "reindex"};
+        static const char* lanes[] = {"other", "auto", "refresh"};
+        for (unsigned i = 0; i < fine_count; ++i) {
+            const char* lane = i < coarse_count ? "stage" : lanes[(i - coarse_count) / detail_count];
+            const char* label = i < coarse_count ? coarse[i] : detail[(i - coarse_count) % detail_count];
+            const int n = std::snprintf(row + used, sizeof(row) - used,
+                " %s_%s_us=%llu %s_%s_n=%llu", lane, label,
+                static_cast<unsigned long long>(value_.fine_us[i]), lane, label,
+                static_cast<unsigned long long>(value_.fine_n[i]));
+            if (n < 0 || static_cast<std::size_t>(n) >= sizeof(row) - used - 1) {
+                on.store(false, std::memory_order_relaxed); return;
+            }
+            used += static_cast<std::size_t>(n);
+        }
+        row[used++] = '\n';
+        if (std::fwrite(row, 1, used, sink) != used || std::fflush(sink) != 0)
+            on.store(false, std::memory_order_relaxed);
     } catch (...) { on.store(false, std::memory_order_relaxed); }
 }
 Phase::Phase(Part part) noexcept : sample_(current), part_(part) {
@@ -70,6 +92,35 @@ void Phase::stop() noexcept {
         sample_->us[static_cast<unsigned>(part_)] += elapsed(start_);
         sample_ = nullptr;
     }
+}
+namespace {
+bool slot_for(Sample* s, Metric m, unsigned& slot) noexcept {
+    if (!s || s->lane == Lane::None) return false;
+    const unsigned v = static_cast<unsigned>(m);
+    if (v >= static_cast<unsigned>(Metric::Count)) return false;
+    slot = v < coarse_count ? v : coarse_count +
+        static_cast<unsigned>(s->lane) * detail_count + v - coarse_count;
+    return true;
+}
+}
+Context::Context(Lane lane) noexcept : sample_(current) {
+    if (sample_ && (lane == Lane::Other || sample_->lane != Lane::None)) {
+        previous_ = sample_->lane; sample_->lane = lane;
+    } else sample_ = nullptr;
+}
+Context::~Context() noexcept { if (sample_) sample_->lane = previous_; }
+Detail::Detail(Metric metric) noexcept : sample_(current) {
+    if (!slot_for(sample_, metric, slot_)) { sample_ = nullptr; return; }
+    ++sample_->fine_n[slot_];
+    start_ = std::chrono::steady_clock::now();
+}
+Detail::~Detail() noexcept { stop(); }
+void Detail::stop() noexcept {
+    if (sample_) { sample_->fine_us[slot_] += elapsed(start_); sample_ = nullptr; }
+}
+void count(Metric metric) noexcept {
+    unsigned slot;
+    if (slot_for(current, metric, slot)) ++current->fine_n[slot];
 }
 void driver_open() noexcept { if (current) ++current->drivers; }
 } // namespace

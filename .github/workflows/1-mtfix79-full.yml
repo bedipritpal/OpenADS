@@ -1,0 +1,1732 @@
+name: mtfix79 full kit (x86 + x64 + linux + macos)
+permissions:
+  contents: write
+concurrency:
+  group: mtfix79-full-kit
+  cancel-in-progress: false
+env:
+  KIT_VERSION: 1.09.75-mtfix79-full-test
+  PINNED_SOURCE: f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e
+jobs:
+  x86kit:
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix70-full
+    - name: Verify cumulative candidate pin and workflow-only build recipe
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/release/mtfix70-full
+        git merge-base --is-ancestor f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e HEAD
+        test -z "$(git diff --name-only f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e HEAD -- . ':!.github/workflows')"
+      shell: bash
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
+          except Exception:
+           if attempt==2:raise
+           time.sleep(3)
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Download exact historical Qt compiler
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        function Download-Exact($url,$out) {
+         for($i=0;$i -lt 4;$i++) {
+          try {
+            $headers=@{Accept='application/octet-stream'}
+            if(([uri]$url).Host -eq 'api.github.com'){$headers.Authorization="Bearer $env:GH_TOKEN"}
+            Invoke-WebRequest -Headers $headers $url -OutFile $out; return
+          }
+          catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+         }
+        }
+        Download-Exact 'https://download.qt.io/development_releases/prebuilt/mingw_32/i686-4.9.2-release-posix-dwarf-rt_v3-rev1.7z' "$env:RUNNER_TEMP/qt492.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/qt492.7z" -Algorithm SHA256).Hash.ToLower() -ne 'f6de32350a28f4b6c30eec26dbfee65f112300d51e37e4d2007b0598bef9bb79'){throw 'Qt compiler hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/qt492.7z" "-o$env:RUNNER_TEMP/qt492" -y
+
+        Download-Exact 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966370' "$env:RUNNER_TEMP/winlibs.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'){throw 'Winlibs hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+        Download-Exact 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/29234401' "$env:RUNNER_TEMP/owner2351.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/owner2351.7z" -Algorithm SHA256).Hash.ToLower() -ne '5e18f786047c52b40392fe57f966bcb1a8acbc95d61da10796b13df63b9a1d95'){throw 'Owner2351 compiler hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/owner2351.7z" "-o$env:RUNNER_TEMP/owner2351" -y
+      shell: pwsh
+    - name: Build TLS auth daemon and raw static kit with pinned GCC10.2
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        find "$RUNNER_TEMP/winlibs" -iname '*copying*' -o -iname '*license*' | sort
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-server"
+        git -C "$RUNNER_TEMP/harbour-server" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        python - <<'PYHARNESS'
+        import pathlib,re,base64
+        root=pathlib.Path('.')
+        header=root/'tests/legacy-native-temp.h'
+        header.write_bytes(base64.b64decode('I3ByYWdtYSBvbmNlCiNpbmNsdWRlIDxmaWxlc3lzdGVtPgojaW5jbHVkZSA8c3lzdGVtX2Vycm9yPgojaW5jbHVkZSA8d2luZG93cy5oPgojaW5jbHVkZSA8dmVjdG9yPgpuYW1lc3BhY2Ugb3BlbmFkc190ZXN0IHsKaW5saW5lIHN0ZDo6ZmlsZXN5c3RlbTo6cGF0aCB0ZW1wX2RpcmVjdG9yeV9wYXRoKHN0ZDo6ZXJyb3JfY29kZSYgZWMpIHsKIHN0ZDo6dmVjdG9yPHdjaGFyX3Q+IGIoMzI3NjgpO0RXT1JEIG49R2V0VGVtcFBhdGhXKHN0YXRpY19jYXN0PERXT1JEPihiLnNpemUoKSksYi5kYXRhKCkpOwogaWYoIW4gfHwgbj49Yi5zaXplKCkpe2VjPXN0ZDo6ZXJyb3JfY29kZShHZXRMYXN0RXJyb3IoKSxzdGQ6OnN5c3RlbV9jYXRlZ29yeSgpKTtyZXR1cm4ge307fQogc3RkOjpmaWxlc3lzdGVtOjpwYXRoIHAoc3RkOjp3c3RyaW5nKGIuZGF0YSgpLG4pKTsKIC8vIFBpbm5lZCBNaW5HVzggc3RhdCByZWplY3RzIGRpcmVjdG9yeVxcIGJ1dCBhY2NlcHRzIGRpcmVjdG9yeS4gS2VlcCBkcml2ZSByb290Lgogd2hpbGUocCE9cC5yb290X3BhdGgoKSAmJiAhcC5oYXNfZmlsZW5hbWUoKSkgcD1wLnBhcmVudF9wYXRoKCk7CiBhdXRvIHN0PXN0ZDo6ZmlsZXN5c3RlbTo6c3RhdHVzKHAsZWMpOwogaWYoIWVjJiYhc3RkOjpmaWxlc3lzdGVtOjppc19kaXJlY3Rvcnkoc3QpKWVjPXN0ZDo6bWFrZV9lcnJvcl9jb2RlKHN0ZDo6ZXJyYzo6bm90X2FfZGlyZWN0b3J5KTsKIHJldHVybiBlYz9zdGQ6OmZpbGVzeXN0ZW06OnBhdGh7fTpwOwp9CmlubGluZSBzdGQ6OmZpbGVzeXN0ZW06OnBhdGggdGVtcF9kaXJlY3RvcnlfcGF0aCgpe3N0ZDo6ZXJyb3JfY29kZSBlYzthdXRvIHA9dGVtcF9kaXJlY3RvcnlfcGF0aChlYyk7CiBpZihlYyl0aHJvdyBzdGQ6OmZpbGVzeXN0ZW06OmZpbGVzeXN0ZW1fZXJyb3IoInRlc3QgbmF0aXZlIHRlbXBfZGlyZWN0b3J5X3BhdGgiLGVjKTtyZXR1cm4gcDt9Cn0K'))
+        changes=[]
+        for p in (root/'tests').rglob('*.cpp'):
+         s=p.read_text(encoding='utf-8',errors='strict')
+         n=re.sub(r'\b(?:std::filesystem|fs)::temp_directory_path\b','openads_test::temp_directory_path',s)
+         if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))
+        with open(root/'tests/CMakeLists.txt','a') as f:f.write('\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\ntarget_compile_options(openads_trace_gate_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_unit_tests PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\n')
+        print('Test-only native temp helper applied:',len(changes),'test files')
+        pathlib.Path('unit-harness-changes.txt').write_text('\n'.join(changes))
+
+        PYHARNESS
+
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.75-mtfix79-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker auth_spike_worker_probe auth_spike_integration_probe auth_spike_abi_probe auth_spike_transport_probe auth_mutual_probe auth_resource_probe openads_unit_tests -j2
+      shell: bash
+    - name: Build Harbour with unchanged Qt4.9.2
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 4.9.2
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-old"
+        git -C "$RUNNER_TEMP/harbour-old" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+        git -C "$RUNNER_TEMP/harbour-old" apply "$PWD/patches/harbour/rddads-pending-fields.patch"
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-old" -j2
+      shell: bash
+    - name: Exact GCC10.2 and mingw-w64 8 runtime notices (Winlibs omits them)
+      run: |
+        set -euxo pipefail
+        W="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32")"
+        mkdir -p "$W/share/licenses/gcc" "$W/share/licenses/crt" "$W/share/licenses/winpthreads"
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING3 -o "$W/share/licenses/gcc/COPYING3"
+        echo '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  '"$W/share/licenses/gcc/COPYING3" | sha256sum -c -
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING.RUNTIME -o "$W/share/licenses/gcc/COPYING.RUNTIME"
+        echo '9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74  '"$W/share/licenses/gcc/COPYING.RUNTIME" | sha256sum -c -
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt -o "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt"
+        echo 'e9b2dc02451ea29092a1f25fa0f3c07207ed421f1807dffb0c4e6dce69dee7bd  '"$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt" | sha256sum -c -
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/mingw-w64-libraries/winpthreads/COPYING -o "$W/share/licenses/winpthreads/COPYING"
+        echo '63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177  '"$W/share/licenses/winpthreads/COPYING" | sha256sum -c -
+
+        mkdir -p kit/runtime-notices
+        cp "$W/share/licenses/gcc/COPYING3" kit/runtime-notices/gcc-COPYING3.txt
+        cp "$W/share/licenses/gcc/COPYING.RUNTIME" kit/runtime-notices/gcc-COPYING.RUNTIME.txt
+        cp "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt" kit/runtime-notices/MinGW-w64-runtime.txt
+        cp "$W/share/licenses/winpthreads/COPYING" kit/runtime-notices/winpthreads-COPYING.txt
+      shell: bash
+    - name: Build DLL import RDDADS and B_BIG threaded fixtures
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-old")"
+        mkdir -p srv mtdata output kit
+        cp build-legacy/src/*.dll build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/openads_auth_worker.exe srv/
+        cat > output/local_create.prg <<'PRG'
+        #include "ads.ch"
+        REQUEST ADS, ADSCDX
+        PROCEDURE Main( cDir )
+           LOCAL cDbf := cDir + "/TestIndex.dbf", cIdx := cDir + "/TestIndex.cdx"
+           FIELD NAME,CITY,INS
+           OAds_SetLogging( .F. )
+           AdsSetServerType( ADS_LOCAL_SERVER )
+           AdsConnect( "." )
+           AdsSetFileType( ADS_CDX )
+           RddSetDefault( "ADSCDX" )
+           DbCreate( cDbf, { { "NAME", "C", 19, 0 }, { "CITY", "C", 15, 0 }, { "AGE", "N", 3, 0 }, { "TS", "C", 23, 0 }, { "THD", "N", 3, 0 }, { "INS", "N", 4, 0 }, { "RDD", "C", 3, 0 } }, "ADSCDX" )
+           dbCloseArea()
+           USE ( cDbf ) VIA "ADSCDX" ALIAS _STG SHARED NEW
+           INDEX ON NAME TAG "IDX01" TO ( cIdx )
+           INDEX ON CITY TAG "IDX02" TO ( cIdx )
+           INDEX ON INS TAG "IDX03" TO ( cIdx )
+           dbCloseArea()
+           OutStd( "exact fixture ready" + hb_eol() )
+        RETURN
+
+        PRG
+        cat > output/probe_mt.prg <<'PRG'
+        #include "ads.ch"
+        #define __HLP__(s) .T.
+        REQUEST ADS, ADSCDX
+        STATIC s_hConn := 0
+        STATIC s_cRdd := "ADSCDX"
+        STATIC s_nRandom := 1
+        PROCEDURE Main( cUri, cDir )
+           LOCAL cChallenge, hPending := 0, i, x, aThreads := {}, cErr := Space(512)
+           ErrorBlock( {| e | OutStd( "ERROR " + hb_ValToExp(e) + hb_eol() ), Break(e) } )
+           AdsSetFileType( ADS_CDX )
+           AdsSetServerType( ADS_REMOTE_SERVER )
+           RddSetDefault( s_cRdd )
+           s_hConn := AdsConnect( cUri )
+           IF Empty( s_hConn )
+              OutStd( "CONNECT-FAIL" + hb_eol() )
+              ErrorLevel(3) ; QUIT
+           ENDIF
+           FOR i := 1 TO 9
+              AAdd(aThreads,hb_threadStart({|| StageExact(cDir)}))
+           NEXT
+           StageExact(cDir)
+           OutStd( "MAIN-STAGE-PASS" + hb_eol() )
+           dbGoTop()
+           OutStd( "MAIN-GOTOP-PASS lastrec=" + hb_ntos(LastRec()) + hb_eol() )
+           FOR EACH x IN aThreads
+              hb_threadJoin(x)
+           NEXT
+           OutStd( "EXACT-THREADS-JOINED lastrec=" + hb_ntos(LastRec()) + hb_eol() )
+           dbCloseArea()
+        RETURN
+        PROCEDURE StageExact(cDir)
+           BEGIN SEQUENCE
+              IF HeyAddRecords(cDir+"/TestIndex.dbf",cDir+"/TestIndex.cdx")
+                 dbGoTop()
+              ENDIF
+              Mark("stage done")
+           RECOVER
+              Mark("RECOVER")
+              ErrorLevel(4)
+           END SEQUENCE
+        RETURN
+        PROCEDURE Mark(c)
+           OutStd("t"+hb_ntos(hb_threadId())+" "+c+hb_eol())
+        RETURN
+        PROCEDURE LogEvents(c)
+           Mark(c)
+        RETURN
+        FUNCTION HeyAddRecords( cDbf, cIdx )
+           LOCAL aRec, aData, lAppended
+           LOCAL lAdded := .T.
+
+           IF .T.
+              Mark( "before USE" )
+              USE ( cDbf ) VIA ( s_cRdd ) ALIAS _STG SHARED NEW
+           ENDIF
+           Mark( "after USE" )
+           IF ! Alias() == "_STG"
+              lAdded := .F.
+              ? "Could not Open: ", cDbf
+           ELSE
+              IF __HLP__( "__Switching it ON do not display records in the browser as well as referencing them__" )
+                 Mark( "before dbSetIndex" )
+                 dbSetIndex( cIdx )
+                 Mark( "after dbSetIndex" )
+                 dbSetOrder( 0 )
+              ENDIF
+              aData := { { "Alice"  , "Madrid"    }, ;
+                         { "Bob"    , "Barcelona" }, ;
+                         { "Phillip", "Panipat"   }, ;
+                         { "Charlie", "Valencia"  }, ;
+                         { "Linda"  , "Iris"      }, ;
+                         { "Finland", "Dallas"    }, ;
+                         { "Diana"  , "Sevilla"   }, ;
+                         { "Lucy"   , "Sevilla"   }, ;
+                         { "Jony"   , "Walker"    }, ;
+                         { "Edward" , "Bilbao"    } }
+              FOR EACH aRec IN aData
+                 Mark( "before append " + hb_ntos( aRec:__enumIndex() ) )
+        #if 0
+                 IF aRec:__enumIndex() > 1
+                    EXIT
+                 ENDIF
+        #endif
+                 IF ! lAppended := _STG->( DbAppend() )
+                    hb_idleSleep()
+                    lAppended := _STG->( DbAppend() )
+                 ENDIF
+                 Mark( "after append ok=" + hb_ValToExp(lAppended) + " neterr=" + hb_ValToExp(NetErr()) + " recno=" + hb_ntos(RecNo()) )
+                 IF lAppended
+                    REPLACE _STG->NAME WITH aRec[ 1 ]
+                    REPLACE _STG->CITY WITH aRec[ 2 ]
+                    REPLACE _STG->AGE  WITH hb_randInt( 20, 120 )
+                    REPLACE _STG->TS   WITH hb_TSToStr( hb_DateTime() )
+                    REPLACE _STG->THD  WITH hb_threadId()
+                    REPLACE _STG->INS  WITH s_nRandom
+                    REPLACE _STG->RDD  WITH s_cRdd
+                    //
+                    Mark( "before commit" )
+                    _STG->( DbCommit() ) ; _STG->( dbUnlock() )
+                    Mark( "after commit/unlock" )  /* a must for networked applications */
+                 ELSE
+                    LogEvents( "Could not APPEND " + aRec[ 1 ] )
+                 ENDIF
+              NEXT
+           ENDIF
+           RETURN lAdded
+
+
+        PRG
+
+        # DLL import library only. Never place a combined archive in kit.
+        cp build-legacy/src/libopenace32.dll.a kit/libopenace32.dll.a
+        cp build-legacy/src/openace32.dll output/openace32.dll
+        objdump -p output/openace32.dll > output/dll-pe.txt
+        if grep -Ei 'DLL Name:.*(libstdc|libgcc|libwinpthread|libssl|libcrypto|mbedtls|zlib).*\.dll' output/dll-pe.txt;then exit 1;fi
+        for unit in ads1 adsfunc adsmgmnt adsx;do
+         gcc -c "$HB/contrib/rddads/$unit.c" -I"$HB/include" -I"$HB/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
+        done
+        gcc -c contrib/oads_hb/oads_hb.c -I"$HB/include" -Iinclude/openads -o output/oads_hb.o
+        ar rcs kit/librddads.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o output/oads_hb.o
+        for name in local_create probe_mt;do
+         "$HB/bin/win/mingw/hbmk2.exe" "output/$name.prg" -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd -o"output/$name.exe"
+        done
+        cp output/probe_mt.exe output/probe_mt_dll.exe
+        cat > output/check_rows.prg <<'CHECKROWS'
+        #include "ads.ch"
+        REQUEST ADS, ADSCDX
+        PROCEDURE Main(cDir)
+         LOCAL nRows:=0, nEmpty:=0
+         FIELD NAME,CITY
+         AdsSetServerType(ADS_LOCAL_SERVER)
+         AdsSetFileType(ADS_CDX)
+         RddSetDefault("ADSCDX")
+         USE (cDir+"/TestIndex.dbf") VIA "ADSCDX" SHARED NEW
+         dbGoTop()
+         DO WHILE !Eof()
+           nRows++
+           IF Empty(NAME) .OR. Empty(CITY)
+              nEmpty++
+           ENDIF
+           dbSkip()
+         ENDDO
+         OutStd("STORED rows="+hb_ntos(nRows)+" lastrec="+hb_ntos(LastRec())+" empty="+hb_ntos(nEmpty)+hb_eol())
+         dbCloseAll()
+        RETURN
+        CHECKROWS
+        "$HB/bin/win/mingw/hbmk2.exe" output/check_rows.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd  -lws2_32 -lbcrypt -lpsapi -ooutput/check_rows.exe
+
+        cat > output/auth_static.prg <<'PRG'
+        #include "ads.ch"
+        REQUEST ADS, ADSCDX
+        PROCEDURE Main(cUrl)
+         LOCAL cChallenge,hPending:=0,hConn:=0,cBlob
+         IF !OAds_SetLogging(.T.)
+          OutStd("LOGGING-OPTIN-FAIL"+hb_eol())
+          ErrorLevel(6);QUIT
+         ENDIF
+         cChallenge:=OAds_BeginAuth(cUrl,@hPending)
+         IF Len(cChallenge)!=32
+          OutStd("AUTH-BEGIN-FAIL"+hb_eol())
+          ErrorLevel(3);QUIT
+         ENDIF
+         cBlob:=cChallenge+"test-only"
+         hConn:=OAds_CompleteAuth(hPending,cBlob)
+         IF Empty(hConn)
+          OutStd("AUTH-COMPLETE-FAIL"+hb_eol())
+          ErrorLevel(4);QUIT
+         ENDIF
+         OAds_SetConnection(hConn)
+         dbUseArea(.T.,"ADSCDX","TestIndex.dbf","TRACEPROBE",.T.,.F.)
+         IF !Used()
+          ErrorLevel(5);QUIT
+         ENDIF
+         dbCloseAll()
+         AdsDisconnect(hConn)
+         OAds_SetLogging(.F.)
+         OutStd("STATIC-AUTH-PASS"+hb_eol())
+        RETURN
+        PRG
+        "$HB/bin/win/mingw/hbmk2.exe" output/auth_static.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd  -lws2_32 -lbcrypt -lpsapi -ooutput/auth_static.exe
+        objdump -p output/auth_static.exe > output/static-auth-pe.txt
+        grep -qi 'DLL Name: openace32.dll' output/static-auth-pe.txt
+
+
+        # Actual GCC x86 Harbour RDDADS reader / independent DBFCDX writer.
+        "$HB/bin/win/mingw/hbmk2.exe" tests/smoke/harbour/refresh_peer.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd -ooutput/refresh_peer.exe
+        objdump -p output/refresh_peer.exe > output/refresh-peer-pe.txt
+        grep -qi 'DLL Name: openace32.dll' output/refresh-peer-pe.txt
+
+        # Same generated Harbour objects, link under owner's exact pinned ld2.35.1.
+        export PATH="$(cygpath -u "$RUNNER_TEMP/owner2351/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        ld --version | tee output/owner-ld-version.txt
+        grep -q '2.35.1' output/owner-ld-version.txt
+        "$HB/bin/win/mingw/hbmk2.exe" output/probe_mt.prg -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd -ooutput/probe_mt_owner.exe -workdir=output/vouchobjs -inc -trace > output/owner-link.txt 2>&1
+        objdump -p output/probe_mt_owner.exe > output/owner-client-pe.txt
+        grep -qi 'DLL Name: openace32.dll' output/owner-client-pe.txt
+        echo "$PINNED_SOURCE" > output/source-commit.txt
+
+        objdump -p output/openace32.dll | sed -n '/\[Ordinal\/Name Pointer\] Table/,$p' > output/dll-exports.txt
+        if grep -E '^.*\][[:space:]]+(_Z|\?)[^[:space:]]+' output/dll-exports.txt;then exit 1;fi
+
+        # Vouch link-shape proof: preserve every library position, use empty stand-in
+        # archives ONLY for unavailable third-party libs. Real Harbour GUI/MT/system libs.
+        python - <<'PYPROOF'
+        import pathlib,subprocess
+        HB=pathlib.Path(__import__('os').environ['RUNNER_TEMP'])/'harbour-old'
+        libs="gtwvg v32lib gtnet hbnf hbmxml mxml hbhpdf libhpdf png hbzebra hbssl ssl crypto crypt32 hbtip hbziparc hbmzip minizip hbnetio hbmemio hbwin hbjrpc hbzsock hbcurls curl ssh2 hbjrpc dbrmap hbcloud hbtelegram xhb freewin eztwain3 hbct wininet mapi32 rasapi32 tapi32 comctl32 Image2PDF crypto ssl ssh2 nghttp2 brotlicommon-static brotlidec-static brotlienc-static zstd wldap32 bcrypt rddads openace32 ws2_32 bcrypt psapi hbextern hbdebug hbvmmt hbrtl hblang hbcpage gtcgi gtpca gtstd gtwin gtwvt gtgui hbrdd hbuddall hbusrrdd rddntx rddcdx rddnsx rddfpt hbrdd hbhsx hbsix hbmacro hbcplr hbpp hbcommon hbmainwin winmm kernel32 user32 gdi32 advapi32 ws2_32 iphlpapi winspool comctl32 comdlg32 shell32 uuid ole32 oleaut32 mpr mapi32 imm32 msimg32 wininet hbpcre hbzlib".split()
+        pathlib.Path('output/standins').mkdir(exist_ok=True)
+        for n in libs:
+         if n in ('rddads','openace32'):continue
+         r=subprocess.check_output(['gcc','-print-file-name=lib'+n+'.a'],text=True).strip()
+         if pathlib.Path(r).is_file() or (HB/'lib/win/mingw'/('lib'+n+'.a')).is_file():continue
+         subprocess.run(['ar','rcs','output/standins/lib'+n+'.a'],check=True)
+        objs=list(pathlib.Path('output/vouchobjs').glob('*.o'))
+        assert objs, 'No hbmk2 retained objects'
+        cmd=['gcc',*map(str,objs),'-mwindows','-Wl,--start-group',*['-l'+n for n in libs],'-Wl,--end-group','-Lkit','-L'+str(HB/'lib/win/mingw'),'-Loutput/standins','-o','output/vouch-shaped.exe']
+        pathlib.Path('output/vouch-shaped-command.txt').write_text(' '.join(cmd))
+        subprocess.run(cmd,check=True)
+        PYPROOF
+        objdump -p output/vouch-shaped.exe > output/vouch-shaped-pe.txt
+        grep -qi 'DLL Name: openace32.dll' output/vouch-shaped-pe.txt
+      shell: bash
+    - name: Run twenty DLL and owner-GCC B_BIG integrity fixtures
+      run: |+
+        $data=(Resolve-Path mtdata).Path
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        & $srv --help | Out-File srv/help.txt
+        & $srv --version | Out-File srv/version.txt
+        $p=Start-Process -FilePath $srv -ArgumentList ('--port 16262 --data '+$data) -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput srv/stdout.log -RedirectStandardError srv/stderr.log -PassThru
+        $ok=$false
+        for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 16262 -WarningAction SilentlyContinue; if($c.TcpTestSucceeded){$ok=$true;break}; Start-Sleep -Milliseconds 500 }
+        if(-not $ok){throw 'server did not listen'}
+        $env:Path = (Resolve-Path srv).Path + ';' + $env:Path
+        for($trial=1;$trial -le 20;$trial++) {
+         foreach($mode in @('dll','owner')) {
+          $trialDir=Join-Path (Get-Location) "mtdata/$mode$trial"
+          New-Item -ItemType Directory -Path $trialDir -Force | Out-Null
+          $trialDir=$trialDir.Replace('\','/')
+          & output/local_create.exe $trialDir | Out-File "output/$mode$trial-fixture.txt"
+          $trialUrl="tcp://127.0.0.1:16262/$trialDir"
+          $exe='output/probe_mt_dll.exe';if($mode -eq 'owner'){$exe='output/probe_mt_owner.exe'}
+          $clock=[System.Diagnostics.Stopwatch]::StartNew()
+          $p=Start-Process -FilePath (Resolve-Path $exe).Path -ArgumentList @($trialUrl,$trialDir) -RedirectStandardOutput "output/$mode$trial-stdout.txt" -RedirectStandardError "output/$mode$trial-stderr.txt" -PassThru
+          if(-not $p.WaitForExit(45000)){$p.Kill();throw "$mode trial $trial hung"}
+          if($p.ExitCode -ne 0){throw "$mode trial $trial failed exit $($p.ExitCode)"}
+          $clock.Stop()
+          $elapsed=$clock.Elapsed.TotalMilliseconds
+          $end=Select-String -Path "output/$mode$trial-stdout.txt" -Pattern 'EXACT-THREADS-JOINED'
+          $fails=@(Select-String -Path "output/$mode$trial-stdout.txt" -Pattern 'Could not APPEND').Count
+          $stored=& output/check_rows.exe $trialDir
+          $bytes=[System.IO.File]::ReadAllBytes("$trialDir/TestIndex.dbf")
+          $disk=[BitConverter]::ToUInt32($bytes,4)
+          "$mode TRIAL $trial PASS $end elapsed_ms=$elapsed failed_appends=$fails disk_header=$disk $stored" | Tee-Object -FilePath output/repeat-summary.txt -Append
+          if(-not $end){throw "$mode trial $trial incomplete"}
+          if($fails -ne 0 -or $disk -ne 100 -or $stored -notmatch 'rows=100 lastrec=100 empty=0'){throw "$mode integrity mismatch"}
+         }
+        }
+        Get-Content output/dll-pe.txt
+
+      shell: pwsh
+    - name: Native worker and encrypted auth regression
+      run: |
+        set -euxo pipefail
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-server")"
+        "$HB/bin/win/mingw/harbour.exe" tests/hrb/auth-spike/test_only.prg -gh -oauth-probe.hrb
+        MSYS_NO_PATHCONV=1 icacls.exe auth-probe.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
+        for p in worker_probe integration_probe;do
+         build-legacy/tools/serverd/auth_spike_$p.exe "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")" "$(cygpath -m "$PWD/auth-probe.hrb")" | tee "output/auth-$p.txt"
+        done
+        build-legacy/tools/serverd/openads_serverd.exe --version | tee output/auth-version.txt
+        build-legacy/tools/serverd/auth_spike_transport_probe.exe | tee output/transport-plain.txt
+        build-legacy/tools/serverd/auth_spike_transport_probe.exe tls | tee output/transport-tls.txt
+      shell: bash
+    - name: DLL Harbour BeginAuth CompleteAuth native smoke
+      run: |
+        $env:OPENADS_WIRE_TRACE="1"
+        $env:OPENADS_WIRE_TRACE_FILE=(Join-Path $PWD "output/auth-wire-trace.txt")
+        $data=(Resolve-Path mtdata).Path
+        & output/local_create.exe $data | Out-File output/auth-trace-fixture.txt
+        if($LASTEXITCODE -ne 0){throw "auth trace fixture create failed"}
+        $mod=(Resolve-Path auth-probe.hrb).Path
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        $args='--port 17262 --data "'+$data+'" --auth_user usr:pw --auth_module "'+$mod+'"'
+        $p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput output/auth-server-stdout.txt -RedirectStandardError output/auth-server-stderr.txt -PassThru
+        try {
+         $ok=$false
+         for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 17262 -WarningAction SilentlyContinue;if($c.TcpTestSucceeded){$ok=$true;break};Start-Sleep -Milliseconds 500 }
+         if(-not $ok){throw 'auth server did not listen'}
+         $uri='auth://127.0.0.1:17262/'+$data.Replace('\','/')
+         $q=Start-Process -FilePath (Resolve-Path output/auth_static.exe).Path -ArgumentList $uri -RedirectStandardOutput output/static-auth-stdout.txt -RedirectStandardError output/static-auth-stderr.txt -PassThru
+         if(-not $q.WaitForExit(45000)){$q.Kill();throw 'static auth hung'}
+         if($q.ExitCode -ne 0){throw "static auth failed $($q.ExitCode)"}
+         if(-not (Select-String output/static-auth-stdout.txt -Pattern STATIC-AUTH-PASS)){throw 'static auth proof missing'}
+        } finally {if(-not $p.HasExited){$p.Kill()}}
+
+        if(-not (Select-String output/auth-wire-trace.txt -Pattern "wire  op[.]")){throw "auth wire trace missing"}
+        if(Select-String output/auth-wire-trace.txt -Pattern "wire  op[.]0x(3D|3F) "){throw "auth handshake leaked to wire trace"}
+
+        Get-Content output/static-auth-stdout.txt
+      shell: pwsh
+    - name: Actual worker HRB timestamp and UTC calls
+      run: |
+        set -euxo pipefail
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-server")"
+        "$HB/bin/win/mingw/harbour.exe" tests/hrb/mutual/time_probe.prg -gh -otime-probe.hrb
+        MSYS_NO_PATHCONV=1 icacls.exe time-probe.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
+        python tests/hrb/mutual/time_probe.py "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")" "$(cygpath -m "$PWD/time-probe.hrb")" | tee output/hrb-time-proof.txt
+      shell: bash
+    - name: Mutual V2 native relay and ABI proof
+      run: |
+        set -euxo pipefail
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-server")"
+        "$HB/bin/win/mingw/harbour.exe" tests/hrb/mutual/auth.prg -gh -omutual-test-only.hrb
+        MSYS_NO_PATHCONV=1 icacls.exe mutual-test-only.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
+        build-legacy/tools/serverd/auth_mutual_probe.exe "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")" "$(cygpath -m "$PWD/mutual-test-only.hrb")" | tee output/mutual-native-proof.txt
+      shell: bash
+    - name: Compile mutual Vouch glue with unchanged Qt4.9.2
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-old")"
+        "$HB/bin/win/mingw/hbmk2.exe" tests/hrb/mutual/client.prg -Lkit -lrddads -lopenace32 -iinclude/openads -mt -ooutput/mutual_client.exe
+        test -f output/openace32.dll
+      shell: bash
+    - name: Run mutual Harbour DLL smoke
+      run: |
+        $data=(Resolve-Path mtdata).Path.Replace('\','/')
+        $mod=(Resolve-Path mutual-test-only.hrb).Path
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        $args='--port 17263 --data "'+$data+'" --auth_user usr:pw --auth_module "'+$mod+'"'
+        $p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput output/mutual-server.txt -RedirectStandardError output/mutual-server-error.txt -PassThru
+        try {
+         $ok=$false
+         for($i=0;$i -lt 60;$i++){try{$c=New-Object System.Net.Sockets.TcpClient;$c.Connect('127.0.0.1',17263);$c.Close();$ok=$true;break}catch{Start-Sleep -Milliseconds 500}}
+         if(-not $ok){throw 'mutual server not listening'}
+         & output/mutual_client.exe ('auth://127.0.0.1:17263/'+$data) $data | Tee-Object output/mutual-harbour-proof.txt
+         if($LASTEXITCODE -ne 0){throw 'mutual Harbour failed'}
+         if(-not(Select-String output/mutual-harbour-proof.txt -Pattern MUTUAL-HARBOUR-PASS)){throw 'mutual proof missing'}
+        } finally {if(-not $p.HasExited){$p.Kill()}}
+      shell: pwsh
+    - name: Actual worker crypto and Windows Job containment release gate
+      shell: bash
+      run: |
+        set -euxo pipefail
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-server")"
+        for name in crypto_probe resource_probe; do
+         "$HB/bin/win/mingw/harbour.exe" tests/hrb/mutual/$name.prg -gh -o$name.hrb
+         MSYS_NO_PATHCONV=1 icacls.exe $name.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
+        done
+        python tests/hrb/mutual/crypto_probe.py "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")" "$(cygpath -m "$PWD/crypto_probe.hrb")" | tee output/hrb-crypto-proof.txt
+        build-legacy/tools/serverd/auth_resource_probe.exe "$(cygpath -m "$PWD/build-legacy/tools/serverd/openads_auth_worker.exe")" "$(cygpath -m "$PWD/resource_probe.hrb")" | tee output/hrb-resource-proof.txt
+    - name: Actual GCC x86 Harbour peer refresh with staged matched DLL and daemon
+      shell: pwsh
+      run: |
+        $ErrorActionPreference='Stop'
+        $data=(Resolve-Path mtdata).Path
+        $testdata=Join-Path $data 'refresh-peer'
+        New-Item -ItemType Directory -Force $testdata | Out-Null
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        $p=Start-Process $srv -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','17264','--data',$testdata) -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput output/refresh-server.txt -RedirectStandardError output/refresh-server-error.txt -PassThru
+        try {
+         $ready=$false
+         for($i=0;$i -lt 60;$i++) {
+          if($p.HasExited){throw 'refresh daemon exited'}
+          $c=New-Object System.Net.Sockets.TcpClient
+          try {$c.Connect('127.0.0.1',17264);$ready=$true} catch {} finally {$c.Dispose()}
+          if($ready){break};Start-Sleep -Milliseconds 500
+         }
+         if(-not $ready){throw 'refresh readiness timeout'}
+         & output/refresh_peer.exe reader ('tcp://127.0.0.1:17264/'+$testdata.Replace('\','/')) ($testdata+'\') *> output/refresh-peer-gcc-proof.txt
+         $rc=$LASTEXITCODE
+         Get-Content output/refresh-peer-gcc-proof.txt
+         if($rc -ne 0 -or -not(Select-String output/refresh-peer-gcc-proof.txt -Pattern REFRESH-PEER-HARBOUR-PASS -Quiet)){throw 'GCC x86 refresh proof failed'}
+        } finally {Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+    - name: Full repository default unit regression in bounded batches
+      shell: bash
+      run: |
+        set -euxo pipefail
+        python - <<'PYBATCH'
+        import pathlib,subprocess,os,re,json,xml.etree.ElementTree as ET
+        import sys
+        sys.stdout.reconfigure(encoding="utf-8")
+        out=pathlib.Path('output');out.mkdir(exist_ok=True)
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)
+        for key in ('TMPDIR','TMP','TEMP'):os.environ[key]=str(tmp)
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())
+        os.environ['OPENADS_TEST_SERVERD']=str(pathlib.Path('build-legacy/tools/serverd/openads_serverd.exe').resolve())
+        listing=subprocess.check_output([exe,'--count','-tce=*[slow]*,*flaky*'],text=True)
+        (out/'unit-count.txt').write_text(listing);print(listing,flush=True)
+        match=re.search(r'test cases passing the current filters: (\d+)',listing);assert match,listing
+        count=int(match.group(1));assert count>1000
+        seen={};errors=[]
+        for first in range(1,count+1,25):
+         xml=out/('unit-'+str(first)+'.xml');log=out/('unit-'+str(first)+'.txt')
+         args=[exe,'-tce=*[slow]*,*flaky*','--first='+str(first),'--last='+str(first+24),'--reporters=xml','--out='+str(xml.resolve())]
+         try:
+          with log.open('w',encoding='utf-8') as f:r=subprocess.run(args,stdout=f,stderr=subprocess.STDOUT,timeout=180)
+          doc=ET.parse(xml)
+          cases=[c for c in doc.iter('TestCase') if c.get('skipped')!='true']
+          assert cases,(first,'No executed cases')
+          for c in cases:
+           result=c.find('OverallResultsAsserts');ok=result is not None and result.get('test_case_success')=='true'
+           name=c.get('name');assert name not in seen,(first,'duplicate',name)
+           seen[name]={'passed':ok,'assertions':dict(result.attrib) if result is not None else {},'file':pathlib.Path(c.get('filename')).name}
+          if r.returncode and all(v['passed'] for c in cases for v in [seen[c.get('name')]]):errors.append('Nonzero batch exit '+str(first))
+         except Exception as e:errors.append(str(first)+': '+repr(e))
+         print('Batch',first,'complete; cases',len(seen),'errors',len(errors),flush=True)
+        summary={'count':count,'executed':len(seen),'failed':sorted(n for n,v in seen.items() if not v['passed']),'errors':errors,'cases':seen}
+        if len(seen)!=count:summary['errors'].append('Coverage mismatch')
+        (out/'unit-summary.json').write_text(json.dumps(summary,indent=2))
+        (out/'unit-batch-summary.txt').write_text('registered='+str(count)+' executed='+str(len(seen))+' failed='+str(len(summary['failed']))+' harness_errors='+str(len(summary['errors']))+'\n'+'\n'.join(summary['failed'])+'\n'+'\n'.join(summary['errors']),encoding='utf-8')
+        print((out/'unit-batch-summary.txt').read_text(encoding='utf-8'),flush=True)
+        import base64,zlib
+        expected=json.loads(zlib.decompress(base64.b64decode('eJzdXWtzGjkW/SuqfHIqIX5kZjbjrd0qAjih4tgejDM7W1vVJboFaN20eqRuMDM1/33v1aNpwPjRwbTYDzMODTbnSFdX9yn9+ar5sUuufzknaiJu2SlRc5WxybuUyQlXiotEkT+YFA0pZmQoJMmTkaRJxiKSUi5fnZI/X6VUKRbBP4c0VuwteYWvZYa/q99XeRgyeISvXh2/gg8MKY9zWXqQMZUFIVUssB/Gd/Sfe/UXfp7HDJ/QAQ/U73GgsQb4S+/CNNUfaUaq3W5JRjNG3hD9qhlFfTqI8bVIWUIy/WIwJzTmVNUAPYo2Yr6SImQR/GEH/hPL8Bn8B1ORzYkUeRI1MsnTeoCnACaYcjZ7AgWVCfgiEorJhCUZmXJKPjRSKumEKD5KaAYfqktytHgHWhTUE6j8Jz85Ov6BwBworjJFaCiFUqTdJpKhUPk6GX3JRyMmS9Jkn3gjUJnB8ygDP2fgMfQ38PXklrFUEcQ2EzIiM8kz1hBJDBooiUjEVAijjyCBCo1QJOshk8OfR5lKH6Yz49mYjEBuUkKjSJEJmwxgVsZ1SdDjsL/BEiktAXzpjfw/voY1ej/F/yHwbRjhNQUq2URMYU9I3Rt+4l5ROg61Xe2+qZp7EOfJbSJmiUMMDGCzBRuOSSm8xF8WcjfcOEF+ykcZrRtq/LgP4/wQdlB+Z5zFUaH9/FQrQ8S4SaVv4qAymYcw+jQ+JTFLRrBJme015BP4oj1lks1TZnkMecIR6h4xcWtD/7IPi+MxFj027IJXOwITbb4wESzuXtcQqUOWnuK0oHWP763OQq9z3ux3v3WCq2b/sxam/m9XHe3Gtz+eGX+4pj0Bv/qB6biXTr/58dxyQQrNdn/vKLh1kbrnoYiYD+vjMTboAKySGdCIxGLEAfnB8fHR+9cFkSP/HIKeti1MPCiCjygTBfq73e+KsBBBDN4Eh65X9evCmdmwgwiJoTlNsG4P50Gdu8ZsbQ/ULAqRSkTWoFMAVN+Kf4zPUrzOLfg0woikDYX5ZxheryoqN97NTnB2c9Hqdy8vgovLftD81uyeowL2UD+tkbABSBPwncDKl/PDkIZjRkS6AOkfiZUQnZWhiCtNJCtieuGYJiOmnWmS0EldO+BGx+76qRsGBzUMS7shPAwhbSBhAmCL2JemcvLahMQyYd73ns3pIiwJXjfFKVmEJ71EvxS8W9au17+c+6ZZL8GmMMYGu0vB8jZBDWtigJRgxi3MparF3nvEp2i3Cc2z8SnRGcBkRHBmUM2AqPyXhZj7m43BZNJLGZ79nnOpwT+Tx9Eqj5PnzwAC3YAeEUfLIEvBeDYFBjqibbYEsDdoIpL5ROQYDbFfXINMPcBIslEeU6nng4Q0AZsI1M6EJxzmUpJsDKpnNNayVcRZK7BYm5ftspjCIohICCIDFhGHP6CHO822IkLbgsqTqeAhCn+joT1N9J6bbQwExJja1AH6iIgEd+fbeoAXGB9G3/542kQhKcSmlA1XOjnb/Nj1msH1lR7+YZ6EOlvG7liYg94vFyl8j7OzQyqOw94A1uaMequFB34s7J69YcCTiN3ZdQsaVOtKWLqwINptr4FLNgSkWkfCGzY4SWSuiezH2C/iEXY32hfgxnXcQwVj1fpeCbp1JH0eYyMPGENAzEX4diYpKELcT2GgzWcUHbK6XKhNAQYgoDd/NIkxB8/gxZRhigzMSUCOX+BSgIpO2aFksaAV7LGTbThVJifJknClxK9NM9rmYYYWDRnkPM4aINtr/nhtYU/wRWkQAcANsKmWMNyMgGIjoyNAnVH8rRLmXXsdj4EORZxPkkYM/lJc1oenRNeBkjfmYQbWcGA+q+CZt3MQugpR6pYLojUpAPyHEvF01+G0p2EOjKAb5DpWkgn7zPPR1mgBeMRi5l55C1lLdbAQdH+RmmqZVSFOBIlFgmHiMUaaxqyWaucnYtdiPJRi4rkgn5I0H8Q8pPjdhxQghDE7VPmgVMFZF3TJ0hg+ltFYrJgtn3rNCxO46HW+XX7pmDL/DFYk5qIqiMSP2wg8gvbCH0tIvx4fvTvG4qNW76Zd3gyLmNY70HqVS5Ne1CopsBuZbpgoS8yoLFfI4j6JSVnvwJ+8O/lZQ4ddsVR7euZiLW/IJ5YdYrbWPnEx+HosXIP0iSTKTRWWxVKOFl2PMUboKaikQT6CP5EKiXE9jIq1m41f2QBn9jOjcTbeA8KLqn9LdzWj+IaUaka9JoQ4z3lSIbS6Q5AwyrhFDODPuiHGUV99VnslxtPpLNVkHK4VaewPkfsK+pDPfc9957JU3HC4XrKxN5NSzkAfrmSkfcdezj8fruajjV79Vlvd+iYa74+WaDSjqIsBiDP4bXJISoVxxeNa8afgs7CTp9BAyemLT9prWCKCb5yBR/GpvjKM55ExOzduda6476uI+HBefuLFZvgsPmU1W2ZxOcAKgoPy26/RDtOxx0Y4ZuEtmF90hBUpmbbO9Nc2jhcx1xHLspqNl2cNxY1a9GGWhgAfv94fFrrz5f91opZb1g4XD53Tsw8kYI/SWrzs3oASzJguOKLYYxqbEvO3WE2r50zEEVHwpUlG2CTFyskC1j7w1bsA2kI9Phpnys3c9do7e8EHI49Xi8Dj4eIggFIastjspuKWLd7wjuAFzfiUofeso06gMCbU1q0qV45VFC9JmglJ4P9jXcZEE9L+el7KNjyf3Taygfj9ahOrCPCHmSPWvOoqErFkDisr0azIIM9shR+ZgP6UnMb8Dx1AxKrXVPIpPPWQmMlQ6Vg9YsXwYSjSObarZzyhtl3dzl+ejQXu4R7ykHRG8NASbK1XrlpuMEeQNqllYv016YaHsQNuLVJ8lAgYZ2nUm0Wvp4TGMayVirH9lx18XPBAAnchKy4GvpsD5iraIytdU2DyX8GxLYpFGGVnRIlchnUVLz5MzQpPs3Wu3AL4Q5f5whcaHT1gQ5y1xbLnycgbKcM9Q53eu7e43g+r20Bz8QQ0MseI6ISqW3+mY4XE/S0sbDgEGjhtOnvtJfh1U6W076++U3d5zINcrucKN7ai2hSXtsooPBW4rc+4gnkQ6DX4thRMngyXNhaVwGYx4BmKu6bAEljLoSuULRX2+zYFpRyfO0dBpSzkQx4iId/gujGGnyQVipuiWNvX0b247vT6KE5Hd8dHb0m7c97pd8zrkwrNpS9LRTvDgdnk/nFkd2kYftghvINarua5hlFt9Z2E19ifuBHuWm2Xsdgq92e87OCaUT0iB+ADsNdkgNrONSFWS1zvBu8S0KIkbcoVH/DYJ+N+CfcxOUDT/jXYwLGYKW3n67O1/B3qE3Kgm+wKzGqsyy99RJwI1F+okI9/PiHDPI7tqtNnL1DwdNH2xer0UHfCYNmDNxx6XbdltJrXrWa7g0qa40kkOOqmDi0y3V8pldUU3w+r0Ct0r0m+CXevc93vdVv9U7M6XctdiQW746oC7g/bCPtshH3d6V/cnJ+74T77AvBpUsA3g+0moMKgb6MY5h70xt44xap03ZwGuBetjiglzU7Q6wbfupd4oMrlxfOR/+1lgN9ctZvrUg7wTWdshJHfhM3cwF99qTDma1v8dgTdQn9c0G0bTGii1VUo/PyiDJ4m81dfXPRzC/i3ITxF5LnHTMhPMuv+YGJgQEdkgO4mtjjiA90xIEk241UK8Na0ztEzGCQsmwl566LN0uB9hM5b8k3k4Ri32JSdkkkeZ1zX3L/799ExJkCIkFGVLevD2nrYPpc0bpmCzlNjlQVcBboCVY0xaDbEbl9bhbpjk31zten1e93mdUrOOv3WZxAeETOK9YOtJr4ufNE35Kx70Tw//40cnDXgNwZMVUiDfvdGYCp3TQf//Tx+/dw971g2NpAfipTrHraZNZcbmWgYu/mgdXIcViDy/TW1jxKx4HWYtfOvTusGlNZV77LVad/0OtjzAGsD8b/3bR5sX9gygyDADQ0j5HxCR4APT8qL7AFt5ABrG4OWSDLKE/i0Xv6e8Tp1jVcNvZIbpp1ZS5E+fMroW1enjTPzwS8GJm5w1rv8SihG+vXRFqGYpALDHphyxgpomuOrmN8yct282rGeeviAjqUTEmAFoHxhosIMP1p8QAIs7DFwyLDhD2ckMSkAmJiwQiHOy01H362S5lm/03OxsyGvdPbDd6uj0rlACGET1PtqlhfhbXhREf9Wuigfx/+xc3YJurM81i7r0/5aIeq3o2EHvP1Os00uzxx0lac6bwX4KwF/vwXT+gnAU8l1ntkYbZXSaWv++ssMsUqDtslu9l1Xs86EpEEnWXrauun1Ohd9cgPz8Hw2P70oG9u3Z01M6wsrWyLE9bktOy/Y3Wx5bkA7lIzZoCamnSu2wb8Q5si2CICjFd7mKYYewjiPGOyXKoOtRhobc+wYKFYh1vNde44Bdj/qUwvbGcSIE7vn8BwlaW434FivoB1IcyKBD+ixL77UyIdt7yGNbH2ckZ5dbzkPSMgqWmucYEyBkuXeQ3OCmz/Q8zQ2ZRxl/EsniHmDFWPvWCB02f7YIpEECw+UONiHVxLcCzn/wubKtoUZMQdzNzVvkVtWQQd+104vokEYGJBBertMxJYS2uIbffiZ6UW01Tdm5G1FUdSwT3XZjV6vSQwOE8rV7zmTu1buLixiokyrxGDuaJrG80AkIegeG2vGR9ws3ozKEctqOQ26hO5JqHEhiKSho/fo3bndlESC6VNux7svFno+h3i+uBvDjD04UWCb+QrcWrt7JjL9u+YAFA8BbXOLEb9oShMsRTm/viicVP15j0XGBsn3bOQt6r1erJaDO+3H1mHZhVqLsfAM1JhaLqlMZWwHn1VMGbirX0oyJmNGp/XYO09BXVTirhiUtoJSO3wmQuwrA4MRjJZ8cZEC3ljpK94Y1R/4T1k4BgFBNN6uxZjC34tVsth57BlhOpuWxsx3ZVIQcAdgFMkz/JCvqCf8DoA6kwVsc6MH9wau0YTewtWZYCO4FrWvUBWAtL0eRN1yfWcJlrnNG8acinxff6aLYzUIZ7n4vZ1bKxV/TyMf6ljWXiCXNFHUnN5jPAeQG7yVF7BjphQb09CDcErdEx7G+rAp6yAA3ybNM7tDkgGM+MQGGm3Cuurp+S+XiLufgbkE1jYNmQM47QFtutHx+AjrguSu46NPJwIqKJMiJsNY4F2qtjfI3OasQ3pvsAIKq0In3nLQXc+6MZ2OaIZ2jCol2O33e4vedDAGAU9QnvTIq7fmug7l+roretMvyIBlQdmnCFZtsVr0zr0hYJUG7qr4vnBnN7msXfnIlNK72A1Uz7Ujm87QA6ylo0QsendwiM94e4tjzhdHhpTw3/u+x3z0eR8l/Pq1l3jN8TkTmtCR0YReojTH4ayuS/N06YImD9HrS3beuXORp1xmeXVlvQbz/XZhljK4sb4UuP3RHebCa6nFeeSeIgu7fEg/m2DeGcM/DZ1Ax16VPNFdY2D5mp+M3BGhz+DZwn75w8tQMhnGW0w+GkqJIAUhih5hmMe6wP/qS6n1/PmEtnKkqyVUQv0oK5dSZTQc21uCxRCZ6SpCsGyQGHiLFYu066aFfoo1+TUtvEYrZg1DtEoLwy4Jle4dWVw7YjRCr2vvH0EtPMEYJrYZu1+L6QL97jXb48vK3EZSuozEqrm2NrS3gfu51W8Vcbs49z9PfvyxMZjDahnAdghv5OCr5YnuyKtBX28uuLVE7OUkxbDb17rFKhRSe5bmlueli6rN3VvbCNO9jFwV95csiNkn3ooUVoaYq50s6NLFTt7u9PoOqsUg65feCgUughJY/dI/cShaLNYbQ8IxhQ0YdgA8PK4UkCBYqeNVvKogoYufTNIYvwgr922ltrs71/W6Y8Gi7kIlB7/8VKG7Yq3u+WXI2KSyI2Mq/B2XUjzLWxKOgK6Qd8BnYwGO3LrEmQrHAy14ftJZnogiTa7DixhXR7nSgbkiylVxanawWFZWSGllGAYHQlKsp9Y9esRXFlYxLUWpwQRS6DwUi94YR4mocDrzy1GY4Ql6xdVith5zcaCYDbSzZIR1mSYG7GK+2vhG2zzBDM6O9+uNtZp//Q8c/r7X')))
+        assert not summary['errors'],summary['errors']
+        assert set(summary['failed'])==set(expected),'Baseline failure names changed'
+        assert all(summary['cases'][n]==v for n,v in expected.items()),'Baseline failure assertion signatures changed'
+        assert summary['cases']['Tim 2e deleted-only scope never substitutes a preceding live row']['passed'],'2e regression failed'
+        assert summary['cases']['indexed explicit refresh sees peer writes without losing position']['passed'],'explicit refresh regression failed'
+        assert summary['cases']['indexed explicit refresh sees peer writes without losing position']['assertions']['successes']=='113','explicit refresh assertion count changed'
+        assert summary['cases']['Tim 2e deleted-only scope never substitutes a preceding live row']['assertions']['successes']=='304','2e assertion count changed'
+        new_cases=[n for n in summary['cases'] if n.startswith('commit fusion:')]
+        assert len(new_cases)==4,new_cases
+        batch_cases=[n for n in summary['cases'] if n.startswith(('append replacement','checked commit flush:','pending field drain extension:'))]
+        assert len(batch_cases)==7,batch_cases
+        assert all(summary['cases'][n]['passed'] for n in batch_cases),'replacement batch regression failed'
+        bottom_cases=[n for n in summary['cases'] if n.startswith('bottom count:')]
+        assert len(bottom_cases)==4,bottom_cases
+        caller_cases=[n for n in summary['cases'] if n.startswith('wire caller:')]
+        assert len(caller_cases)==5,caller_cases
+        assert all(summary['cases'][n]['passed'] for n in caller_cases),'caller provenance regression failed'
+        assert all(summary['cases'][n]['passed'] for n in bottom_cases),'bottom count regression failed'
+        assert all(summary['cases'][n]['passed'] for n in new_cases),'commit fusion regression failed'
+        keyskip_cases=[n for n in summary['cases'] if n.startswith('dirty key skip:')]
+        assert len(keyskip_cases)==12,keyskip_cases
+        assert all(summary['cases'][n]['passed'] for n in keyskip_cases),'indexed-key Skip regression failed'
+        phase_cases=[n for n in summary['cases'] if n.startswith('open phase')]
+        assert len(phase_cases)==3,phase_cases
+        assert all(summary['cases'][n]['passed'] for n in phase_cases),'open phase regression failed'
+        assert summary['count']==1825 and summary['executed']==1825,'Coverage mismatch'
+        (out/'baseline-comparison.txt').write_text('mtfix62 baseline197failures; same197names and recorded assertion signatures; no additional failing cases;1825/1825executed;commitFusion4PASS;replacementBatch7PASS;bottomCount4PASS;callerScope5PASS;dirtyKeySkip12PASS;2ePASS;explicitRefresh113PASS;appendMeta181PASS6cases;0harnesserrors\n')
+
+
+        PYBATCH
+    - name: Fresh-process diagnostics gate contract on packaged x86 compiler
+      shell: bash
+      run: |
+        set -euo pipefail
+        python tests/trace_gate_contract.py build-legacy/tests/openads_trace_gate_probe.exe build-legacy/tools/serverd/openads_serverd.exe | tee output/diagnostics-gate-contract.txt
+    - name: Local marker full compact and zero-wire contract on Windows x86
+      shell: bash
+      run: |
+        set -euxo pipefail
+        python tests/trace_marker_contract.py build-legacy/tests/openads_trace_marker_probe.exe build-legacy/tests/openads_trace_gate_probe.exe | tee output/trace-marker-contract.txt
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+        HB="$(cygpath -u "$RUNNER_TEMP/harbour-old")"
+        "$HB/bin/win/mingw/hbmk2.exe" tests/trace_marker_harbour.prg tests/trace_marker_numeric_test.c -Lkit -lrddads -lopenace32 -iinclude/openads -mt -gtstd -ooutput/trace-marker-harbour.exe
+        python tests/trace_marker_harbour.py output/trace-marker-harbour.exe | tee output/trace-marker-harbour.txt
+        nm kit/librddads.a | grep ' T _HB_FUN_OADS_TRACEMARK' | tee output/marker-wrapper-symbol.txt
+        nm kit/libopenace32.dll.a | grep ' T _OAdsTraceMarkEx' | tee output/marker-import-symbol.txt
+        objdump -p output/openace32.dll | grep OAdsTraceMarkEx | tee output/marker-export-symbol.txt
+    - name: Actual pinned Harbour pending-field error and append contract
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+        tests/harbour_batch/run.sh "$(cygpath -u "$RUNNER_TEMP/harbour-old")" build-legacy
+    - name: Matched DLL import library and unsupported old-DLL guard
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PATH"
+        mkdir -p output/import-new output/import-old
+        nm kit/librddads.a | grep ' U _AdsFlushPendingFields' | tee output/rdd-symbol.txt
+        nm kit/libopenace32.dll.a | grep AdsFlushPendingFields | tee output/import-symbol.txt
+        objdump -p output/openace32.dll | grep AdsFlushPendingFields | tee output/export-symbol.txt
+        gcc tests/harbour_batch/abi_probe.c -Iinclude -Lkit -lopenace32 -o output/import-new/probe.exe
+        cp output/openace32.dll output/import-new/
+        (cd output/import-new && ./probe.exe) | tee output/import-proof.txt
+        python - <<'PYOLD'
+        import hashlib,pathlib,urllib.request,zipfile,io,os
+        u='https://api.github.com/repos/bedipritpal/OpenADS/releases/assets/722812042'
+        b=urllib.request.urlopen(urllib.request.Request(u,headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']}),timeout=120).read()
+        assert hashlib.sha256(b).hexdigest()=='f1281ea85425288b0bcf470183dd6d7ee6a7030ea82dff9a673a095e04cf8ee0'
+        z=zipfile.ZipFile(io.BytesIO(b));n=[n for n in z.namelist() if n.endswith('/bin/openace32.dll')];assert len(n)==1,n
+        pathlib.Path('output/import-old/openace32.dll').write_bytes(z.read(n[0]))
+        PYOLD
+        cp output/import-new/probe.exe output/import-old/
+        # Noninteractive loader: missing export must fail, never silently use a fallback.
+        python - <<'PYLOAD'
+        import ctypes,pathlib,subprocess
+        ctypes.windll.kernel32.SetErrorMode(3)
+        p=pathlib.Path('output/import-old').resolve()
+        r=subprocess.run([str(p/'probe.exe')],cwd=p,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
+        assert r.returncode!=0,(r.returncode,r.stdout)
+        pathlib.Path('output/old-dll-guard.txt').write_text('Unsupported oldDLL/newimport missing-export failure: '+str(r.returncode)+'\n')
+        print('OLD-DLL-MISSING-EXPORT-PASS',r.returncode)
+        PYLOAD
+    - name: Package DLL-only Vouch test kit
+      run: |+
+        set -euxo pipefail
+        mkdir -p delivery/mtfix79-full/{bin,lib,include,docs}
+        cp output/openace32.dll delivery/mtfix79-full/bin/
+        cp kit/libopenace32.dll.a kit/librddads.a delivery/mtfix79-full/lib/
+        cp include/openads/ace.h "$RUNNER_TEMP/harbour-old/contrib/rddads/ads.ch" delivery/mtfix79-full/include/
+        cat > delivery/mtfix79-full/docs/README.txt <<'NOTES'
+        # OpenADS mtfix79 cumulative test kit
+        
+        Source is cumulative78 plus an independent, default-OFF server table-open
+        phase diagnostic. All78memo-length and earlier fixes remain. This is a test
+        release, not a claim that Vouch or Tim's application is certified or faster.
+        No deployment, service registration, data/auth replacement or upstream merge.
+        
+        ## Server open timer
+        
+        In the existing server INI, add one writable LOCAL destination:
+        
+            open_phase_log = C:/OpenADS-Server/logs/open6262.log
+        
+        The parent directory must already exist. Use a different file per daemon
+        (e.g. open6262.log and open6264.log). On Linux use a full writable local path.
+        Restart that daemon to apply. Do not enable diagnostics=true or change client
+        logging to use this timer. Remove/comment the entry or set its value empty,
+        then restart to turn it OFF. Absent/empty is OFF. No environment switch or
+        client request can enable it. This explicit admin opt-in is independent of
+        the broad diagnostics master so it does not enable other logging channels.
+        Keep admin config and output directories private and permission-controlled.
+        
+        Capture briefly. Synchronous local output adds overhead and can serialize
+        concurrent opens; do not keep it on for normal speed comparisons. No fsync or
+        durability promise for the diagnostic. At8MiB the sink stops appending and
+        disables itself for this process. No rotation/truncation. Stop capture before
+        moving/removing the file; restart after selecting an empty destination to
+        resume. An unavailable/unwritable destination disables only this timer;
+        no database error or request-result change is introduced.
+        
+        Each OPEN79 line contains only fixed labels and numeric values:
+        - session: existing opaque numeric server session; request: process-local
+          monotonic open sequence. Resets at restart; not an application/table ID.
+        - drivers: underlying CDX opens in this request, including any ABI twin.
+        - reply_opcode: numeric protocol reply opcode, not a success guarantee for
+          socket delivery. Failure replies are recorded too.
+        - total_us: server process_frame capture, ending before diagnostic file write.
+        - engine_us: connection open_table call (resolution/registry/driver work).
+        - handle_us: CDX platform file open, including existing sharing retries.
+        - share_us: existing shared lifetime-guard acquisition/retry.
+        - header_us: CDX DBF header read and parse.
+        - fields_us: field-descriptor read/parse/install only.
+        - reply_build_us: handler work after engine open, including metadata, fresh
+          production-index discovery and optional ABI/index setup.
+        - reply_submit_us: existing queue/write path and outgoing bookkeeping. With
+          hardened daemon this is enqueue, NOT completed socket transmission or RTT.
+        
+        All times are elapsed microseconds. CDX subphases aggregate underlying CDX
+        opens, may occur inside engine_us AND reply_build_us, and must NOT be added to
+        those parent times. Other dispatch/bookkeeping/optional encryption work can
+        remain unaccounted; this is not a complete additive time budget. Zero can
+        mean below1microsecond or a phase not reached. No paths, table/field names,
+        values, aliases, payloads, credentials, expressions or raw errors are written.
+        No wire extension, cache, existence/index-discovery shortcut, retry change,
+        lock/durability/RDD/GoCold boundary change or Vouch code change.
+        
+        ## Cumulative78 memo repair, also in matched MSVC79
+        
+        AdsGetMemoLength settles outstanding remote read-ahead cursor lag before
+        fetching. No lag: one existing request. Lag: an extra positional request plus
+        the existing memo fetch. A memo-per-row scan can pay that extra request on
+        many rows. Not a free repair or WAN speed improvement. Failed settling returns
+        the error without fetching the wrong row or replacing the output length.
+        The generated forward/reverse regression checks39positions including empty
+        and200KB memos and stopped-server errors. This is not Tim's own application
+        runtime result. A server-only update does not repair an old client DLL.
+        
+        ## Test limits
+        
+        Retain all auth, commit, navigation, diagnostic and mixed-version gates.
+        Windows x86 retains197known inherited failing case/assertion signatures;
+        new phase/config/integration cases increase coverage, not baseline failures.
+        Windows x64 and MSVC kits use native targeted checks, not a full native unit
+        suite claim. Linux/macOS retain configured full tests. macOS ARM/minimum-OS
+        runtime remains unverified. Build/verification reports give actual results.
+        Broader memo/count freshness, read-ahead/RDD parity, Tim C8and erratic browse
+        remain separate. Keep prior frozen kits and rollback files.
+        
+        ## Local overhead measurement (not Delhi/Mumbai)
+        
+        GCC O1 NDEBUG release build, HTTP/SQLite/TLS OFF, generated one-field DBF on
+        warm local storage. Direct RemoteConnection open/close bypasses client parked
+        handle reuse.7randomized interleaved trials per condition,100warmups then
+        10,000real open/close pairs per trial,2CPU affinity. Median microseconds per
+        pair: frozen78 153.832;79OFF151.939;79ON151.737. Ranges overlap
+        (78:148.314..157.066; OFF:148.159..154.477; ON:140.854..154.792).
+        This noisy loopback test cannot resolve small end-to-end overhead; it is NOT
+        evidence that the timer makes opens faster or that logging is free. All70,000
+        ON opens emitted their expected rows. These timings do not describe Windows,
+        WAN, cold storage, antivirus, many-thread contention or the production load.
+        
+        Isolated capture/sink helper (same O1 build,7trials x10,000captures, normal
+        local file/fflush, no database work): OFF median35.62ns/capture, ON median
+        2679.70ns (2.68microseconds). This measures fixed helper cost only, not the
+        server's full multi-thread cost; file-lock contention/slow storage can add
+        more. OFF is clock/file/lock-free in the helper; not a zero-instruction claim.
+        NOTES
+        cp output/source-commit.txt output/dll-pe.txt output/owner-ld-version.txt output/repeat-summary.txt output/static-auth-stdout.txt delivery/mtfix79-full/docs/
+        cp -r kit/runtime-notices delivery/mtfix79-full/
+        cp build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/openads_auth_worker.exe delivery/mtfix79-full/bin/
+        cp mutual-test-only.hrb delivery/mtfix79-full/bin/
+        cp tests/hrb/mutual/README.txt delivery/mtfix79-full/docs/MUTUAL-V2.txt
+        cp tests/hrb/mutual/ACL-SETUP.txt delivery/mtfix79-full/docs/
+        cp output/refresh-peer-gcc-proof.txt output/refresh-peer-pe.txt delivery/mtfix79-full/docs/
+        cp tests/smoke/harbour/refresh_peer.prg delivery/mtfix79-full/docs/
+        cp output/baseline-comparison.txt delivery/mtfix79-full/docs/
+        cp output/unit-summary.json output/hrb-crypto-proof.txt output/hrb-resource-proof.txt output/unit-batch-summary.txt docs/auth-hrb-pure-functions.txt delivery/mtfix79-full/docs/
+
+         cp output/hrb-time-proof.txt delivery/mtfix79-full/docs/
+        cp tests/hrb/mutual/time_probe.py delivery/mtfix79-full/docs/
+        cp tests/hrb/mutual/*.prg delivery/mtfix79-full/docs/
+        cp output/mutual-harbour-proof.txt delivery/mtfix79-full/docs/
+        cp output/mutual-native-proof.txt delivery/mtfix79-full/docs/
+        git diff 9f502a6a8300bccf42a1b7678a3d553ba909f4e5 HEAD > delivery/mtfix79-full/docs/source.patch
+        cp output/diagnostics-gate-contract.txt delivery/mtfix79-full/docs/
+        cp docs/diagnostics-gate.md delivery/mtfix79-full/docs/
+        cp release-notes-1.09.75-mtfix75.md delivery/mtfix79-full/docs/INDEXED-KEY-SKIP-74.md
+        cp patches/harbour/rddads-pending-fields.patch output/harbour-batch/runtime.log output/*symbol.txt output/import-proof.txt output/old-dll-guard.txt delivery/mtfix79-full/docs/
+        cp release-notes-1.09.75-mtfix75.md delivery/mtfix79-full/docs/BATCH-ERROR-75.md
+        cp release-notes-1.09.75-mtfix79.md tests/trace_marker_harbour.prg output/trace-marker-contract.txt output/trace-marker-harbour.txt delivery/mtfix79-full/docs/
+        find delivery/mtfix79-full -type f -exec sha256sum {} \; > delivery/SHA256.txt
+        7z a -tzip mtfix79-full-qt492-x86.zip ./delivery/*
+
+      shell: bash
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix79-harbour-import-proof
+        path: |-
+          output/harbour-batch/runtime.log
+          output/*symbol.txt
+          output/import-proof.txt
+          output/old-dll-guard.txt
+        if-no-files-found: warn
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        if-no-files-found: warn
+        name: mtfix79-x86-proof
+        path: |
+          output/
+          delivery/
+          mtfix79-full-qt492-x86.zip
+          srv/*.log
+          srv/*.txt
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-x86
+        path: mtfix79-full-qt492-x86.zip
+        retention-days: 14
+    timeout-minutes: 140
+  x64kit:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix70-full
+    - name: Verify cumulative candidate pin and workflow-only build recipe
+      shell: bash
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/release/mtfix70-full
+        git merge-base --is-ancestor f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e HEAD
+        test -z "$(git diff --name-only f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e HEAD -- . ':!.github/workflows')"
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
+          except Exception:
+           if attempt==2:raise
+           time.sleep(3)
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Download pinned Winlibs GCC 10.2 x86_64 (same GCC version as the x86 kit)
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: pwsh
+      run: |
+        Invoke-WebRequest -Headers @{Accept='application/octet-stream';Authorization="Bearer $env:GH_TOKEN"} 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs64.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs x64 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs64.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
+    - name: Build Harbour (x64) and the x64 engine, DLL, server and auth worker
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        gcc -dumpmachine
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-x64"
+        git -C "$RUNNER_TEMP/harbour-x64" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+        export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-x64" -j2
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-x64")"
+        ls "$HB/lib/win/" || true
+        HBLIB="$RUNNER_TEMP/harbour-x64/lib/win/mingw64"
+        HBBIN="$RUNNER_TEMP/harbour-x64/bin/win/mingw64"
+        test -f "$HBBIN/harbour.exe"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-x64 -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
+          -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+          -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON \
+          -DOPENADS_VERSION_FORCE=1.09.75-mtfix79-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF \
+          -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$(cygpath -m "$HBBIN")/harbour.exe" \
+          -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$(cygpath -m "$HBLIB")" \
+          -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
+          -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-x64 --target openads_ace openads_serverd openads_auth_worker -j2
+        find build-x64 -name '*.dll' -o -name '*.exe' -o -name '*.dll.a' | sort
+    - name: Verify the binaries are 64-bit and the server starts
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        mkdir -p output
+        for f in build-x64/src/openace64.dll build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe; do
+          test -f "$f"
+          objdump -f "$f" | tee -a output/pe-check.txt
+          objdump -f "$f" | grep -q 'pei-x86-64'
+        done
+        build-x64/tools/serverd/openads_serverd.exe --help > output/serverd-help.txt 2>&1 || true
+        head -5 output/serverd-help.txt
+    - name: New x64 DLL import entry link and load
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        mkdir -p output/import64
+        nm build-x64/src/libopenace64.dll.a | grep AdsFlushPendingFields | tee output/import64-symbol.txt
+        gcc tests/harbour_batch/abi_probe.c -Iinclude -Lbuild-x64/src -lopenace64 -o output/import64/probe.exe
+        cp build-x64/src/openace64.dll output/import64/
+        (cd output/import64 && ./probe.exe) | tee output/import64-proof.txt
+
+        nm build-x64/src/libopenace64.dll.a | grep OAdsTraceMarkEx | tee output/marker-import64-symbol.txt
+    - name: Package x64 test kit
+      shell: bash
+      run: |+
+        set -euxo pipefail
+        D=delivery/mtfix79-x64
+        mkdir -p $D/bin $D/lib $D/include $D/docs
+        cp build-x64/src/openace64.dll build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe $D/bin/
+        cp build-x64/src/*.dll.a $D/lib/ 2>/dev/null || true
+        cp include/openads/ace.h $D/include/
+        cp output/pe-check.txt output/serverd-help.txt $D/docs/
+        echo "$PINNED_SOURCE" > $D/docs/source-commit.txt
+        cat > $D/docs/README.txt <<'NOTES'
+        # OpenADS mtfix79 cumulative test kit
+        
+        Source is cumulative78 plus an independent, default-OFF server table-open
+        phase diagnostic. All78memo-length and earlier fixes remain. This is a test
+        release, not a claim that Vouch or Tim's application is certified or faster.
+        No deployment, service registration, data/auth replacement or upstream merge.
+        
+        ## Server open timer
+        
+        In the existing server INI, add one writable LOCAL destination:
+        
+            open_phase_log = C:/OpenADS-Server/logs/open6262.log
+        
+        The parent directory must already exist. Use a different file per daemon
+        (e.g. open6262.log and open6264.log). On Linux use a full writable local path.
+        Restart that daemon to apply. Do not enable diagnostics=true or change client
+        logging to use this timer. Remove/comment the entry or set its value empty,
+        then restart to turn it OFF. Absent/empty is OFF. No environment switch or
+        client request can enable it. This explicit admin opt-in is independent of
+        the broad diagnostics master so it does not enable other logging channels.
+        Keep admin config and output directories private and permission-controlled.
+        
+        Capture briefly. Synchronous local output adds overhead and can serialize
+        concurrent opens; do not keep it on for normal speed comparisons. No fsync or
+        durability promise for the diagnostic. At8MiB the sink stops appending and
+        disables itself for this process. No rotation/truncation. Stop capture before
+        moving/removing the file; restart after selecting an empty destination to
+        resume. An unavailable/unwritable destination disables only this timer;
+        no database error or request-result change is introduced.
+        
+        Each OPEN79 line contains only fixed labels and numeric values:
+        - session: existing opaque numeric server session; request: process-local
+          monotonic open sequence. Resets at restart; not an application/table ID.
+        - drivers: underlying CDX opens in this request, including any ABI twin.
+        - reply_opcode: numeric protocol reply opcode, not a success guarantee for
+          socket delivery. Failure replies are recorded too.
+        - total_us: server process_frame capture, ending before diagnostic file write.
+        - engine_us: connection open_table call (resolution/registry/driver work).
+        - handle_us: CDX platform file open, including existing sharing retries.
+        - share_us: existing shared lifetime-guard acquisition/retry.
+        - header_us: CDX DBF header read and parse.
+        - fields_us: field-descriptor read/parse/install only.
+        - reply_build_us: handler work after engine open, including metadata, fresh
+          production-index discovery and optional ABI/index setup.
+        - reply_submit_us: existing queue/write path and outgoing bookkeeping. With
+          hardened daemon this is enqueue, NOT completed socket transmission or RTT.
+        
+        All times are elapsed microseconds. CDX subphases aggregate underlying CDX
+        opens, may occur inside engine_us AND reply_build_us, and must NOT be added to
+        those parent times. Other dispatch/bookkeeping/optional encryption work can
+        remain unaccounted; this is not a complete additive time budget. Zero can
+        mean below1microsecond or a phase not reached. No paths, table/field names,
+        values, aliases, payloads, credentials, expressions or raw errors are written.
+        No wire extension, cache, existence/index-discovery shortcut, retry change,
+        lock/durability/RDD/GoCold boundary change or Vouch code change.
+        
+        ## Cumulative78 memo repair, also in matched MSVC79
+        
+        AdsGetMemoLength settles outstanding remote read-ahead cursor lag before
+        fetching. No lag: one existing request. Lag: an extra positional request plus
+        the existing memo fetch. A memo-per-row scan can pay that extra request on
+        many rows. Not a free repair or WAN speed improvement. Failed settling returns
+        the error without fetching the wrong row or replacing the output length.
+        The generated forward/reverse regression checks39positions including empty
+        and200KB memos and stopped-server errors. This is not Tim's own application
+        runtime result. A server-only update does not repair an old client DLL.
+        
+        ## Test limits
+        
+        Retain all auth, commit, navigation, diagnostic and mixed-version gates.
+        Windows x86 retains197known inherited failing case/assertion signatures;
+        new phase/config/integration cases increase coverage, not baseline failures.
+        Windows x64 and MSVC kits use native targeted checks, not a full native unit
+        suite claim. Linux/macOS retain configured full tests. macOS ARM/minimum-OS
+        runtime remains unverified. Build/verification reports give actual results.
+        Broader memo/count freshness, read-ahead/RDD parity, Tim C8and erratic browse
+        remain separate. Keep prior frozen kits and rollback files.
+        
+        ## Local overhead measurement (not Delhi/Mumbai)
+        
+        GCC O1 NDEBUG release build, HTTP/SQLite/TLS OFF, generated one-field DBF on
+        warm local storage. Direct RemoteConnection open/close bypasses client parked
+        handle reuse.7randomized interleaved trials per condition,100warmups then
+        10,000real open/close pairs per trial,2CPU affinity. Median microseconds per
+        pair: frozen78 153.832;79OFF151.939;79ON151.737. Ranges overlap
+        (78:148.314..157.066; OFF:148.159..154.477; ON:140.854..154.792).
+        This noisy loopback test cannot resolve small end-to-end overhead; it is NOT
+        evidence that the timer makes opens faster or that logging is free. All70,000
+        ON opens emitted their expected rows. These timings do not describe Windows,
+        WAN, cold storage, antivirus, many-thread contention or the production load.
+        
+        Isolated capture/sink helper (same O1 build,7trials x10,000captures, normal
+        local file/fflush, no database work): OFF median35.62ns/capture, ON median
+        2679.70ns (2.68microseconds). This measures fixed helper cost only, not the
+        server's full multi-thread cost; file-lock contention/slow storage can add
+        more. OFF is clock/file/lock-free in the helper; not a zero-instruction claim.
+        NOTES
+        cp docs/diagnostics-gate.md $D/docs/
+        cp release-notes-1.09.75-mtfix75.md output/import64-proof.txt output/import64-symbol.txt $D/docs/
+        find $D -type f -exec sha256sum {} \; > delivery/SHA256.txt
+        7z a -tzip mtfix79-full-x64.zip ./delivery/*
+
+    - if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        if-no-files-found: warn
+        name: mtfix79-x64-proof
+        path: |
+          output/
+          mtfix79-full-x64.zip
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-x64
+        path: mtfix79-full-x64.zip
+        retention-days: 14
+  linuxkit:
+    name: Build, test, package, verify, prerelease
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ env.PINNED_SOURCE }}
+        fetch-depth: 0
+        fetch-tags: true
+    - name: Verify pinned source commit
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "$PINNED_SOURCE"
+        git log -1 --oneline
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
+          except Exception:
+           if attempt==2:raise
+           time.sleep(3)
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Install exact Ninja1.12.1 via verified API asset
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        curl --fail --location --retry 3 --header 'Accept: application/octet-stream' --header "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/ninja-build/ninja/releases/assets/167333509 -o "$RUNNER_TEMP/ninja.zip"
+        echo '6f98805688d19672bd699fbbfa2c2cf0fc054ac3df1f0e6a47664d963d530255  '"$RUNNER_TEMP/ninja.zip" | shasum -a 256 -c -
+        mkdir -p "$RUNNER_TEMP/ninja-exact"
+        unzip "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja-exact"
+        chmod +x "$RUNNER_TEMP/ninja-exact/ninja"
+        test "$("$RUNNER_TEMP/ninja-exact/ninja" --version)" = 1.12.1
+        echo "$RUNNER_TEMP/ninja-exact" >> "$GITHUB_PATH"
+    - name: Cache Harbour SDK (Linux)
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/harbour-udf
+        key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+    - name: Provision Harbour SDK (Linux)
+      shell: bash
+      env:
+        HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+      run: |
+        set -e
+        HB="$RUNNER_TEMP/harbour-udf"
+        echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+        if [ -f "$HB/install/include/hbvm.h" ] &&              [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] &&              [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+          echo "Harbour SDK cached at $HB/install"
+        else
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev libx11-dev
+          rm -rf "$HB"
+          mkdir -p "$HB"
+          git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+          git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+          git -C "$HB/src" checkout "$HARBOUR_REF"
+          cd "$HB/src"
+          make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+        fi
+        HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+        HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+        HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+        echo "Harbour SDK layout:"
+        echo "  include: ${HB_INC:-MISSING}"
+        echo "  libdir:  ${HB_LIBDIR:-MISSING}"
+        echo "  compiler:${HB_CC:-MISSING}"
+        if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+          echo "::error::Harbour SDK layout unexpected"
+          exit 1
+        fi
+        {
+          echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+          echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+          echo "HARBOUR_COMPILER=$HB_CC"
+        } >> "$GITHUB_ENV"
+    - name: Configure
+      shell: bash
+      run: |
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" --preset ninja-clang                 -DOPENADS_WITH_TLS=ON                 -DOPENADS_WITH_HTTP=ON                 -DOPENADS_WITH_HARBOUR_UDF=ON                 -DOPENADS_WARNINGS_AS_ERRORS=OFF                 -DOPENADS_VERSION_FORCE="$KIT_VERSION"                 -DHARBOUR_INCLUDE_DIR="$HARBOUR_INCLUDE_DIR"                 -DHARBOUR_LIB_DIR="$HARBOUR_LIB_DIR"                 -DHARBOUR_COMPILER="$HARBOUR_COMPILER"
+    - name: Build
+      run: cmake --build build/ninja-clang --config Release
+    - name: Test (full suite)
+      timeout-minutes: 30
+      run: ctest --test-dir build/ninja-clang --output-on-failure -C Release
+    - name: Actual kit-pinned Harbour RDD boundary and append semantics
+      shell: bash
+      run: |
+        set -euxo pipefail
+        HB="$RUNNER_TEMP/harbour-rdd75"
+        git clone https://github.com/harbour/core.git "$HB"
+        git -C "$HB" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+        git -C "$HB" apply "$PWD/patches/harbour/rddads-pending-fields.patch"
+        make -C "$HB" -j2 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        tests/harbour_batch/run.sh "$HB" build/ninja-clang
+        nm -D build/ninja-clang/src/libopenace64.so | grep ' AdsFlushPendingFields$'
+
+        nm -D build/ninja-clang/src/libopenace64.so | grep " OAdsTraceMark$"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix79-linux-rdd-proof
+        path: output/harbour-batch/runtime.log
+        if-no-files-found: warn
+    - name: Exact frozen70 and71 client/server commit-boundary matrix
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p compat70
+        python - <<'PYDOWNLOAD'
+        import hashlib,json,os,pathlib,urllib.request
+        request=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix70-full-test',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+        release=json.load(urllib.request.urlopen(request))
+        assets={a['name']:a for a in release['assets']}
+        name='openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz'
+        for n in (name,name+'.sha256'):
+         with urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']})) as response:
+          pathlib.Path('compat70',n).write_bytes(response.read())
+        expected=pathlib.Path('compat70',name+'.sha256').read_text().split()[0]
+        assert hashlib.sha256(pathlib.Path('compat70',name).read_bytes()).hexdigest()==expected
+        PYDOWNLOAD
+        tar xzf compat70/openads-1.09.75-mtfix70-full-test-linux-x64.tar.gz -C compat70
+        OLD="$PWD/compat70/openads-1.09.75-mtfix70-full-test-linux-x64"
+        NEW="$PWD/build/ninja-clang"
+        python tests/commit_boundary_compat.py --client "$NEW/src/libopenace64.so" --server "$NEW/tools/serverd/openads_serverd" --expect-fusion 1 --expect-append-batch 1 | tee compat70/new-new.txt
+        python tests/commit_boundary_compat.py --client "$NEW/src/libopenace64.so" --server "$OLD/openads_serverd" --expect-fusion 0 --expect-append-batch 1 | tee compat70/new-old.txt
+        python tests/commit_boundary_compat.py --client "$OLD/libopenace64.so" --server "$NEW/tools/serverd/openads_serverd" --expect-fusion 0 | tee compat70/old-new.txt
+        python tests/commit_boundary_compat.py --client "$OLD/libopenace64.so" --server "$OLD/openads_serverd" --expect-fusion 0 | tee compat70/old-old.txt
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: commit-boundary-compat71
+        path: compat70/*.txt
+        if-no-files-found: error
+    - name: Exact frozen71 and72 bottom-state compatibility matrix
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euxo pipefail
+        mkdir -p compat71
+        python - <<'PYDOWNLOAD'
+        import hashlib,json,os,pathlib,urllib.request
+        req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix71-full-test',headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})
+        r=json.load(urllib.request.urlopen(req));assets={x['name']:x for x in r['assets']};name='openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz'
+        for n in (name,name+'.sha256'):
+         pathlib.Path('compat71',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})).read())
+        assert hashlib.sha256(pathlib.Path('compat71',name).read_bytes()).hexdigest()==pathlib.Path('compat71',name+'.sha256').read_text().split()[0]=='74fd4ed1b0b4160b3ec8aca95ad47d8198c133d6819428a268d98573eee1eb08'
+        PYDOWNLOAD
+        tar xzf compat71/openads-1.09.75-mtfix71-full-test-linux-x64.tar.gz -C compat71
+        OLD="$PWD/compat71/openads-1.09.75-mtfix71-full-test-linux-x64"
+        NEW="$PWD/build/ninja-clang"
+        for combo in new-new new-old old-new old-old; do
+         C="$NEW/src/libopenace64.so"; S="$NEW/tools/serverd/openads_serverd"; expect=0
+         case "$combo" in new-new) expect=1;; new-old) S="$OLD/openads_serverd";; old-new) C="$OLD/libopenace64.so";; old-old) C="$OLD/libopenace64.so"; S="$OLD/openads_serverd";; esac
+         python tests/bottom_count_compat.py --client "$C" --server "$S" --expect-bottom "$expect" | tee "compat71/$combo-bottom.txt"
+         batch=0; case "$combo" in new-new|new-old) batch=1;; esac
+         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 --expect-append-batch "$batch" | tee "compat71/$combo-commit.txt"
+        done
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bottom-state-compat72
+        path: compat71/*.txt
+        if-no-files-found: error
+    - name: Exact frozen72 and73 client-only diagnostic compatibility matrix
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euxo pipefail
+        mkdir -p compat72
+        python - <<'PYDOWNLOAD'
+        import hashlib,json,os,pathlib,urllib.request
+        req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix72-full-test',headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})
+        r=json.load(urllib.request.urlopen(req));assets={x['name']:x for x in r['assets']};name='openads-1.09.75-mtfix72-full-test-linux-x64.tar.gz'
+        for n in (name,name+'.sha256'):
+         pathlib.Path('compat72',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GITHUB_TOKEN']})).read())
+        assert hashlib.sha256(pathlib.Path('compat72',name).read_bytes()).hexdigest()==pathlib.Path('compat72',name+'.sha256').read_text().split()[0]=='13cb2b12613bb7a999b1bec83eaccb5c13d37a8d50922bbe8e70a7fc1aa241bf'
+        PYDOWNLOAD
+        tar xzf compat72/openads-1.09.75-mtfix72-full-test-linux-x64.tar.gz -C compat72
+        OLD="$PWD/compat72/openads-1.09.75-mtfix72-full-test-linux-x64"
+        NEW="$PWD/build/ninja-clang"
+        for combo in new-new new-old old-new old-old; do
+         C="$NEW/src/libopenace64.so"; S="$NEW/tools/serverd/openads_serverd"
+         case "$combo" in new-old) S="$OLD/openads_serverd";; old-new) C="$OLD/libopenace64.so";; old-old) C="$OLD/libopenace64.so"; S="$OLD/openads_serverd";; esac
+         python tests/bottom_count_compat.py --client "$C" --server "$S" --expect-bottom 1 | tee "compat72/$combo-bottom.txt"
+         batch=0; case "$combo" in new-new|new-old) batch=1;; esac
+         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 --expect-append-batch "$batch" | tee "compat72/$combo-commit.txt"
+        done
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: caller-diagnostic-compat73
+        path: compat72/*.txt
+        if-no-files-found: error
+    - name: Exact frozen73 and74 indexed-key Skip matrix
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p compat73
+        python - <<'PYDOWNLOAD'
+        import hashlib,json,os,pathlib,urllib.request
+        req=urllib.request.Request('https://api.github.com/repos/bedipritpal/OpenADS/releases/tags/v1.09.75-mtfix73-full-test',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN']})
+        r=json.load(urllib.request.urlopen(req));assets={x['name']:x for x in r['assets']};name='openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz'
+        for n in (name,name+'.sha256'):
+         pathlib.Path('compat73',n).write_bytes(urllib.request.urlopen(urllib.request.Request(assets[n]['url'],headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']})).read())
+        assert hashlib.sha256(pathlib.Path('compat73',name).read_bytes()).hexdigest()==pathlib.Path('compat73',name+'.sha256').read_text().split()[0]=='332ea631dddea014e4e8203f7f5406948816dd9a0150f54c77e846c6858ae84a'
+        PYDOWNLOAD
+        tar xzf compat73/openads-1.09.75-mtfix73-full-test-linux-x64.tar.gz -C compat73
+        OLD="$PWD/compat73/openads-1.09.75-mtfix73-full-test-linux-x64"
+        NEW="$PWD/build/ninja-clang"
+        for combo in new-new new-old old-new old-old; do
+         C="$NEW/src/libopenace64.so"; S="$NEW/tools/serverd/openads_serverd"; REPAIR=1
+         case "$combo" in new-old) S="$OLD/openads_serverd"; REPAIR=0;; old-new) C="$OLD/libopenace64.so";; old-old) C="$OLD/libopenace64.so"; S="$OLD/openads_serverd"; REPAIR=0;; esac
+         python tests/keyskip_compat.py --client "$C" --server "$S" --expect-repair "$REPAIR" | tee "compat73/$combo-keyskip.txt"
+         batch=0; case "$combo" in new-new|new-old) batch=1;; esac
+         python tests/commit_boundary_compat.py --client "$C" --server "$S" --expect-fusion 1 --expect-append-batch "$batch" | tee "compat73/$combo-commit.txt"
+         python tests/bottom_count_compat.py --client "$C" --server "$S" --expect-bottom 1 | tee "compat73/$combo-bottom.txt"
+        done
+    - uses: actions/upload-artifact@v4
+      with:
+        name: mtfix79-compat73-proof
+        path: compat73/*.txt
+        if-no-files-found: error
+    - name: Write install note
+      shell: bash
+      run: |
+        cat > MTFIX79_LINUX_SERVER_TEST.md <<'NOTE'
+        # 1.09.75-mtfix79-full-test - Linux x64 server test kit
+
+        Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
+
+        Built from fork branch release/mtfix70-full, commit f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e
+        (frozen73 plus indexed-key Skip engine re-anchor and checked movement errors).
+        Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
+        GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
+        Client diagnostics master OFF by default. See diagnostics-gate.md. Both client and server72 are required for GoBottom metadata savings; older combinations retain the existing path. On kit-installed boxes the upgrade script handles it: bash ~/.openads-both/upgrade-openads.sh v1.09.75-mtfix79-full-test (downloads + SHA-verifies this release, stops both 6262/6264, switches, starts detached; rollback: ~/start-openads.sh rollback; active clients disconnect). Do not deploy this kit
+        without separately deciding to change your running setup.
+        The full ctest suite passed on
+        ubuntu-24.04.
+
+        Kit contents: openads_serverd, openads_auth_worker, openads_bench,
+        libace64.so / libopenace64.so, openads.ini.sample, headers, contrib,
+        mutual-test-only.hrb (mock V2 auth module), run-mock-test.sh,
+        source-commit.txt, ldd-server.txt, ldd-worker.txt, SHA256SUMS.
+
+        Fresh-box install (Ubuntu 24.04 x86_64):
+
+        1. sudo apt-get update && sudo apt-get install -y libncurses6
+        2. sudo mkdir -p /openads-server && cd /openads-server
+        3. Download the tar.gz and its .sha256, then
+           sha256sum -c the .sha256 file.
+        4. tar xzf the tar.gz and cd into the extracted folder.
+        5. Start the mock V2 test server: ./run-mock-test.sh
+           The banner must show OpenADS 1.09.75-mtfix79-full-test
+           listening on 127.0.0.1:6262.
+        6. First run copies openads.ini.sample to openads.ini, sets
+           legacy_paths = 1 so Vouch URLs with C:/ roots resolve, and
+           sets data to the kit folder as an absolute path (a relative
+           data root breaks the login path resolution on Linux), and
+           sets enable_file_func = 1 so Vouch can create its data
+           dictionary and log files inside the data folder. To
+           reach the server from another machine, set host = 0.0.0.0 in
+           openads.ini and open TCP 6262 in the box firewall and the EC2
+           security group.
+        7. Vouch login, same call as the Windows mtfix52 mock test:
+           V2LoginMock("auth://BOX-IP:6262/C:/", "fixture-firm", "C:/", @s_hConn)
+           Use 127.0.0.1 as BOX-IP when testing on the box itself.
+
+        Nothing here touches the Lightsail box or any running server.
+        NOTE
+    - name: Write mock module and run script
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "wEhSQgIACAAAAEFVVEgABQFPQURTX0FVVEhfVjEAAQFPQURTX0FVVEhfU0VSVkVSX1YyAAEBTEVOAAACTEVGVAAAAkhCX0hNQUNfU0hBMjU2AAACT0FEU19BVVRIX1ZFUklGWV9WMgABAVNVQlNUUgAAAgQAAABBVVRIAAEAAAAHT0FEU19BVVRIX1YxABYAAAANAAMkBwBqDE9BVVRIAQAAAAAAAG4HT0FEU19BVVRIX1NFUlZFUl9WMgCIAAAADQADJAoAsAMAXwEMAVwgRR8isAQAXwJcEQwCahJPcGVuQURTLW11dHVhbC12MgBFHAokCwBqAQBuByQNAGoIU0VSVkVSOgCwBQBqCHNlcnZlcgAAXwJIailPcGVuQURTLXB1YmxpYy1tb2NrLXYyLU5PVC1BLUxJQ0VOU0UtS0VZAHgMA0huB09BRFNfQVVUSF9WRVJJRllfVjIA4wAAAA0DAyQPAGoIQ0xJRU5UOgCwBQBqCGNsaWVudAAAXwJIailPcGVuQURTLXB1YmxpYy1tb2NrLXYyLU5PVC1BLUxJQ0VOU0UtS0VZAHgMA0hQBCQQAHlQBSQRALADAF8BDAFcIEUfE7ADAF8DDAGwAwBfBAwBRRwLJBIAsAEAFAAHJBQAeqVQBhkoJBUAsAcAXwNfBnoMA7AHAF8EXwZ6DANFHAgkFgCuBQAkFACvBgCwAwBfBAwBDxzSJBkAXwV5RRwLJBoAsAEAFAAHJBwAahFPQVVUSAEBAwB1c3ICAHB3AG4H" | base64 -d > mutual-test-only.hrb
+        chmod 600 mutual-test-only.hrb
+        cat > run-mock-test.sh <<'SCRIPT'
+        #!/usr/bin/env bash
+        # Starts the mtfix79 test server with the mock V2 auth module,
+        # same drill as the Windows mtfix52 mock test: mock module plus
+        # the additive CLI user usr:pw on port 6262.
+        set -euo pipefail
+        cd "$(dirname "$0")"
+        chmod 600 mutual-test-only.hrb
+        if [ ! -f openads.ini ]; then
+          cp openads.ini.sample openads.ini
+          sed -i 's/^# legacy_paths = 0/legacy_paths = 1/' openads.ini
+          sed -i "s|^data = \.$|data = $PWD|" openads.ini
+          sed -i 's|^# enable_file_func = 0|enable_file_func = 1|' openads.ini
+        fi
+        ulimit -n 65535 2>/dev/null || true
+        exec ./openads_serverd --config ./openads.ini --http_port 0 --auth_module "$PWD/mutual-test-only.hrb" --auth_user usr:pw
+        SCRIPT
+        chmod 755 run-mock-test.sh
+    - name: Stage kit
+      shell: bash
+      run: |
+        set -euo pipefail
+        STAGE="openads-$KIT_VERSION-linux-x64"
+        B=build/ninja-clang
+        mkdir -p "$STAGE"
+        for f in "$B"/src/libopenace64.*; do
+          [ -e "$f" ] || continue
+          cp "$f" "$STAGE/"
+          cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+        done
+        cp "$B"/tools/serverd/openads_serverd "$STAGE/"
+        cp "$B"/tools/serverd/openads_auth_worker "$STAGE/"
+        cp "$B"/tools/bench/openads_bench "$STAGE/"
+        cp LICENSE NOTICE README.md openads.ini.sample MTFIX79_LINUX_SERVER_TEST.md "$STAGE/"
+        cp mutual-test-only.hrb run-mock-test.sh "$STAGE/"
+        mkdir -p "$STAGE/include/openads"
+        cp include/openads/ace.h "$STAGE/include/ace.h"
+        cp include/openads/ace.h include/openads/error.h include/openads/openads_sql.h include/openads/platform.h include/openads/version.h "$STAGE/include/openads/"
+        mkdir -p "$STAGE/contrib/oads_hb"
+        cp contrib/oads_hb/oads_hb.c contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md "$STAGE/contrib/oads_hb/"
+        cp docs/diagnostics-gate.md "$STAGE/"
+        cp release-notes-1.09.75-mtfix79.md "$STAGE/"
+        echo "$PINNED_SOURCE" > "$STAGE/source-commit.txt"
+        ldd "$STAGE/openads_serverd" > "$STAGE/ldd-server.txt"
+        ldd "$STAGE/openads_auth_worker" > "$STAGE/ldd-worker.txt"
+        cp release-notes-1.09.75-mtfix75.md patches/harbour/rddads-pending-fields.patch output/harbour-batch/runtime.log "$STAGE/"
+        (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
+        tar czf "$STAGE.tar.gz" "$STAGE"
+        sha256sum "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
+        cat "$STAGE.tar.gz.sha256"
+    - name: Verify package
+      shell: bash
+      run: |
+        set -euo pipefail
+        STAGE="openads-$KIT_VERSION-linux-x64"
+        tar tzf "$STAGE.tar.gz" > listing.txt
+        for req in openads_serverd openads_auth_worker openads_bench libace64.so libopenace64.so openads.ini.sample source-commit.txt MTFIX79_LINUX_SERVER_TEST.md mutual-test-only.hrb run-mock-test.sh SHA256SUMS LICENSE NOTICE README.md; do
+          grep -q "/$req$" listing.txt || { echo "::error::missing $req in archive"; exit 1; }
+        done
+        rm -rf /tmp/verify && mkdir -p /tmp/verify
+        tar xzf "$STAGE.tar.gz" -C /tmp/verify
+        V="/tmp/verify/$STAGE"
+        (cd "$V" && sha256sum -c SHA256SUMS >/dev/null && echo "SHA256SUMS ok")
+        "$V/openads_serverd" --version | tee server-version.txt
+        grep -q "$KIT_VERSION" server-version.txt
+        grep -aq "$KIT_VERSION" "$V/libopenace64.so"
+        # Mock module byte check against the Windows mtfix52 kit module.
+        test "$(sha256sum "$V/mutual-test-only.hrb" | cut -d' ' -f1)" = "$(sha256sum mutual-test-only.hrb | cut -d' ' -f1)"
+        # Auth worker probe: one byte P must print READY (or READY2).
+        "$HARBOUR_COMPILER" -gh -o/tmp/test_only.hrb tests/hrb/auth-spike/test_only.prg
+        # Worker refuses a group/other-readable module by design; lock it.
+        chmod 600 /tmp/test_only.hrb
+        probe="$(printf 'P' | "$V/openads_auth_worker" /tmp/test_only.hrb)"
+        echo "worker probe: $probe"
+        [[ "$probe" == READY* ]]
+        # Record the glibc ceiling for the target (Ubuntu 24.04) platform.
+        echo "Max GLIBC referenced:"
+        for b in "$V/openads_serverd" "$V/openads_auth_worker" "$V/libopenace64.so"; do
+          echo "$b: $(objdump -T "$b" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1)"
+        done
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-linux
+        path: |
+          openads-1.09.75-mtfix79-full-test-linux-x64.tar.gz
+          openads-1.09.75-mtfix79-full-test-linux-x64.tar.gz.sha256
+          MTFIX79_LINUX_SERVER_TEST.md
+        retention-days: 14
+  mackit:
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    name: Build macOS universal server kit
+    runs-on: macos-15-intel
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix70-full
+    - name: Verify cumulative candidate pin and workflow-only build recipe
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/release/mtfix70-full
+        git merge-base --is-ancestor f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e HEAD
+        test -z "$(git diff --name-only f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e HEAD -- . ':!.github/workflows')"
+      shell: bash
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
+          except Exception:
+           if attempt==2:raise
+           time.sleep(3)
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Record supported runner and compiler provenance
+      run: |
+        set -euo pipefail
+        sw_vers
+        xcodebuild -version
+        clang --version
+        xcrun --show-sdk-path
+        test "$(uname -m)" = x86_64
+        test -f third_party/minizip/zip.h
+        printf '#include "zip.h"\n' | clang++ -x c++ -E -I"$PWD/third_party/minizip" - | grep "third_party/minizip/zip.h"
+      shell: bash
+    - name: Install exact Ninja1.12.1 via verified API asset
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        curl --fail --location --retry 3 --header 'Accept: application/octet-stream' --header "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/ninja-build/ninja/releases/assets/167333196 -o "$RUNNER_TEMP/ninja.zip"
+        echo '89a287444b5b3e98f88a945afa50ce937b8ffd1dcc59c555ad9b1baf855298c9  '"$RUNNER_TEMP/ninja.zip" | shasum -a 256 -c -
+        mkdir -p "$RUNNER_TEMP/ninja-exact"
+        unzip "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja-exact"
+        chmod +x "$RUNNER_TEMP/ninja-exact/ninja"
+        test "$("$RUNNER_TEMP/ninja-exact/ninja" --version)" = 1.12.1
+        echo "$RUNNER_TEMP/ninja-exact" >> "$GITHUB_PATH"
+    - name: Configure
+      run: |+
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" --preset default \
+              -DOPENADS_WITH_TLS=ON \
+              -DOPENADS_WITH_HTTP=ON \
+              -DOPENADS_VERSION_FORCE=$KIT_VERSION \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DCMAKE_CXX_FLAGS="-I$PWD/third_party/minizip"
+
+      shell: bash
+    - name: Build
+      run: cmake --build build/default --config Release --parallel 3
+      shell: bash
+    - name: Test
+      run: ctest --test-dir build/default --output-on-failure -C Release
+      shell: bash
+      timeout-minutes: 25
+    - name: Stage and verify macOS kit
+      run: |
+        set -euxo pipefail
+        STAGE="openads-$KIT_VERSION-macos-universal"
+        B=build/default
+        mkdir -p "$STAGE"
+        for f in "$B"/src/libopenace64*.dylib; do
+          [ -e "$f" ] || continue
+          cp "$f" "$STAGE/"
+          cp "$f" "$STAGE/$(basename "$f" | sed 's/libopenace64/libace64/')"
+        done
+        cp "$B"/tools/serverd/openads_serverd "$STAGE/"
+        if [ -e "$B"/tools/serverd/openads_auth_worker ]; then cp "$B"/tools/serverd/openads_auth_worker "$STAGE/"; fi
+        cp "$B"/tools/bench/openads_bench "$STAGE/"
+        cp LICENSE NOTICE README.md openads.ini.sample "$STAGE/"
+        mkdir -p "$STAGE/include/openads"
+        cp include/openads/ace.h "$STAGE/include/ace.h"
+        cp include/openads/ace.h include/openads/error.h include/openads/openads_sql.h include/openads/platform.h include/openads/version.h "$STAGE/include/openads/"
+        mkdir -p "$STAGE/contrib/oads_hb"
+        cp contrib/oads_hb/oads_hb.c contrib/oads_hb/oads_stats_display.prg contrib/oads_hb/README.md "$STAGE/contrib/oads_hb/"
+        cp docs/diagnostics-gate.md "$STAGE/"
+        cp release-notes-1.09.75-mtfix79.md "$STAGE/"
+        echo "$PINNED_SOURCE" > "$STAGE/source-commit.txt"
+        { sw_vers; xcodebuild -version; clang --version; echo "deployment target: $MACOSX_DEPLOYMENT_TARGET; universal arm64+x86_64"; } > "$STAGE/build-provenance.txt"
+        for bin in "$STAGE/openads_serverd" "$STAGE/openads_bench" "$STAGE"/*.dylib; do
+          lipo "$bin" -verify_arch arm64 x86_64
+          for arch in arm64 x86_64; do
+            xcrun vtool -show-build -arch "$arch" "$bin" | tee /tmp/build-command.txt
+            grep -Eq 'minos[[:space:]]+14\.0' /tmp/build-command.txt
+            otool -arch "$arch" -L "$bin" | tee /tmp/dependencies.txt
+            if grep -E '/(opt/homebrew|usr/local|Users/runner|Applications/Xcode)' /tmp/dependencies.txt; then exit 1; fi
+          done
+        done
+        nm -gU "$STAGE/libopenace64.dylib" | grep AdsFlushPendingFields
+        cp release-notes-1.09.75-mtfix75.md "$STAGE/"
+        (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)
+        tar czf "$STAGE.tar.gz" "$STAGE"
+        shasum -a 256 "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
+        cat "$STAGE.tar.gz.sha256"
+        tar tzf "$STAGE.tar.gz" | grep -q "/openads_serverd$"
+        "$STAGE/openads_serverd" --version | tee server-version.txt
+        grep -q "$KIT_VERSION" server-version.txt
+        lipo -info "$STAGE/openads_serverd" | tee lipo.txt
+        grep -q arm64 lipo.txt
+        grep -q x86_64 lipo.txt
+      shell: bash
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-macos
+        path: |
+          openads-1.09.75-mtfix79-full-test-macos-universal.tar.gz
+          openads-1.09.75-mtfix79-full-test-macos-universal.tar.gz.sha256
+        retention-days: 14
+    timeout-minutes: 90
+  publish:
+    name: Publish combined prerelease
+    runs-on: ubuntu-24.04
+    needs:
+    - x86kit
+    - x64kit
+    - linuxkit
+    - mackit
+    - stdcallABI
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: kit-*
+        merge-multiple: true
+    - name: Write release notes
+      shell: bash
+      run: |
+        cat > RELEASE_NOTES.md <<'NOTES'
+        # OpenADS mtfix79 cumulative test kit
+        
+        Source is cumulative78 plus an independent, default-OFF server table-open
+        phase diagnostic. All78memo-length and earlier fixes remain. This is a test
+        release, not a claim that Vouch or Tim's application is certified or faster.
+        No deployment, service registration, data/auth replacement or upstream merge.
+        
+        ## Server open timer
+        
+        In the existing server INI, add one writable LOCAL destination:
+        
+            open_phase_log = C:/OpenADS-Server/logs/open6262.log
+        
+        The parent directory must already exist. Use a different file per daemon
+        (e.g. open6262.log and open6264.log). On Linux use a full writable local path.
+        Restart that daemon to apply. Do not enable diagnostics=true or change client
+        logging to use this timer. Remove/comment the entry or set its value empty,
+        then restart to turn it OFF. Absent/empty is OFF. No environment switch or
+        client request can enable it. This explicit admin opt-in is independent of
+        the broad diagnostics master so it does not enable other logging channels.
+        Keep admin config and output directories private and permission-controlled.
+        
+        Capture briefly. Synchronous local output adds overhead and can serialize
+        concurrent opens; do not keep it on for normal speed comparisons. No fsync or
+        durability promise for the diagnostic. At8MiB the sink stops appending and
+        disables itself for this process. No rotation/truncation. Stop capture before
+        moving/removing the file; restart after selecting an empty destination to
+        resume. An unavailable/unwritable destination disables only this timer;
+        no database error or request-result change is introduced.
+        
+        Each OPEN79 line contains only fixed labels and numeric values:
+        - session: existing opaque numeric server session; request: process-local
+          monotonic open sequence. Resets at restart; not an application/table ID.
+        - drivers: underlying CDX opens in this request, including any ABI twin.
+        - reply_opcode: numeric protocol reply opcode, not a success guarantee for
+          socket delivery. Failure replies are recorded too.
+        - total_us: server process_frame capture, ending before diagnostic file write.
+        - engine_us: connection open_table call (resolution/registry/driver work).
+        - handle_us: CDX platform file open, including existing sharing retries.
+        - share_us: existing shared lifetime-guard acquisition/retry.
+        - header_us: CDX DBF header read and parse.
+        - fields_us: field-descriptor read/parse/install only.
+        - reply_build_us: handler work after engine open, including metadata, fresh
+          production-index discovery and optional ABI/index setup.
+        - reply_submit_us: existing queue/write path and outgoing bookkeeping. With
+          hardened daemon this is enqueue, NOT completed socket transmission or RTT.
+        
+        All times are elapsed microseconds. CDX subphases aggregate underlying CDX
+        opens, may occur inside engine_us AND reply_build_us, and must NOT be added to
+        those parent times. Other dispatch/bookkeeping/optional encryption work can
+        remain unaccounted; this is not a complete additive time budget. Zero can
+        mean below1microsecond or a phase not reached. No paths, table/field names,
+        values, aliases, payloads, credentials, expressions or raw errors are written.
+        No wire extension, cache, existence/index-discovery shortcut, retry change,
+        lock/durability/RDD/GoCold boundary change or Vouch code change.
+        
+        ## Cumulative78 memo repair, also in matched MSVC79
+        
+        AdsGetMemoLength settles outstanding remote read-ahead cursor lag before
+        fetching. No lag: one existing request. Lag: an extra positional request plus
+        the existing memo fetch. A memo-per-row scan can pay that extra request on
+        many rows. Not a free repair or WAN speed improvement. Failed settling returns
+        the error without fetching the wrong row or replacing the output length.
+        The generated forward/reverse regression checks39positions including empty
+        and200KB memos and stopped-server errors. This is not Tim's own application
+        runtime result. A server-only update does not repair an old client DLL.
+        
+        ## Test limits
+        
+        Retain all auth, commit, navigation, diagnostic and mixed-version gates.
+        Windows x86 retains197known inherited failing case/assertion signatures;
+        new phase/config/integration cases increase coverage, not baseline failures.
+        Windows x64 and MSVC kits use native targeted checks, not a full native unit
+        suite claim. Linux/macOS retain configured full tests. macOS ARM/minimum-OS
+        runtime remains unverified. Build/verification reports give actual results.
+        Broader memo/count freshness, read-ahead/RDD parity, Tim C8and erratic browse
+        remain separate. Keep prior frozen kits and rollback files.
+        
+        ## Local overhead measurement (not Delhi/Mumbai)
+        
+        GCC O1 NDEBUG release build, HTTP/SQLite/TLS OFF, generated one-field DBF on
+        warm local storage. Direct RemoteConnection open/close bypasses client parked
+        handle reuse.7randomized interleaved trials per condition,100warmups then
+        10,000real open/close pairs per trial,2CPU affinity. Median microseconds per
+        pair: frozen78 153.832;79OFF151.939;79ON151.737. Ranges overlap
+        (78:148.314..157.066; OFF:148.159..154.477; ON:140.854..154.792).
+        This noisy loopback test cannot resolve small end-to-end overhead; it is NOT
+        evidence that the timer makes opens faster or that logging is free. All70,000
+        ON opens emitted their expected rows. These timings do not describe Windows,
+        WAN, cold storage, antivirus, many-thread contention or the production load.
+        
+        Isolated capture/sink helper (same O1 build,7trials x10,000captures, normal
+        local file/fflush, no database work): OFF median35.62ns/capture, ON median
+        2679.70ns (2.68microseconds). This measures fixed helper cost only, not the
+        server's full multi-thread cost; file-lock contention/slow storage can add
+        more. OFF is clock/file/lock-free in the helper; not a zero-instruction claim.
+        NOTES
+    - name: Create prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_REPO: ${{ github.repository }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        ls -la
+        sha256sum mtfix79-full-qt492-x86.zip mtfix79-full-x64.zip openads-1.09.75-mtfix79-full-test-linux-x64.tar.gz openads-1.09.75-mtfix79-full-test-macos-universal.tar.gz
+        sha256sum mtfix79-full-qt492-x86.zip mtfix79-full-x64.zip > WINDOWS_SHA256SUMS.txt
+        gh release create v1.09.75-mtfix79-full-test --target f7ad7d2d59f20b00f4eb6a6f9f2cc5ea7780140e --prerelease --latest=false --title "OpenADS mtfix79 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix79-full-qt492-x86.zip mtfix79-full-x64.zip openads-1.09.75-mtfix79-full-test-linux-x64.tar.gz openads-1.09.75-mtfix79-full-test-linux-x64.tar.gz.sha256 MTFIX79_LINUX_SERVER_TEST.md openads-1.09.75-mtfix79-full-test-macos-universal.tar.gz openads-1.09.75-mtfix79-full-test-macos-universal.tar.gz.sha256
+        gh release view v1.09.75-mtfix79-full-test --json tagName,isPrerelease,url,assets
+  stdcallABI:
+    name: MSVC x86 exact additive stdcall wrapper ABI
+    runs-on: windows-2022
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ env.PINNED_SOURCE }}
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x86
+    - name: Compile and exercise exact stdcall and cdecl export block
+      run: python tests/harbour_batch/msvc-wrapper-probe.py
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix79-msvc-abi-proof
+        path: output/msvc-abi/exports.txt
+'on':
+  push:
+    branches:
+    - release/mtfix70-full
+    paths:
+    - .github/workflows/1-mtfix79-full.yml
+  workflow_dispatch: {}

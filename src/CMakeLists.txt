@@ -16,6 +16,7 @@ endif()
 
 add_library(openads_core STATIC
     util/log.cpp
+    util/open_phase.cpp
     util/client_config.cpp
     platform/path.cpp
     platform/fs_sandbox.cpp

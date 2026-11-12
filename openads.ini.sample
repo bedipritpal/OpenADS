@@ -223,3 +223,9 @@ data = .
 #   OPENADS_LOG / OPENADS_LOG_FILE / OPENADS_RESOLVE_VERBOSE — client audit
 #
 # ==================================================================
+# mtfix79 narrow server open-phase capture (independent explicit opt-in).
+# Default OFF. No environment selector. Do NOT enable diagnostics=true for it.
+# Full LOCAL path; parent exists; different file per daemon. Restart to apply.
+# Fixed numeric-only rows, no paths/data. Stops at8MiB, no rotation.
+# Capture briefly, then empty/comment and restart. Adds local logging overhead.
+open_phase_log =

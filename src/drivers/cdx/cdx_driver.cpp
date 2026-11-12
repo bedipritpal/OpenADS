@@ -1,3 +1,4 @@
+#include "util/open_phase.h"
 #include "drivers/cdx/cdx_driver.h"
 
 #include "platform/lock.h"
@@ -91,16 +92,21 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     // Retry past that window instead of failing the open — the app-level
     // dance "if (!exists) create; open" would otherwise surface a
     // transient error exactly when the race it guards against happens.
-    auto fres = platform::File::open(path, map_mode(mode));
-    for (int attempt = 0;
-         !fres && fres.error().sub_code == 32 /* ERROR_SHARING_VIOLATION */
-             && attempt < 200;
-         ++attempt) {
-        const auto us = 50 + (attempt * 25);
-        std::this_thread::sleep_for(std::chrono::microseconds(
-            us > 5000 ? 5000 : us));
-        fres = platform::File::open(path, map_mode(mode));
-    }
+    openads::util::open_phase::driver_open();
+    auto fres = [&] {
+        openads::util::open_phase::Phase phase(openads::util::open_phase::Part::Handle);
+        auto fres = platform::File::open(path, map_mode(mode));
+        for (int attempt = 0;
+             !fres && fres.error().sub_code == 32 /* ERROR_SHARING_VIOLATION */
+                 && attempt < 200;
+             ++attempt) {
+            const auto us = 50 + (attempt * 25);
+            std::this_thread::sleep_for(std::chrono::microseconds(
+                us > 5000 ? 5000 : us));
+            fres = platform::File::open(path, map_mode(mode));
+        }
+        return fres;
+    }();
     if (!fres) return fres.error();
     file_ = std::move(fres).value();
 
@@ -113,16 +119,19 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     // our LOCK_SH simply contends, so retry past it (matching the Win32
     // sharing-violation retry) rather than erroring the open. No-op on
     // Win32. SH locks of concurrent openers do not conflict.
-    for (int attempt = 0;; ++attempt) {
-        auto sl = file_.try_lock_shared();
-        if (sl) break;
-        if (attempt >= 200) {
-            file_ = platform::File{};
-            return sl.error();
+    {
+        openads::util::open_phase::Phase phase(openads::util::open_phase::Part::Share);
+        for (int attempt = 0;; ++attempt) {
+            auto sl = file_.try_lock_shared();
+            if (sl) break;
+            if (attempt >= 200) {
+                file_ = platform::File{};
+                return sl.error();
+            }
+            const auto us = 50 + (attempt * 25);
+            std::this_thread::sleep_for(std::chrono::microseconds(
+                us > 5000 ? 5000 : us));
         }
-        const auto us = 50 + (attempt * 25);
-        std::this_thread::sleep_for(std::chrono::microseconds(
-            us > 5000 ? 5000 : us));
     }
 
     // Coordinate the header read with concurrent appenders. An append
@@ -142,13 +151,16 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     // body was written before the count. Later operations re-read the
     // count under the append lock (refresh_record_count_) anyway.
     std::uint8_t hdr_buf[32]{};
-    auto got = file_.read_at(0, hdr_buf, sizeof(hdr_buf));
-    if (!got) return got.error();
-    if (got.value() < 32) {
-        return util::Error{5103, 0, "DBF header truncated", path};
-    }
+    auto hdr = [&]() -> util::Result<DbfHeader> {
+        openads::util::open_phase::Phase phase(openads::util::open_phase::Part::Header);
+        auto got = file_.read_at(0, hdr_buf, sizeof(hdr_buf));
+        if (!got) return got.error();
+        if (got.value() < 32) {
+            return util::Error{5103, 0, "DBF header truncated", path};
+        }
 
-    auto hdr = parse_dbf_header(hdr_buf, sizeof(hdr_buf));
+        return parse_dbf_header(hdr_buf, sizeof(hdr_buf));
+    }();
     if (!hdr) return hdr.error();
     rec_count_ = hdr.value().record_count;
     rec_len_   = hdr.value().record_length;
@@ -159,6 +171,7 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     if (hdr_len_ < 33) {
         return util::Error{5103, 0, "DBF header length below 33 bytes", path};
     }
+    openads::util::open_phase::Phase field_timer(openads::util::open_phase::Part::Fields);
     std::size_t fd_size = hdr_len_ - 32;
     std::vector<std::uint8_t> fd_buf(fd_size, 0);
     auto fd_got = file_.read_at(32, fd_buf.data(), fd_buf.size());
@@ -169,6 +182,7 @@ CdxDriver::open(const std::string& path, DriverOpenMode mode) {
     auto fields = parse_dbf_fields(fd_buf.data(), fd_buf.size(), hdr_buf[0]);
     if (!fields) return fields.error();
     fields_ = std::move(fields).value();
+    field_timer.stop();
     partial_enc_ = (hdr_buf[12] == 0x4F);
     enc_bitmap_offset_ = static_cast<std::uint32_t>(hdr_buf[28]) |
                          (static_cast<std::uint32_t>(hdr_buf[29]) << 8) |

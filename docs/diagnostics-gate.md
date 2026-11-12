@@ -104,3 +104,12 @@ Omitted IDs are0; explicit NIL/type/range errors return .F. Exact integers accep
 Both flavors have right-aligned instance/thread fields, then marker, with
 separate auto_thread and tick_us. The old C ABI remains; an additive Ex bridge
 carries IDs. See `release-notes-1.09.75-mtfix77.md` for the full contract.
+
+## mtfix79 independent server open-phase opt-in
+
+`open_phase_log` in the admin-owned server INI is a narrow explicit opt-in,
+OFF when absent/empty. It does not require or enable `diagnostics=true` and
+has no client API or environment selector. This is a separate permission for
+only fixed numeric timing rows, not a bypass enabling other log channels.
+See release-notes-1.09.75-mtfix79.md for columns, nested timing limits,
+8MiB stop limit, private local destination and restart/disable procedure.

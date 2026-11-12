@@ -232,3 +232,11 @@ TEST_CASE("diagnostics master is absent OFF and accepts explicit admin config on
     IniConfig cfg; std::string error;
     CHECK_FALSE(parse_ini("diagnostics=environment\n", cfg, error));
 }
+
+TEST_CASE("open phase destination is admin opt-in and independent of general logging") {
+    CHECK(parse_ok("port=6262\n").open_phase_log.empty());
+    auto cfg = parse_ok("diagnostics=false\nopen_phase_log=C:/logs/open6262.log\n");
+    CHECK_FALSE(cfg.diagnostics);
+    CHECK(cfg.open_phase_log == "C:/logs/open6262.log");
+    CHECK(parse_ok("open_phase_log=\n").open_phase_log.empty());
+}

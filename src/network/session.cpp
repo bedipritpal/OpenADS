@@ -1,3 +1,4 @@
+#include "util/open_phase.h"
 #include "network/checked_record_flush.h"
 #include "network/session.h"
 #include "util/log.h"
@@ -460,6 +461,9 @@ bool Session::process_frame(const Frame& f) {
         openads::mgmt::ErrorLog::instance().set_log_context(
             sid_, peer_str_, op, table);
     }
+    std::optional<openads::util::open_phase::Request> open_timer;
+    if (f.opcode == Opcode::OpenTable && openads::util::open_phase::enabled())
+        open_timer.emplace(sid_, true);
     auto t0 = std::chrono::steady_clock::now();
     DispatchResult res;
     try {
@@ -492,6 +496,8 @@ bool Session::process_frame(const Frame& f) {
     }
     srv_->set_session_executing(sid_, false);
     if (res.reply) {
+        if (open_timer) open_timer->result(static_cast<unsigned>(res.reply->opcode));
+        openads::util::open_phase::Phase submit_timer(openads::util::open_phase::Part::Submit);
         if (srv_->daemon_hardening()) {
             if (!queue_reply(*res.reply)) return false;
         } else if (auto wr = write_frame(s_, *res.reply); !wr) return false;
@@ -2332,9 +2338,11 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             openads::abi::create_diag::Scope open_diag(rel,
                 std::to_string(sid_) + "." + openads::abi::create_diag::new_id());
-            auto th = sess_conn_->open_table(rel,
-                openads::engine::TableType::Cdx,
-                open_mode);
+            auto th = [&] {
+                openads::util::open_phase::Phase phase(openads::util::open_phase::Part::Engine);
+                return sess_conn_->open_table(rel, openads::engine::TableType::Cdx, open_mode);
+            }();
+            openads::util::open_phase::Phase reply_timer(openads::util::open_phase::Part::Reply);
             if (!th) {
                 openads::abi::create_diag::log("server-open-fail", th.error().code,
                                               "table-open", th.error().sub_code);

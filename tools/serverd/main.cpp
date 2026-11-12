@@ -1,3 +1,4 @@
+#include "util/open_phase.h"
 // openads_serverd — standalone TCP server CLI / Windows service.
 //
 // Wraps openads::network::Server in a long-lived process. Parses
@@ -130,6 +131,7 @@ void usage(const char* argv0) {
 
 // Args parsed from argv. Defaults match the original CLI.
 struct Args {
+    std::string open_phase_log;
     bool diagnostics = false;
     std::string   host        = "127.0.0.1";
     bool          allow_anonymous = false;
@@ -286,6 +288,7 @@ bool parse_args(int argc, char** argv, Args& out) {
 // file actually set are touched, so this sits cleanly between the built-in
 // defaults (Args ctor) and the command line: defaults < config file < CLI.
 void apply_ini(const openads::serverd::IniConfig& cfg, Args& out) {
+    out.open_phase_log = cfg.open_phase_log;
     if (cfg.has_diagnostics) out.diagnostics = cfg.diagnostics;
     if (cfg.has_allow_anonymous) out.allow_anonymous = cfg.allow_anonymous;
     if (cfg.has_host)      out.host      = cfg.host;
@@ -412,6 +415,7 @@ static void probe_ace_dlls(bool console) {
 int run_server(const Args& args, bool console) {
     // Admin-owned config only. Never read master enable from environment.
     openads::util::set_logging_enabled(args.diagnostics);
+    openads::util::open_phase::configure(args.open_phase_log);
     if (args.tls_cert_file.empty() != args.tls_key_file.empty()) {
         std::fprintf(stderr, "Both --tls_cert and --tls_key are required.\n");
         return 1;

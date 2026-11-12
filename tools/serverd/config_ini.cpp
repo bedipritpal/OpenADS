@@ -214,6 +214,8 @@ bool parse_ini(const std::string& text, IniConfig& out, std::string& error) {
         } else if (key == "udf_module" || key == "udfmodule") {
             out.udf_module = val;
             out.has_udf_module = true;
+        } else if (key == "open_phase_log") {
+            out.open_phase_log = val;
         } else if (key == "error_log_path" || key == "error_assert_logs") {
             out.error_log_path = val;
             out.has_error_log_path = true;

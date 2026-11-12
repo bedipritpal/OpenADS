@@ -613,6 +613,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
         build-legacy/tests/openads_case_lookup81_native.exe 300 | tee output/case81-native-proof.txt
         python tests/trace_gate_contract.py build-legacy/tests/openads_trace_gate_probe.exe build-legacy/tools/serverd/openads_serverd.exe | tee output/diagnostics-gate-contract.txt
     - name: Local marker full compact and zero-wire contract on Windows x86

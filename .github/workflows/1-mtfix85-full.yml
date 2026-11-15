@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix85-full-test
-  PINNED_SOURCE: e2f879318336a6ef960dfd4ce1d1a27966d747e9
+  PINNED_SOURCE: 97d848a16917e0955ca01f6930c08895d7a84ee1
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor e2f879318336a6ef960dfd4ce1d1a27966d747e9 HEAD
-        test -z "$(git diff --name-only e2f879318336a6ef960dfd4ce1d1a27966d747e9 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 97d848a16917e0955ca01f6930c08895d7a84ee1 HEAD
+        test -z "$(git diff --name-only 97d848a16917e0955ca01f6930c08895d7a84ee1 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -94,7 +94,7 @@ jobs:
          s=p.read_text(encoding='utf-8',errors='strict')
          n=re.sub(r'\b(?:std::filesystem|fs)::temp_directory_path\b','openads_test::temp_directory_path',s)
          if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))
-        with open(root/'tests/CMakeLists.txt','a') as f:f.write('\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\ntarget_compile_options(openads_trace_gate_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_unit_tests PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_case_lookup81_native PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\n')
+        with open(root/'tests/CMakeLists.txt','a') as f:f.write('\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\ntarget_compile_options(openads_trace_gate_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_unit_tests PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_case_lookup81_native PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_fs_lock85_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\n')
         print('Test-only native temp helper applied:',len(changes),'test files')
         pathlib.Path('unit-harness-changes.txt').write_text('\n'.join(changes))
 
@@ -683,20 +683,27 @@ jobs:
         cat > delivery/mtfix85-full/docs/README.txt <<'NOTES'
         # mtfix85 FS byte-lock cumulative test kit
 
+        Remote ownership choice for review: each client connection is a
+        separate lock owner, like a separate Harbour process. Within one
+        connection, opens share Harbour-style merged range registrations.
+        This lets clients share read locks and WAIT for another client.
+
         Includes mtfix82 CopyFile, mtfix83 file I/O and mtfix84 metadata.
         Adds OAds_FLock( hFile, nStart, nLen, nType ), OAds_FUnlock(
         hFile, nStart, nLen ), OAds_FLockTest( hFile, nStart, nLen,
         nType ). nType: 0 exclusive/no-wait, 0x100 shared, 0x200 wait.
-        WAIT retries on the client until success or error. Each server
-        request makes one non-blocking OS attempt, with no server sleep.
-        Uses real OS byte locks on the same native file handle as I/O.
-        These are FS calls, separate from RDD record locks. EnableFileFunc
-        and jail rules apply. No RDD/CDX lock, cache or timer changes.
-        Scope limits: exact-range unlock, positive lengths, signed-64-bit
-        ranges, no overlapping same-handle mode conversion. LockTest is
-        0=free, 1=conflict, -1=error, not an owner PID. Exclusive locks
-        need a writable handle. Up to 1024 ranges per file handle.
-        See contrib/oads_hb/FILE_LOCKS_MTFIX85.txt for details.
+        WAIT retries on the client after OS contention until success or
+        error. Each server request is one non-blocking OS attempt, no
+        server sleep. Own overlapping registrations fail immediately,
+        like Harbour. Adjacent ranges merge; Unix unlock can split them.
+        Windows retains its native exact-range UnlockFileEx behavior.
+        LockTest: 0 free, positive PID where available (otherwise 1),
+        -1 error. Unix OFD owners do not have a PID. Last close within an
+        owner releases its native file and byte locks. No RDD/CDX lock,
+        cache or timer changes. EnableFileFunc and jail rules apply.
+        DirSpace now matches Harbour: 0=available, 1=free, 2=used, 3=total.
+        This corrects mtfix84's private numbering. Details and remaining
+        API limits are in contrib/oads_hb/FILE_LOCKS_MTFIX85.txt.
         Prior kits stay frozen.
         Inherited OPEN80 diagnostics below stay unchanged and default OFF.
         No automatic deployment, service/config/auth/data replacement or upstream merge.
@@ -885,8 +892,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor e2f879318336a6ef960dfd4ce1d1a27966d747e9 HEAD
-        test -z "$(git diff --name-only e2f879318336a6ef960dfd4ce1d1a27966d747e9 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 97d848a16917e0955ca01f6930c08895d7a84ee1 HEAD
+        test -z "$(git diff --name-only 97d848a16917e0955ca01f6930c08895d7a84ee1 HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -995,20 +1002,27 @@ jobs:
         cat > $D/docs/README.txt <<'NOTES'
         # mtfix85 FS byte-lock cumulative test kit
 
+        Remote ownership choice for review: each client connection is a
+        separate lock owner, like a separate Harbour process. Within one
+        connection, opens share Harbour-style merged range registrations.
+        This lets clients share read locks and WAIT for another client.
+
         Includes mtfix82 CopyFile, mtfix83 file I/O and mtfix84 metadata.
         Adds OAds_FLock( hFile, nStart, nLen, nType ), OAds_FUnlock(
         hFile, nStart, nLen ), OAds_FLockTest( hFile, nStart, nLen,
         nType ). nType: 0 exclusive/no-wait, 0x100 shared, 0x200 wait.
-        WAIT retries on the client until success or error. Each server
-        request makes one non-blocking OS attempt, with no server sleep.
-        Uses real OS byte locks on the same native file handle as I/O.
-        These are FS calls, separate from RDD record locks. EnableFileFunc
-        and jail rules apply. No RDD/CDX lock, cache or timer changes.
-        Scope limits: exact-range unlock, positive lengths, signed-64-bit
-        ranges, no overlapping same-handle mode conversion. LockTest is
-        0=free, 1=conflict, -1=error, not an owner PID. Exclusive locks
-        need a writable handle. Up to 1024 ranges per file handle.
-        See contrib/oads_hb/FILE_LOCKS_MTFIX85.txt for details.
+        WAIT retries on the client after OS contention until success or
+        error. Each server request is one non-blocking OS attempt, no
+        server sleep. Own overlapping registrations fail immediately,
+        like Harbour. Adjacent ranges merge; Unix unlock can split them.
+        Windows retains its native exact-range UnlockFileEx behavior.
+        LockTest: 0 free, positive PID where available (otherwise 1),
+        -1 error. Unix OFD owners do not have a PID. Last close within an
+        owner releases its native file and byte locks. No RDD/CDX lock,
+        cache or timer changes. EnableFileFunc and jail rules apply.
+        DirSpace now matches Harbour: 0=available, 1=free, 2=used, 3=total.
+        This corrects mtfix84's private numbering. Details and remaining
+        API limits are in contrib/oads_hb/FILE_LOCKS_MTFIX85.txt.
         Prior kits stay frozen.
         Inherited OPEN80 diagnostics below stay unchanged and default OFF.
         No automatic deployment, service/config/auth/data replacement or upstream merge.
@@ -1411,7 +1425,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit e2f879318336a6ef960dfd4ce1d1a27966d747e9
+        Built from fork branch release/mtfix70-full, commit 97d848a16917e0955ca01f6930c08895d7a84ee1
         (cumulative81 plus the OAds_CopyFile remote copy; see case-lookup81.md).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1561,8 +1575,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor e2f879318336a6ef960dfd4ce1d1a27966d747e9 HEAD
-        test -z "$(git diff --name-only e2f879318336a6ef960dfd4ce1d1a27966d747e9 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 97d848a16917e0955ca01f6930c08895d7a84ee1 HEAD
+        test -z "$(git diff --name-only 97d848a16917e0955ca01f6930c08895d7a84ee1 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1706,20 +1720,27 @@ jobs:
         cat > RELEASE_NOTES.md <<'NOTES'
         # mtfix85 FS byte-lock cumulative test kit
 
+        Remote ownership choice for review: each client connection is a
+        separate lock owner, like a separate Harbour process. Within one
+        connection, opens share Harbour-style merged range registrations.
+        This lets clients share read locks and WAIT for another client.
+
         Includes mtfix82 CopyFile, mtfix83 file I/O and mtfix84 metadata.
         Adds OAds_FLock( hFile, nStart, nLen, nType ), OAds_FUnlock(
         hFile, nStart, nLen ), OAds_FLockTest( hFile, nStart, nLen,
         nType ). nType: 0 exclusive/no-wait, 0x100 shared, 0x200 wait.
-        WAIT retries on the client until success or error. Each server
-        request makes one non-blocking OS attempt, with no server sleep.
-        Uses real OS byte locks on the same native file handle as I/O.
-        These are FS calls, separate from RDD record locks. EnableFileFunc
-        and jail rules apply. No RDD/CDX lock, cache or timer changes.
-        Scope limits: exact-range unlock, positive lengths, signed-64-bit
-        ranges, no overlapping same-handle mode conversion. LockTest is
-        0=free, 1=conflict, -1=error, not an owner PID. Exclusive locks
-        need a writable handle. Up to 1024 ranges per file handle.
-        See contrib/oads_hb/FILE_LOCKS_MTFIX85.txt for details.
+        WAIT retries on the client after OS contention until success or
+        error. Each server request is one non-blocking OS attempt, no
+        server sleep. Own overlapping registrations fail immediately,
+        like Harbour. Adjacent ranges merge; Unix unlock can split them.
+        Windows retains its native exact-range UnlockFileEx behavior.
+        LockTest: 0 free, positive PID where available (otherwise 1),
+        -1 error. Unix OFD owners do not have a PID. Last close within an
+        owner releases its native file and byte locks. No RDD/CDX lock,
+        cache or timer changes. EnableFileFunc and jail rules apply.
+        DirSpace now matches Harbour: 0=available, 1=free, 2=used, 3=total.
+        This corrects mtfix84's private numbering. Details and remaining
+        API limits are in contrib/oads_hb/FILE_LOCKS_MTFIX85.txt.
         Prior kits stay frozen.
         Inherited OPEN80 diagnostics below stay unchanged and default OFF.
         No automatic deployment, service/config/auth/data replacement or upstream merge.
@@ -1849,7 +1870,7 @@ jobs:
         ls -la
         sha256sum mtfix85-full-qt492-x86.zip mtfix85-full-x64.zip openads-1.09.75-mtfix85-full-test-linux-x64.tar.gz openads-1.09.75-mtfix85-full-test-macos-universal.tar.gz
         sha256sum mtfix85-full-qt492-x86.zip mtfix85-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix85-full-test --target e2f879318336a6ef960dfd4ce1d1a27966d747e9 --prerelease --latest=false --title "OpenADS mtfix85 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix85-full-qt492-x86.zip mtfix85-full-x64.zip openads-1.09.75-mtfix85-full-test-linux-x64.tar.gz openads-1.09.75-mtfix85-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix85-full-test-macos-universal.tar.gz openads-1.09.75-mtfix85-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix85-full-test --target 97d848a16917e0955ca01f6930c08895d7a84ee1 --prerelease --latest=false --title "OpenADS mtfix85 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix85-full-qt492-x86.zip mtfix85-full-x64.zip openads-1.09.75-mtfix85-full-test-linux-x64.tar.gz openads-1.09.75-mtfix85-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix85-full-test-macos-universal.tar.gz openads-1.09.75-mtfix85-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix85-full-test --json tagName,isPrerelease,url,assets
   stdcallABI:
     name: MSVC x86 exact additive stdcall wrapper ABI

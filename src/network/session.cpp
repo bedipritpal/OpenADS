@@ -4675,7 +4675,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                 std::uint32_t id = read_u32_le(f.payload.data());
                 std::uint64_t off = 0;
                 for (int i = 0; i < 8; ++i)
-                    off |= static_cast<std::uint64_t>(f.payload[4 + i])
+                    off |= static_cast<std::uint64_t>(
+                               f.payload[static_cast<std::size_t>(4 + i)])
                            << (8 * i);
                 std::uint32_t n = read_u32_le(f.payload.data() + 12);
                 if (n > openads::engine::kMaxFsIoChunk)

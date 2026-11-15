@@ -603,13 +603,15 @@ TEST_CASE( "oads_* local: Load Save ReadAt WriteAt Flush Eof" )
     REQUIRE( oads_FReadAt( hf, 50, rbuf, 3, &nr ) == 0 );
     CHECK( nr == 0 );
 
-    // WriteAt overwrites in place
+    // WriteAt overwrites in place; verify through the same handle
+    // (a second reader can lag uncommitted CRT writes on Windows).
     REQUIRE( oads_FWriteAt( hf, 2, "XY", 2, &nw ) == 0 );
     CHECK( nw == 2 );
     REQUIRE( oads_FFlush( hf ) == 0 );
     char all[16] = {};
-    UNSIGNED32 ulAll = sizeof( all );
-    REQUIRE( oads_LoadFile( h, (UNSIGNED8*)"p.txt", all, &ulAll ) == 0 );
+    UNSIGNED32 ulAll = 0;
+    REQUIRE( oads_FReadAt( hf, 0, all, 10, &ulAll ) == 0 );
+    CHECK( ulAll == 10 );
     CHECK( std::string( all, ulAll ) == "01XY456789" );
 
     // Eof: not at end, then seek to end and it flips
@@ -624,6 +626,12 @@ TEST_CASE( "oads_* local: Load Save ReadAt WriteAt Flush Eof" )
 
     oads_FClose( hf );
     CHECK( oads_FEof( hf, &bEof ) != 0 );  // closed handle fails
+
+    // After the close every byte is on disk for a fresh reader too.
+    char disk[16] = {};
+    UNSIGNED32 ulDisk = sizeof( disk );
+    REQUIRE( oads_LoadFile( h, (UNSIGNED8*)"p.txt", disk, &ulDisk ) == 0 );
+    CHECK( std::string( disk, ulDisk ) == "01XY456789" );
 
     REQUIRE( AdsDisconnect( h ) == 0 );
     fs::remove_all( dir, ec );

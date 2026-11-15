@@ -121,6 +121,12 @@ EXPORTS
     AdsCheckExistence
     AdsRenameFile
     AdsCopyFile
+    AdsLoadFile
+    AdsSaveFile
+    AdsFReadAt
+    AdsFWriteAt
+    AdsFFlush
+    AdsFEof
     AdsGetFileSize
     AdsGetFileTime
     AdsGetFileDate
@@ -147,6 +153,12 @@ EXPORTS
     oads_DeleteFile
     oads_RenameFile
     oads_CopyFile
+    oads_LoadFile
+    oads_SaveFile
+    oads_FReadAt
+    oads_FWriteAt
+    oads_FFlush
+    oads_FEof
     oads_GetFileSize
     oads_GetFileTime
     oads_GetFileDate

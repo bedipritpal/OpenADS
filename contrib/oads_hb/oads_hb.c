@@ -510,6 +510,159 @@ HB_FUNC( OADS_COPYFILE )
 }
 
 /* ------------------------------------------------------------------ */
+/*  OADS_FLoad( hConn, cName ) -> cData | NIL                         */
+/*  OADS_FLoad( cName )          -> cData | NIL (default conn)        */
+/*  Whole file in one call (hb_vfLoad). NIL on error.                */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FLOAD )
+{
+    ADSHANDLE  hConn;
+    const char *szName;
+
+    if( hb_pcount() >= 2 )
+    {
+        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
+        szName = hb_parc( 2 );
+    }
+    else
+    {
+        hConn  = oads_default_connection();
+        szName = hb_parc( 1 );
+    }
+
+    if( szName )
+    {
+        UNSIGNED32 ulSize = 0;
+        if( oads_GetFileSize( hConn, ( UNSIGNED8 * ) szName,
+                              &ulSize ) == 0 )
+        {
+            char *pBuf = ( char * ) hb_xgrab( ( HB_SIZE ) ulSize + 1 );
+            UNSIGNED32 ulLen = ulSize;
+            if( oads_LoadFile( hConn, ( UNSIGNED8 * ) szName,
+                               pBuf, &ulLen ) == 0 )
+            {
+                memset( pBuf + ulLen, 0, 1 );
+                hb_retclen( pBuf, ( HB_SIZE ) ulLen );
+                hb_xfree( pBuf );
+                return;
+            }
+            hb_xfree( pBuf );
+        }
+    }
+    hb_ret();
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_FSave( hConn, cName, cData ) -> lOk                          */
+/*  OADS_FSave( cName, cData )          -> lOk (default conn)         */
+/*  Whole file in one call (hb_vfSave); creates or truncates.        */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FSAVE )
+{
+    ADSHANDLE  hConn;
+    const char *szName;
+    const char *szData;
+    UNSIGNED32 ulLen;
+    UNSIGNED32 ulRc = 1;
+
+    if( hb_pcount() >= 3 )
+    {
+        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
+        szName = hb_parc( 2 );
+        szData = hb_parc( 3 );
+        ulLen  = ( UNSIGNED32 ) hb_parclen( 3 );
+    }
+    else
+    {
+        hConn  = oads_default_connection();
+        szName = hb_parc( 1 );
+        szData = hb_parc( 2 );
+        ulLen  = ( UNSIGNED32 ) hb_parclen( 2 );
+    }
+
+    if( szName && ( szData || ulLen == 0 ) )
+        ulRc = oads_SaveFile( hConn, ( UNSIGNED8 * ) szName,
+                              szData, ulLen );
+    hb_retl( ulRc == 0 );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_FReadAt( hFile, nOffset, nLen ) -> cData | NIL               */
+/*  Positional read in one call; NIL on error.                       */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FREADAT )
+{
+    ADSHANDLE  hFile   = ( ADSHANDLE ) hb_parnint( 1 );
+    UNSIGNED64 ullOff  = ( UNSIGNED64 ) hb_parnint( 2 );
+    UNSIGNED32 ulLen   = ( UNSIGNED32 ) hb_parnl( 3 );
+    UNSIGNED32 ulRead  = 0;
+    char       *pBuf;
+
+    if( !hFile || hb_pcount() < 3 )
+    {
+        hb_ret();
+        return;
+    }
+    pBuf = ( char * ) hb_xgrab( ( HB_SIZE ) ulLen + 1 );
+    if( oads_FReadAt( hFile, ullOff, pBuf, ulLen, &ulRead ) == 0 )
+    {
+        memset( pBuf + ulRead, 0, 1 );
+        hb_retclen( pBuf, ( HB_SIZE ) ulRead );
+    }
+    else
+    {
+        hb_ret();
+    }
+    hb_xfree( pBuf );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_FWriteAt( hFile, nOffset, cData ) -> nWritten (-1 on error)  */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FWRITEAT )
+{
+    ADSHANDLE  hFile     = ( ADSHANDLE ) hb_parnint( 1 );
+    UNSIGNED64 ullOff    = ( UNSIGNED64 ) hb_parnint( 2 );
+    const char *szData   = hb_parc( 3 );
+    UNSIGNED32 ulLen     = ( UNSIGNED32 ) hb_parclen( 3 );
+    UNSIGNED32 ulWritten = 0;
+
+    if( !hFile || !szData )
+    {
+        hb_retni( -1 );
+        return;
+    }
+    if( oads_FWriteAt( hFile, ullOff, szData, ulLen, &ulWritten ) == 0 )
+        hb_retnl( ( long ) ulWritten );
+    else
+        hb_retni( -1 );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_FFlush( hFile ) -> lOk                                       */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FFLUSH )
+{
+    ADSHANDLE hFile = ( ADSHANDLE ) hb_parnint( 1 );
+
+    hb_retl( hFile && oads_FFlush( hFile ) == 0 );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_FEof( hFile ) -> lEof | NIL                                  */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FEOF )
+{
+    ADSHANDLE  hFile = ( ADSHANDLE ) hb_parnint( 1 );
+    UNSIGNED16 bEof  = 0;
+
+    if( hFile && oads_FEof( hFile, &bEof ) == 0 )
+        hb_retl( bEof != 0 );
+    else
+        hb_ret();
+}
+
+/* ------------------------------------------------------------------ */
 /*  OADS_GetFileSize( hConn, cName ) -> nSize                         */
 /*  OADS_GetFileSize( cName )          -> nSize (default conn)        */
 /* ------------------------------------------------------------------ */

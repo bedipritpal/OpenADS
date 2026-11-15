@@ -171,6 +171,51 @@ util::Result<void> fs_copy(const std::string& abs_src,
     return {};
 }
 
+util::Result<std::vector<std::uint8_t>> fs_load(const std::string& abs_path) {
+    std::error_code ec;
+    if (!fs::is_regular_file(fs::path(abs_path), ec) || ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "not a regular file", abs_path);
+    auto sz = fs::file_size(fs::path(abs_path), ec);
+    if (ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "stat failed", abs_path);
+    if (sz > kMaxFsWholeFile)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "file too large for one call", abs_path);
+    std::ifstream in(abs_path, std::ios::binary);
+    if (!in)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "open failed", abs_path);
+    std::vector<std::uint8_t> out(static_cast<std::size_t>(sz));
+    if (sz)
+        in.read(reinterpret_cast<char*>(out.data()),
+                static_cast<std::streamsize>(sz));
+    if (in.bad() || static_cast<std::uint64_t>(in.gcount()) != sz)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "read failed", abs_path);
+    return out;
+}
+
+util::Result<void> fs_save(const std::string& abs_path,
+                           const std::uint8_t* data, std::uint64_t size) {
+    if (size > kMaxFsWholeFile)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "too large for one call", abs_path);
+    std::ofstream out(abs_path, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return io_err(static_cast<std::int32_t>(openads::AE_ACCESS_DENIED),
+                      "open failed", abs_path);
+    if (size)
+        out.write(reinterpret_cast<const char*>(data),
+                  static_cast<std::streamsize>(size));
+    out.flush();
+    if (!out)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "write failed", abs_path);
+    return {};
+}
+
 util::Result<std::uint64_t> fs_size(const std::string& abs_path) {
     std::error_code ec;
     if (!fs::is_regular_file(abs_path, ec) || ec)

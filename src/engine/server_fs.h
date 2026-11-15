@@ -12,6 +12,8 @@ namespace openads::engine {
 
 inline constexpr std::uint32_t kMaxSessionFiles = 32;
 inline constexpr std::uint32_t kMaxFsIoChunk    = 1024u * 1024u;
+// Whole-file load/save cap (FileLoad / FileSave / fs_load / fs_save).
+inline constexpr std::uint64_t kMaxFsWholeFile  = 64ull * 1024ull * 1024ull;
 
 // FOpen mode bits (Harbour FO_* -ish).
 inline constexpr std::uint16_t ADS_FO_READ      = 0x0000;
@@ -32,6 +34,13 @@ util::Result<void>          fs_rename(const std::string& abs_old,
                                       const std::string& abs_new);
 util::Result<void>          fs_copy(const std::string& abs_src,
                                     const std::string& abs_dst);
+// Whole-file read (hb_vfLoad). Fails with AE_INTERNAL_ERROR when the file
+// exceeds kMaxFsWholeFile.
+util::Result<std::vector<std::uint8_t>> fs_load(const std::string& abs_path);
+// Whole-file write (hb_vfSave): creates or truncates.
+util::Result<void>          fs_save(const std::string& abs_path,
+                                    const std::uint8_t* data,
+                                    std::uint64_t size);
 util::Result<std::uint64_t> fs_size(const std::string& abs_path);
 util::Result<DirEntry>      fs_stat_entry(const std::string& abs_path);
 // mask may be "subdir/*.dbf" or "*.txt"; base_dir is the jail-resolved

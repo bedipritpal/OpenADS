@@ -1741,10 +1741,13 @@ DispatchResult Session::dispatch(const Frame& f) {
             case Opcode::PackTable: case Opcode::ZapTable:
             case Opcode::FileExists: case Opcode::FileErase: case Opcode::FileRename:
             case Opcode::FileCopy:
+            case Opcode::FileLoad: case Opcode::FileSave:
             case Opcode::FileSize: case Opcode::FileMTime: case Opcode::Directory:
             case Opcode::DirExist: case Opcode::DirMake: case Opcode::DirRemove:
             case Opcode::FOpen: case Opcode::FCreate: case Opcode::FClose:
             case Opcode::FRead: case Opcode::FWrite: case Opcode::FSeek:
+            case Opcode::FileReadAt: case Opcode::FileWriteAt:
+            case Opcode::FileFlush: case Opcode::FileEof:
             case Opcode::ZipArchive: case Opcode::UnzipArchive: case Opcode::ZipList:
                 if (!admin) return denied();
                 break;
@@ -4288,6 +4291,8 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FileErase:
         case Opcode::FileRename:
         case Opcode::FileCopy:
+        case Opcode::FileLoad:
+        case Opcode::FileSave:
         case Opcode::FileSize:
         case Opcode::FileMTime:
         case Opcode::Directory:
@@ -4299,7 +4304,11 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FClose:
         case Opcode::FRead:
         case Opcode::FWrite:
-        case Opcode::FSeek: {
+        case Opcode::FSeek:
+        case Opcode::FileReadAt:
+        case Opcode::FileWriteAt:
+        case Opcode::FileFlush:
+        case Opcode::FileEof: {
             if (!srv_->enable_file_func()) {
                 reply = err("file functions disabled",
                             openads::AE_ACCESS_DENIED);
@@ -4378,6 +4387,47 @@ DispatchResult Session::dispatch(const Frame& f) {
                     break;
                 }
                 reply.opcode = Opcode::FileCopyAck;
+            } else if (f.opcode == Opcode::FileLoad) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path)) {
+                    reply = err("FileLoad: short payload"); break;
+                }
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto data = openads::engine::fs_load(*abs);
+                if (!data) {
+                    reply = err("FileLoad",
+                                static_cast<UNSIGNED32>(data.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileLoadAck;
+                write_u32_le(static_cast<std::uint32_t>(data.value().size()),
+                             reply.payload);
+                reply.payload.insert(reply.payload.end(),
+                                     data.value().begin(), data.value().end());
+            } else if (f.opcode == Opcode::FileSave) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path) ||
+                    pos + 4 > f.payload.size()) {
+                    reply = err("FileSave: short payload"); break;
+                }
+                std::uint32_t n = read_u32_le(f.payload.data() + pos);
+                pos += 4;
+                if (pos + n > f.payload.size()) {
+                    reply = err("FileSave: short data"); break;
+                }
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto r = openads::engine::fs_save(
+                    *abs, f.payload.data() + pos, n);
+                if (!r) {
+                    reply = err("FileSave",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileSaveAck;
             } else if (f.opcode == Opcode::FileSize) {
                 std::size_t pos = 0;
                 std::string path;
@@ -4617,6 +4667,94 @@ DispatchResult Session::dispatch(const Frame& f) {
                     it->second->stream.tellg());
                 reply.opcode = Opcode::FSeekAck;
                 write_u32_le(pos, reply.payload);
+            } else if (f.opcode == Opcode::FileReadAt ||
+                       f.opcode == Opcode::FileWriteAt) {
+                if (f.payload.size() < 16) {
+                    reply = err("FileReadAt: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint64_t off = 0;
+                for (int i = 0; i < 8; ++i)
+                    off |= static_cast<std::uint64_t>(f.payload[4 + i])
+                           << (8 * i);
+                std::uint32_t n = read_u32_le(f.payload.data() + 12);
+                if (n > openads::engine::kMaxFsIoChunk)
+                    n = openads::engine::kMaxFsIoChunk;
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileReadAt: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                // ONE shared fstream position, same rule as FSeek.
+                it->second->stream.clear();
+                it->second->stream.seekg(static_cast<std::streamoff>(off),
+                                         std::ios::beg);
+                if (f.opcode == Opcode::FileReadAt) {
+                    std::vector<char> buf(n);
+                    it->second->stream.read(
+                        buf.data(), static_cast<std::streamsize>(n));
+                    auto got = static_cast<std::uint32_t>(
+                        it->second->stream.gcount());
+                    reply.opcode = Opcode::FileReadAtAck;
+                    write_u32_le(got, reply.payload);
+                    reply.payload.insert(
+                        reply.payload.end(), buf.begin(),
+                        buf.begin() + static_cast<std::ptrdiff_t>(got));
+                } else {
+                    if (16u + n > f.payload.size()) {
+                        reply = err("FileWriteAt: short data"); break;
+                    }
+                    it->second->stream.write(
+                        reinterpret_cast<const char*>(f.payload.data() + 16),
+                        static_cast<std::streamsize>(n));
+                    it->second->stream.flush();
+                    if (!it->second->stream) {
+                        reply = err("FileWriteAt: io error",
+                                    openads::AE_INTERNAL_ERROR);
+                        break;
+                    }
+                    reply.opcode = Opcode::FileWriteAtAck;
+                    write_u32_le(n, reply.payload);
+                }
+            } else if (f.opcode == Opcode::FileFlush) {
+                if (f.payload.size() < 4) {
+                    reply = err("FileFlush: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileFlush: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                it->second->stream.flush();
+                if (!it->second->stream) {
+                    reply = err("FileFlush: io error",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                reply.opcode = Opcode::FileFlushAck;
+            } else if (f.opcode == Opcode::FileEof) {
+                if (f.payload.size() < 4) {
+                    reply = err("FileEof: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileEof: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                it->second->stream.clear();
+                auto cur = it->second->stream.tellg();
+                it->second->stream.seekg(0, std::ios::end);
+                auto end = it->second->stream.tellg();
+                it->second->stream.clear();
+                if (cur >= 0) it->second->stream.seekg(cur);
+                reply.opcode = Opcode::FileEofAck;
+                reply.payload.push_back(
+                    (cur < 0 || (end >= 0 && cur >= end)) ? 1 : 0);
             }
             break;
         }

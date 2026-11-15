@@ -547,6 +547,88 @@ TEST_CASE( "oads_* local: CopyFile copies a file" )
     fs::remove_all( dir, ec );
 }
 
+TEST_CASE( "oads_* local: Load Save ReadAt WriteAt Flush Eof" )
+{
+    auto dir = fs::temp_directory_path() / "oads_file_g2";
+    std::error_code ec;
+    fs::remove_all( dir, ec );
+    fs::create_directories( dir );
+
+    ADSHANDLE h = local_connect( dir );
+
+    // FSave creates a whole file in one call
+    REQUIRE( oads_SaveFile( h, (UNSIGNED8*)"w.txt", "hello", 5 ) == 0 );
+    UNSIGNED32 ulSize = 0;
+    REQUIRE( oads_GetFileSize( h, (UNSIGNED8*)"w.txt", &ulSize ) == 0 );
+    CHECK( ulSize == 5 );
+
+    // FSave truncates an existing file
+    REQUIRE( oads_SaveFile( h, (UNSIGNED8*)"w.txt", "ab", 2 ) == 0 );
+    ulSize = 0;
+    REQUIRE( oads_GetFileSize( h, (UNSIGNED8*)"w.txt", &ulSize ) == 0 );
+    CHECK( ulSize == 2 );
+
+    // FLoad returns the whole content
+    char lbuf[64] = {};
+    UNSIGNED32 ulCap = sizeof( lbuf );
+    REQUIRE( oads_LoadFile( h, (UNSIGNED8*)"w.txt", lbuf, &ulCap ) == 0 );
+    CHECK( ulCap == 2 );
+    CHECK( std::string( lbuf, ulCap ) == "ab" );
+
+    // FLoad with a short buffer reports the needed size
+    char tiny[1] = {};
+    UNSIGNED32 ulNeed = sizeof( tiny );
+    CHECK( oads_LoadFile( h, (UNSIGNED8*)"w.txt", tiny, &ulNeed ) ==
+           (UNSIGNED32) openads::AE_INSUFFICIENT_BUFFER );
+    CHECK( ulNeed == 2 );
+
+    // FLoad of a missing file fails
+    UNSIGNED32 ulX = sizeof( lbuf );
+    CHECK( oads_LoadFile( h, (UNSIGNED8*)"gone.txt", lbuf, &ulX ) != 0 );
+
+    // Positional I/O on a handle
+    ADSHANDLE hf = 0;
+    REQUIRE( oads_FCreate( h, (UNSIGNED8*)"p.txt", 0, &hf ) == 0 );
+    UNSIGNED32 nw = 0;
+    REQUIRE( oads_FWrite( hf, "0123456789", 10, &nw ) == 0 );
+
+    char rbuf[8] = {};
+    UNSIGNED32 nr = 0;
+    REQUIRE( oads_FReadAt( hf, 4, rbuf, 3, &nr ) == 0 );
+    CHECK( nr == 3 );
+    CHECK( std::string( rbuf, nr ) == "456" );
+
+    // ReadAt past the end reads nothing
+    nr = 99;
+    REQUIRE( oads_FReadAt( hf, 50, rbuf, 3, &nr ) == 0 );
+    CHECK( nr == 0 );
+
+    // WriteAt overwrites in place
+    REQUIRE( oads_FWriteAt( hf, 2, "XY", 2, &nw ) == 0 );
+    CHECK( nw == 2 );
+    REQUIRE( oads_FFlush( hf ) == 0 );
+    char all[16] = {};
+    UNSIGNED32 ulAll = sizeof( all );
+    REQUIRE( oads_LoadFile( h, (UNSIGNED8*)"p.txt", all, &ulAll ) == 0 );
+    CHECK( std::string( all, ulAll ) == "01XY456789" );
+
+    // Eof: not at end, then seek to end and it flips
+    UNSIGNED16 bEof = 1;
+    REQUIRE( oads_FSeek( hf, 0, 0, &nw ) == 0 );
+    REQUIRE( oads_FEof( hf, &bEof ) == 0 );
+    CHECK( bEof == 0 );
+    REQUIRE( oads_FSeek( hf, 0, 2, &nw ) == 0 );
+    bEof = 0;
+    REQUIRE( oads_FEof( hf, &bEof ) == 0 );
+    CHECK( bEof == 1 );
+
+    oads_FClose( hf );
+    CHECK( oads_FEof( hf, &bEof ) != 0 );  // closed handle fails
+
+    REQUIRE( AdsDisconnect( h ) == 0 );
+    fs::remove_all( dir, ec );
+}
+
 TEST_CASE( "oads_* local: GetFileSize returns correct size" )
 {
     auto dir = fs::temp_directory_path() / "oads_file_size";

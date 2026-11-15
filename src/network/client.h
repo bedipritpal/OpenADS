@@ -424,6 +424,22 @@ public:
                                             const std::string& new_p);
     util::Result<void>          file_copy(const std::string& src_p,
                                           const std::string& dst_p);
+    // hb_vf group 2 - wire-efficiency batch.
+    util::Result<std::vector<std::uint8_t>>
+                                file_load(const std::string& path);
+    util::Result<void>          file_save(const std::string& path,
+                                          const std::uint8_t* data,
+                                          std::uint64_t size);
+    util::Result<std::vector<std::uint8_t>>
+                                fread_at(std::uint32_t file_id,
+                                         std::uint64_t offset,
+                                         std::uint32_t nbytes);
+    util::Result<std::uint32_t> fwrite_at(std::uint32_t file_id,
+                                          std::uint64_t offset,
+                                          const std::uint8_t* data,
+                                          std::uint32_t n);
+    util::Result<void>          fflush(std::uint32_t file_id);
+    util::Result<bool>          feof(std::uint32_t file_id);
     util::Result<std::uint64_t> file_size(const std::string& path);
     util::Result<openads::engine::DirEntry> file_mtime(
         const std::string& path);

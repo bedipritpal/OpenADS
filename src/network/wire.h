@@ -27,6 +27,11 @@ enum class Opcode : std::uint8_t {
     Connect            = 0x10,
     ConnectAck         = 0x11,
     Disconnect         = 0x12,
+    // FileEof: [u32 file_id] -> [u8 eof]. The 0xE0+ server-filesystem
+    // family and the 0x20s block around FileCopy are full; 0x1D/0x1E are
+    // the last free pair below 0x20.
+    FileEof            = 0x1D,
+    FileEofAck         = 0x1E,
     BeginAuth          = 0x3D,
     BeginAuthAck       = 0x3E,
     CompleteAuth       = 0x3F,
@@ -38,6 +43,25 @@ enum class Opcode : std::uint8_t {
     // Server-filesystem family (0xE0+) is full, so copy lives here.
     FileCopy           = 0x24,
     FileCopyAck        = 0x25,
+    // hb_vf group 2 - wire-efficiency batch.
+    // FileLoad:    [u16 nameLen][name] -> [u32 size][bytes]
+    //              (whole file; server caps at kMaxFsWholeFile)
+    FileLoad           = 0x26,
+    FileLoadAck        = 0x27,
+    // FileSave:    [u16 nameLen][name][u32 size][bytes] -> empty ack
+    //              (creates or truncates, like hb_vfSave)
+    FileSave           = 0x28,
+    FileSaveAck        = 0x29,
+    // FileReadAt:  [u32 file_id][u64 offset][u32 nbytes] -> [u32 nread][bytes]
+    FileReadAt         = 0x2A,
+    FileReadAtAck      = 0x2B,
+    // FileWriteAt: [u32 file_id][u64 offset][u32 nbytes][bytes]
+    //              -> [u32 nwritten]
+    FileWriteAt        = 0x2C,
+    FileWriteAtAck     = 0x2D,
+    // FileFlush:   [u32 file_id] -> empty ack (flush server buffers)
+    FileFlush          = 0x2E,
+    FileFlushAck       = 0x2F,
     ExecuteSQL         = 0x30,
     ExecuteSQLAck      = 0x31,
     Fetch              = 0x32,

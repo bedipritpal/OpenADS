@@ -657,7 +657,9 @@ static void metadata_round_trip( ADSHANDLE h, const fs::path& dir )
     UNSIGNED8 aucDate[32] = {};
     UNSIGNED16 usLen = sizeof( aucDate );
     REQUIRE( oads_GetFileDate( h, (UNSIGNED8*)"m.txt", aucDate, &usLen ) == 0 );
-    CHECK( std::string( (char*) aucDate, usLen ) == "20210304" );
+    REQUIRE( usLen == 9 ); // existing getter includes the terminating NUL
+    CHECK( aucDate[8] == 0 );
+    CHECK( std::string( (char*) aucDate, 8 ) == "20210304" );
     UNSIGNED8 aucTime[32] = {};
     usLen = sizeof( aucTime );
     REQUIRE( oads_GetFileTime( h, (UNSIGNED8*)"m.txt", aucTime, &usLen ) == 0 );

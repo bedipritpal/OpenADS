@@ -9,7 +9,13 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
-#include <cstdio>
+#include <fcntl.h>
+#if defined(_WIN32)
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -322,9 +328,17 @@ util::Result<std::string> fs_tempfile(const std::string& abs_dir,
         fs::path cand = fs::path(abs_dir) / name.str();
         if (fs::exists(cand, ec)) continue;
         // Exclusive creation: never truncate another caller's file.
-        std::FILE* out = std::fopen(cand.string().c_str(), "wbx");
-        if (!out) continue;
-        std::fclose(out);
+#if defined(_WIN32)
+        int fd = ::_open(cand.string().c_str(),
+                         _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+                         _S_IREAD | _S_IWRITE);
+        if (fd < 0) continue;
+        ::_close(fd);
+#else
+        int fd = ::open(cand.string().c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd < 0) continue;
+        ::close(fd);
+#endif
         return cand.string();
     }
     return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),

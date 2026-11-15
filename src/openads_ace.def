@@ -127,6 +127,11 @@ EXPORTS
     AdsFWriteAt
     AdsFFlush
     AdsFEof
+    AdsSetFileAttr
+    AdsSetFileTime
+    AdsFTrunc
+    AdsTempFile
+    AdsDirSpace
     AdsGetFileSize
     AdsGetFileTime
     AdsGetFileDate
@@ -159,6 +164,11 @@ EXPORTS
     oads_FWriteAt
     oads_FFlush
     oads_FEof
+    oads_SetFileAttr
+    oads_SetFileTime
+    oads_FTrunc
+    oads_TempFile
+    oads_DirSpace
     oads_GetFileSize
     oads_GetFileTime
     oads_GetFileDate

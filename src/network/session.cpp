@@ -1742,12 +1742,15 @@ DispatchResult Session::dispatch(const Frame& f) {
             case Opcode::FileExists: case Opcode::FileErase: case Opcode::FileRename:
             case Opcode::FileCopy:
             case Opcode::FileLoad: case Opcode::FileSave:
+            case Opcode::FileSetAttr: case Opcode::FileSetTime:
+            case Opcode::FileTemp: case Opcode::DirSpace:
             case Opcode::FileSize: case Opcode::FileMTime: case Opcode::Directory:
             case Opcode::DirExist: case Opcode::DirMake: case Opcode::DirRemove:
             case Opcode::FOpen: case Opcode::FCreate: case Opcode::FClose:
             case Opcode::FRead: case Opcode::FWrite: case Opcode::FSeek:
             case Opcode::FileReadAt: case Opcode::FileWriteAt:
             case Opcode::FileFlush: case Opcode::FileEof:
+            case Opcode::FileTrunc:
             case Opcode::ZipArchive: case Opcode::UnzipArchive: case Opcode::ZipList:
                 if (!admin) return denied();
                 break;
@@ -4293,6 +4296,10 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FileCopy:
         case Opcode::FileLoad:
         case Opcode::FileSave:
+        case Opcode::FileSetAttr:
+        case Opcode::FileSetTime:
+        case Opcode::FileTemp:
+        case Opcode::DirSpace:
         case Opcode::FileSize:
         case Opcode::FileMTime:
         case Opcode::Directory:
@@ -4308,7 +4315,8 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FileReadAt:
         case Opcode::FileWriteAt:
         case Opcode::FileFlush:
-        case Opcode::FileEof: {
+        case Opcode::FileEof:
+        case Opcode::FileTrunc: {
             if (!srv_->enable_file_func()) {
                 reply = err("file functions disabled",
                             openads::AE_ACCESS_DENIED);
@@ -4428,6 +4436,83 @@ DispatchResult Session::dispatch(const Frame& f) {
                     break;
                 }
                 reply.opcode = Opcode::FileSaveAck;
+            } else if (f.opcode == Opcode::FileSetAttr) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path) ||
+                    pos + 4 > f.payload.size()) {
+                    reply = err("FileSetAttr: short payload"); break;
+                }
+                std::uint32_t attr = read_u32_le(f.payload.data() + pos);
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto r = openads::engine::fs_set_attr(*abs, attr);
+                if (!r) {
+                    reply = err("FileSetAttr",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileSetAttrAck;
+            } else if (f.opcode == Opcode::FileSetTime) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path) ||
+                    pos + 7 > f.payload.size()) {
+                    reply = err("FileSetTime: short payload"); break;
+                }
+                std::uint16_t year = static_cast<std::uint16_t>(
+                    f.payload[pos] |
+                    (static_cast<std::uint16_t>(f.payload[pos + 1]) << 8));
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto r = openads::engine::fs_set_time(
+                    *abs, year, f.payload[pos + 2], f.payload[pos + 3],
+                    f.payload[pos + 4], f.payload[pos + 5],
+                    f.payload[pos + 6]);
+                if (!r) {
+                    reply = err("FileSetTime",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileSetTimeAck;
+            } else if (f.opcode == Opcode::FileTemp) {
+                std::size_t pos = 0;
+                std::string dir, prefix;
+                if (!read_lstr16(f.payload, pos, dir) ||
+                    !read_lstr16(f.payload, pos, prefix)) {
+                    reply = err("FileTemp: short payload"); break;
+                }
+                auto abs = resolve_fs_client_path(dir);
+                if (!abs) { deny_path(dir); break; }
+                auto name = openads::engine::fs_tempfile(*abs, prefix);
+                if (!name) {
+                    reply = err("FileTemp",
+                                static_cast<UNSIGNED32>(name.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileTempAck;
+                write_lstr16(name.value(), reply.payload);
+            } else if (f.opcode == Opcode::DirSpace) {
+                std::size_t pos = 0;
+                std::string dir;
+                if (!read_lstr16(f.payload, pos, dir) ||
+                    pos + 1 > f.payload.size()) {
+                    reply = err("DirSpace: short payload"); break;
+                }
+                std::uint8_t type = f.payload[pos];
+                auto abs = resolve_fs_client_path(dir);
+                if (!abs) { deny_path(dir); break; }
+                auto bytes = openads::engine::fs_dir_space(*abs, type);
+                if (!bytes) {
+                    reply = err("DirSpace",
+                                static_cast<UNSIGNED32>(bytes.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::DirSpaceAck;
+                std::uint64_t v = bytes.value();
+                for (int i = 0; i < 8; ++i)
+                    reply.payload.push_back(
+                        static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF));
             } else if (f.opcode == Opcode::FileSize) {
                 std::size_t pos = 0;
                 std::string path;
@@ -4756,6 +4841,31 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply.opcode = Opcode::FileEofAck;
                 reply.payload.push_back(
                     (cur < 0 || (end >= 0 && cur >= end)) ? 1 : 0);
+            } else if (f.opcode == Opcode::FileTrunc) {
+                if (f.payload.size() < 12) {
+                    reply = err("FileTrunc: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint64_t size = 0;
+                for (int i = 0; i < 8; ++i)
+                    size |= static_cast<std::uint64_t>(
+                                f.payload[static_cast<std::size_t>(4 + i)])
+                            << (8 * i);
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileTrunc: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                auto r = openads::engine::fs_truncate(it->second->path,
+                                                      size);
+                if (!r) {
+                    reply = err("FileTrunc",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                it->second->stream.clear();
+                reply.opcode = Opcode::FileTruncAck;
             }
             break;
         }

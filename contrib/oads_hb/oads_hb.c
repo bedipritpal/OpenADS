@@ -47,6 +47,7 @@
 #include "hbvm.h"
 #include "ace.h"
 #include <string.h>
+#include <stdio.h>
 
 /* The no-handle OAds_* overloads belong to this Harbour glue, not to
  * rddads. ACE's default is thread-local; the app can set it on its login
@@ -660,6 +661,159 @@ HB_FUNC( OADS_FEOF )
         hb_retl( bEof != 0 );
     else
         hb_ret();
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_SetFileAttr( hConn, cName, nAttr ) -> lOk                    */
+/*  OADS_SetFileAttr( cName, nAttr )        -> lOk (default conn)     */
+/*  nAttr is a platform bitset (read-only = 1).                       */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_SETFILEATTR )
+{
+    ADSHANDLE  hConn;
+    const char *szName;
+    UNSIGNED32 ulAttr;
+
+    if( hb_pcount() >= 3 )
+    {
+        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
+        szName = hb_parc( 2 );
+        ulAttr = ( UNSIGNED32 ) hb_parnint( 3 );
+    }
+    else
+    {
+        hConn  = oads_default_connection();
+        szName = hb_parc( 1 );
+        ulAttr = ( UNSIGNED32 ) hb_parnint( 2 );
+    }
+
+    hb_retl( szName != NULL &&
+             oads_SetFileAttr( hConn, ( UNSIGNED8 * ) szName,
+                               ulAttr ) == 0 );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_SetFileTime( hConn, cName, dDate, cTime ) -> lOk             */
+/*  OADS_SetFileTime( cName, dDate, cTime )        -> lOk (def conn)  */
+/*  cTime is "hh:mm:ss" (24-hour).                                    */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_SETFILETIME )
+{
+    ADSHANDLE  hConn;
+    const char *szName;
+    const char *szTime;
+    HB_LONG    lDate;
+    int        iYear = 0, iMonth = 0, iDay = 0;
+    int        iHour = 0, iMin = 0, iSec = 0;
+
+    if( hb_pcount() >= 4 )
+    {
+        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
+        szName = hb_parc( 2 );
+        lDate  = hb_pardl( 3 );
+        szTime = hb_parc( 4 );
+    }
+    else
+    {
+        hConn  = oads_default_connection();
+        szName = hb_parc( 1 );
+        lDate  = hb_pardl( 2 );
+        szTime = hb_parc( 3 );
+    }
+
+    if( szName && lDate > 0 && hb_dateDecode( lDate, &iYear, &iMonth,
+                                              &iDay ) )
+    {
+        if( szTime )
+            sscanf( szTime, "%d:%d:%d", &iHour, &iMin, &iSec );
+        hb_retl( oads_SetFileTime( hConn, ( UNSIGNED8 * ) szName,
+                                   ( UNSIGNED16 ) iYear,
+                                   ( UNSIGNED8 ) iMonth,
+                                   ( UNSIGNED8 ) iDay,
+                                   ( UNSIGNED8 ) iHour,
+                                   ( UNSIGNED8 ) iMin,
+                                   ( UNSIGNED8 ) iSec ) == 0 );
+    }
+    else
+        hb_retl( HB_FALSE );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_FTrunc( hFile, nSize ) -> lOk                                */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_FTRUNC )
+{
+    ADSHANDLE hFile = ( ADSHANDLE ) hb_parnint( 1 );
+    UNSIGNED64 ullSize = ( UNSIGNED64 ) hb_parnint( 2 );
+
+    hb_retl( hFile && oads_FTrunc( hFile, ullSize ) == 0 );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_TempFile( hConn, cDir, cPrefix ) -> cName                    */
+/*  OADS_TempFile( cDir, cPrefix )        -> cName (default conn)     */
+/*  Creates an empty file with a unique name under cDir and returns   */
+/*  its full path, or "" on failure.                                  */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_TEMPFILE )
+{
+    ADSHANDLE  hConn;
+    const char *szDir;
+    const char *szPrefix;
+    char       szName[ 4096 ];
+    UNSIGNED16 usLen = sizeof( szName );
+
+    if( hb_pcount() >= 3 )
+    {
+        hConn    = ( ADSHANDLE ) hb_parnint( 1 );
+        szDir    = hb_parc( 2 );
+        szPrefix = hb_parc( 3 );
+    }
+    else
+    {
+        hConn    = oads_default_connection();
+        szDir    = hb_parc( 1 );
+        szPrefix = hb_parc( 2 );
+    }
+
+    szName[ 0 ] = '\0';
+    if( szDir &&
+        oads_TempFile( hConn, ( UNSIGNED8 * ) szDir,
+                       ( UNSIGNED8 * ) szPrefix,
+                       ( UNSIGNED8 * ) szName, &usLen ) == 0 )
+        hb_retc( szName );
+    else
+        hb_retc( "" );
+}
+
+/* ------------------------------------------------------------------ */
+/*  OADS_DirSpace( hConn, cDir, nType ) -> nBytes                     */
+/*  OADS_DirSpace( cDir, nType )        -> nBytes (default conn)      */
+/*  nType: 0 = free available, 1 = total capacity, 2 = free.          */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_DIRSPACE )
+{
+    ADSHANDLE  hConn;
+    const char *szDir;
+    UNSIGNED8  ucType;
+    UNSIGNED64 ullBytes = 0;
+
+    if( hb_pcount() >= 3 )
+    {
+        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
+        szDir  = hb_parc( 2 );
+        ucType = ( UNSIGNED8 ) hb_parnint( 3 );
+    }
+    else
+    {
+        hConn  = oads_default_connection();
+        szDir  = hb_parc( 1 );
+        ucType = ( UNSIGNED8 ) hb_parnint( 2 );
+    }
+
+    if( szDir )
+        oads_DirSpace( hConn, ( UNSIGNED8 * ) szDir, ucType, &ullBytes );
+    hb_retnint( ( HB_MAXINT ) ullBytes );
 }
 
 /* ------------------------------------------------------------------ */

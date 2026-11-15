@@ -62,6 +62,26 @@ enum class Opcode : std::uint8_t {
     // FileFlush:   [u32 file_id] -> empty ack (flush server buffers)
     FileFlush          = 0x2E,
     FileFlushAck       = 0x2F,
+    // hb_vf group 3 - metadata batch.
+    // FileSetAttr: [u16 nameLen][name][u32 attr] -> empty ack
+    //              (bit 0x01 readonly honored; other bits ignored)
+    FileSetAttr        = 0x34,
+    FileSetAttrAck     = 0x35,
+    // FileSetTime: [u16 nameLen][name][u16 year][u8 mon][u8 day]
+    //              [u8 hh][u8 mm][u8 ss] -> empty ack (local time)
+    FileSetTime        = 0x36,
+    FileSetTimeAck     = 0x37,
+    // FileTrunc:   [u32 file_id][u64 size] -> empty ack
+    FileTrunc          = 0x38,
+    FileTruncAck       = 0x39,
+    // FileTemp:    [u16 dirLen][dir][u16 prefixLen][prefix]
+    //              -> [u16 nameLen][name] (created empty, name relative)
+    FileTemp           = 0x3A,
+    FileTempAck        = 0x3B,
+    // DirSpace:    [u16 dirLen][dir][u8 type] -> [u64 bytes]
+    //              type 0 = free available, 1 = total capacity, 2 = free
+    DirSpace           = 0x3C,
+    DirSpaceAck        = 0x1F,  // 0x3D+ is taken; last free slot below 0x20
     ExecuteSQL         = 0x30,
     ExecuteSQLAck      = 0x31,
     Fetch              = 0x32,

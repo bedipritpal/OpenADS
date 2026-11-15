@@ -120,6 +120,23 @@ UNSIGNED32 ENTRYPOINT AdsFWriteAt      (ADSHANDLE  hFile, UNSIGNED64 ullOffset,
                               UNSIGNED32* pulWritten);
 UNSIGNED32 ENTRYPOINT AdsFFlush        (ADSHANDLE  hFile);
 UNSIGNED32 ENTRYPOINT AdsFEof          (ADSHANDLE  hFile, UNSIGNED16* pbEof);
+// hb_vf group 3 - metadata batch.
+UNSIGNED32 ENTRYPOINT AdsSetFileAttr   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              UNSIGNED32 ulAttr);
+UNSIGNED32 ENTRYPOINT AdsSetFileTime   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              UNSIGNED16 usYear, UNSIGNED8 ucMon,
+                              UNSIGNED8 ucDay, UNSIGNED8 ucHour,
+                              UNSIGNED8 ucMin, UNSIGNED8 ucSec);
+UNSIGNED32 ENTRYPOINT AdsFTrunc        (ADSHANDLE  hFile,
+                              UNSIGNED64 ullSize);
+// Creates an empty uniquely named file under pucDir; the name lands in
+// pucName (capacity *pusNameLen in, length out, not NUL-padded).
+UNSIGNED32 ENTRYPOINT AdsTempFile      (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                              UNSIGNED8* pucPrefix, UNSIGNED8* pucName,
+                              UNSIGNED16* pusNameLen);
+// ucType: 0 = free available, 1 = total capacity, 2 = free.
+UNSIGNED32 ENTRYPOINT AdsDirSpace      (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                              UNSIGNED8 ucType, UNSIGNED64* pullBytes);
 UNSIGNED32 ENTRYPOINT AdsGetFileSize   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED32* pulSize);
 UNSIGNED32 ENTRYPOINT AdsGetFileTime   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
@@ -214,6 +231,19 @@ UNSIGNED32 OADSAPI oads_FWriteAt       (ADSHANDLE  hFile, UNSIGNED64 ullOffset,
                                 UNSIGNED32* pulWritten);
 UNSIGNED32 OADSAPI oads_FFlush         (ADSHANDLE  hFile);
 UNSIGNED32 OADSAPI oads_FEof           (ADSHANDLE  hFile, UNSIGNED16* pbEof);
+UNSIGNED32 OADSAPI oads_SetFileAttr    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                                UNSIGNED32 ulAttr);
+UNSIGNED32 OADSAPI oads_SetFileTime    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                                UNSIGNED16 usYear, UNSIGNED8 ucMon,
+                                UNSIGNED8 ucDay, UNSIGNED8 ucHour,
+                                UNSIGNED8 ucMin, UNSIGNED8 ucSec);
+UNSIGNED32 OADSAPI oads_FTrunc         (ADSHANDLE  hFile,
+                                UNSIGNED64 ullSize);
+UNSIGNED32 OADSAPI oads_TempFile       (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                                UNSIGNED8* pucPrefix, UNSIGNED8* pucName,
+                                UNSIGNED16* pusNameLen);
+UNSIGNED32 OADSAPI oads_DirSpace       (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                                UNSIGNED8 ucType, UNSIGNED64* pullBytes);
 UNSIGNED32 OADSAPI oads_GetFileSize    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                                 UNSIGNED32* pulSize);
 UNSIGNED32 OADSAPI oads_GetFileTime    (ADSHANDLE  hConnect, UNSIGNED8* pucName,

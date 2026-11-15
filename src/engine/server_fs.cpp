@@ -4,8 +4,10 @@
 
 #include <chrono>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -214,6 +216,108 @@ util::Result<void> fs_save(const std::string& abs_path,
         return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
                       "write failed", abs_path);
     return {};
+}
+
+util::Result<void> fs_set_attr(const std::string& abs_path,
+                               std::uint32_t attr) {
+    std::error_code ec;
+    if (!fs::exists(fs::path(abs_path), ec) || ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "not found", abs_path);
+    using fs::perms;
+    if (attr & 0x01u) {
+        fs::permissions(abs_path,
+                        perms::owner_write | perms::group_write |
+                            perms::others_write,
+                        fs::perm_options::remove, ec);
+    } else {
+        fs::permissions(abs_path,
+                        perms::owner_write | perms::group_write |
+                            perms::others_write,
+                        fs::perm_options::add, ec);
+    }
+    if (ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_ACCESS_DENIED),
+                      "chmod failed", abs_path);
+    return {};
+}
+
+util::Result<void> fs_set_time(const std::string& abs_path,
+                               std::uint16_t year, std::uint8_t mon,
+                               std::uint8_t day, std::uint8_t hh,
+                               std::uint8_t mm, std::uint8_t ss) {
+    std::error_code ec;
+    if (!fs::exists(fs::path(abs_path), ec) || ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "not found", abs_path);
+    std::tm tmv{};
+    tmv.tm_year = static_cast<int>(year) - 1900;
+    tmv.tm_mon  = static_cast<int>(mon) - 1;
+    tmv.tm_mday = static_cast<int>(day);
+    tmv.tm_hour = static_cast<int>(hh);
+    tmv.tm_min  = static_cast<int>(mm);
+    tmv.tm_sec  = static_cast<int>(ss);
+    tmv.tm_isdst = -1;
+    std::time_t tt = std::mktime(&tmv);
+    if (tt == static_cast<std::time_t>(-1))
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "bad date", abs_path);
+    auto sys = std::chrono::system_clock::from_time_t(tt);
+    // C++17 file_time_type clock is not system_clock on every library:
+    // shift from "now" instead of casting epochs.
+    auto ftime = fs::file_time_type::clock::now() +
+                 (sys - std::chrono::system_clock::now());
+    fs::last_write_time(abs_path, ftime, ec);
+    if (ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_ACCESS_DENIED),
+                      "utime failed", abs_path);
+    return {};
+}
+
+util::Result<void> fs_truncate(const std::string& abs_path,
+                               std::uint64_t size) {
+    std::error_code ec;
+    fs::resize_file(fs::path(abs_path), size, ec);
+    if (ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "truncate failed", abs_path);
+    return {};
+}
+
+util::Result<std::string> fs_tempfile(const std::string& abs_dir,
+                                      const std::string& prefix) {
+    std::error_code ec;
+    if (!fs::is_directory(fs::path(abs_dir), ec) || ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "not a directory", abs_dir);
+    std::string pfx = prefix.empty() ? "oa" : prefix;
+    // Keep the prefix path-safe: one dot and no separators.
+    for (auto& c : pfx)
+        if (c == '/' || c == '\\' || c == ':') c = '_';
+    auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    for (int i = 0; i < 100; ++i) {
+        std::ostringstream name;
+        name << pfx << std::hex << (stamp + i) << ".tmp";
+        fs::path cand = fs::path(abs_dir) / name.str();
+        if (fs::exists(cand, ec)) continue;
+        std::ofstream out(cand, std::ios::binary);
+        if (!out) continue;
+        return name.str();
+    }
+    return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                  "no free temp name", abs_dir);
+}
+
+util::Result<std::uint64_t> fs_dir_space(const std::string& abs_dir,
+                                         std::uint8_t type) {
+    std::error_code ec;
+    auto sp = fs::space(fs::path(abs_dir), ec);
+    if (ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                      "space query failed", abs_dir);
+    if (type == 1) return static_cast<std::uint64_t>(sp.capacity);
+    if (type == 2) return static_cast<std::uint64_t>(sp.free);
+    return static_cast<std::uint64_t>(sp.available);
 }
 
 util::Result<std::uint64_t> fs_size(const std::string& abs_path) {

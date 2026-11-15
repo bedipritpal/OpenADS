@@ -440,6 +440,22 @@ public:
                                           std::uint32_t n);
     util::Result<void>          fflush(std::uint32_t file_id);
     util::Result<bool>          feof(std::uint32_t file_id);
+    // hb_vf group 3 - metadata batch.
+    util::Result<void>          file_set_attr(const std::string& path,
+                                              std::uint32_t attr);
+    util::Result<void>          file_set_time(const std::string& path,
+                                              std::uint16_t year,
+                                              std::uint8_t mon,
+                                              std::uint8_t day,
+                                              std::uint8_t hh,
+                                              std::uint8_t mm,
+                                              std::uint8_t ss);
+    util::Result<void>          ftruncate(std::uint32_t file_id,
+                                          std::uint64_t size);
+    util::Result<std::string>   file_temp(const std::string& dir,
+                                          const std::string& prefix);
+    util::Result<std::uint64_t> dir_space(const std::string& dir,
+                                          std::uint8_t type);
     util::Result<std::uint64_t> file_size(const std::string& path);
     util::Result<openads::engine::DirEntry> file_mtime(
         const std::string& path);

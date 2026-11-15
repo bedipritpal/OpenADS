@@ -41,6 +41,25 @@ util::Result<std::vector<std::uint8_t>> fs_load(const std::string& abs_path);
 util::Result<void>          fs_save(const std::string& abs_path,
                                     const std::uint8_t* data,
                                     std::uint64_t size);
+// attr bit 0x01 = readonly (add or remove write permission); other bits
+// are ignored. Directories keep their execute bits.
+util::Result<void>          fs_set_attr(const std::string& abs_path,
+                                        std::uint32_t attr);
+// Set modification time from local-time components.
+util::Result<void>          fs_set_time(const std::string& abs_path,
+                                        std::uint16_t year,
+                                        std::uint8_t mon, std::uint8_t day,
+                                        std::uint8_t hh, std::uint8_t mm,
+                                        std::uint8_t ss);
+util::Result<void>          fs_truncate(const std::string& abs_path,
+                                        std::uint64_t size);
+// Create an empty uniquely named file under abs_dir whose name starts
+// with prefix; returns the file name (not the full path).
+util::Result<std::string>   fs_tempfile(const std::string& abs_dir,
+                                        const std::string& prefix);
+// type 0 = free available, 1 = total capacity, 2 = free.
+util::Result<std::uint64_t> fs_dir_space(const std::string& abs_dir,
+                                         std::uint8_t type);
 util::Result<std::uint64_t> fs_size(const std::string& abs_path);
 util::Result<DirEntry>      fs_stat_entry(const std::string& abs_path);
 // mask may be "subdir/*.dbf" or "*.txt"; base_dir is the jail-resolved

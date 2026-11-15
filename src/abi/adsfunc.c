@@ -129,6 +129,49 @@ UNSIGNED32 OADSAPI oads_FEof( ADSHANDLE hFile,
     return AdsFEof( hFile, pbEof );
 }
 
+UNSIGNED32 OADSAPI oads_SetFileAttr( ADSHANDLE hConnect,
+                                     UNSIGNED8 *pucName,
+                                     UNSIGNED32 ulAttr )
+{
+    return AdsSetFileAttr( hConnect, pucName, ulAttr );
+}
+
+UNSIGNED32 OADSAPI oads_SetFileTime( ADSHANDLE hConnect,
+                                     UNSIGNED8 *pucName,
+                                     UNSIGNED16 usYear,
+                                     UNSIGNED8 ucMon,
+                                     UNSIGNED8 ucDay,
+                                     UNSIGNED8 ucHour,
+                                     UNSIGNED8 ucMin,
+                                     UNSIGNED8 ucSec )
+{
+    return AdsSetFileTime( hConnect, pucName, usYear, ucMon, ucDay,
+                           ucHour, ucMin, ucSec );
+}
+
+UNSIGNED32 OADSAPI oads_FTrunc( ADSHANDLE hFile,
+                                     UNSIGNED64 ullSize )
+{
+    return AdsFTrunc( hFile, ullSize );
+}
+
+UNSIGNED32 OADSAPI oads_TempFile( ADSHANDLE hConnect,
+                                     UNSIGNED8 *pucDir,
+                                     UNSIGNED8 *pucPrefix,
+                                     UNSIGNED8 *pucName,
+                                     UNSIGNED16 *pusNameLen )
+{
+    return AdsTempFile( hConnect, pucDir, pucPrefix, pucName, pusNameLen );
+}
+
+UNSIGNED32 OADSAPI oads_DirSpace( ADSHANDLE hConnect,
+                                     UNSIGNED8 *pucDir,
+                                     UNSIGNED8 ucType,
+                                     UNSIGNED64 *pullBytes )
+{
+    return AdsDirSpace( hConnect, pucDir, ucType, pullBytes );
+}
+
 UNSIGNED32 OADSAPI oads_GetFileSize( ADSHANDLE hConnect,
                                         UNSIGNED8 *pucName,
                                         UNSIGNED32 *pulSize )

@@ -637,6 +637,88 @@ TEST_CASE( "oads_* local: Load Save ReadAt WriteAt Flush Eof" )
     fs::remove_all( dir, ec );
 }
 
+TEST_CASE( "oads_* local: SetAttr SetTime FTrunc TempFile DirSpace" )
+{
+    auto dir = fs::temp_directory_path() / "oads_file_g3";
+    std::error_code ec;
+    fs::remove_all( dir, ec );
+    fs::create_directories( dir );
+
+    ADSHANDLE h = local_connect( dir );
+
+    REQUIRE( oads_SaveFile( h, (UNSIGNED8*)"m.txt", "0123456789", 10 ) == 0 );
+
+    // SetFileAttr: read-only clears write bits, clearing restores them
+    auto p = dir / "m.txt";
+    REQUIRE( oads_SetFileAttr( h, (UNSIGNED8*)"m.txt", 1 ) == 0 );
+    CHECK( ( fs::status( p ).permissions() & fs::perms::owner_write ) ==
+           fs::perms::none );
+    REQUIRE( oads_SetFileAttr( h, (UNSIGNED8*)"m.txt", 0 ) == 0 );
+    CHECK( ( fs::status( p ).permissions() & fs::perms::owner_write ) !=
+           fs::perms::none );
+    CHECK( oads_SetFileAttr( h, (UNSIGNED8*)"gone.txt", 1 ) != 0 );
+
+    // SetFileTime: round-trip via GetFileDate/GetFileTime
+    REQUIRE( oads_SetFileTime( h, (UNSIGNED8*)"m.txt",
+                               2021, 3, 4, 5, 6, 7 ) == 0 );
+    UNSIGNED8 aucDate[32] = {};
+    UNSIGNED16 usLen = sizeof( aucDate );
+    REQUIRE( oads_GetFileDate( h, (UNSIGNED8*)"m.txt", aucDate, &usLen ) == 0 );
+    CHECK( std::string( (char*) aucDate, usLen ) == "03/04/21" );
+    UNSIGNED8 aucTime[32] = {};
+    usLen = sizeof( aucTime );
+    REQUIRE( oads_GetFileTime( h, (UNSIGNED8*)"m.txt", aucTime, &usLen ) == 0 );
+    CHECK( std::string( (char*) aucTime, usLen ).substr( 0, 5 ) == "05:06" );
+
+    // FTrunc shrinks, then grows (new bytes read as zero or stale -
+    // only the size is contracted here)
+    ADSHANDLE hf = 0;
+    REQUIRE( oads_FCreate( h, (UNSIGNED8*)"t.txt", 0, &hf ) == 0 );
+    UNSIGNED32 nw = 0;
+    REQUIRE( oads_FWrite( hf, "0123456789", 10, &nw ) == 0 );
+    REQUIRE( oads_FTrunc( hf, 4 ) == 0 );
+    UNSIGNED32 ulSize = 0;
+    REQUIRE( oads_GetFileSize( h, (UNSIGNED8*)"t.txt", &ulSize ) == 0 );
+    CHECK( ulSize == 4 );
+    char buf[16] = {};
+    UNSIGNED32 nr = 0;
+    REQUIRE( oads_FReadAt( hf, 0, buf, 4, &nr ) == 0 );
+    CHECK( nr == 4 );
+    CHECK( std::string( buf, nr ) == "0123" );
+    REQUIRE( oads_FTrunc( hf, 6 ) == 0 );
+    ulSize = 0;
+    REQUIRE( oads_GetFileSize( h, (UNSIGNED8*)"t.txt", &ulSize ) == 0 );
+    CHECK( ulSize == 6 );
+    oads_FClose( hf );
+    CHECK( oads_FTrunc( hf, 4 ) != 0 );  // closed handle fails
+
+    // TempFile: unique names that exist, under the jail root
+    char t1[4096] = {};
+    UNSIGNED16 t1len = sizeof( t1 );
+    REQUIRE( oads_TempFile( h, (UNSIGNED8*)"", (UNSIGNED8*)"tmp",
+                            (UNSIGNED8*)t1, &t1len ) == 0 );
+    CHECK( t1len > 0 );
+    CHECK( fs::exists( std::string( t1, t1len ) ) );
+    CHECK( std::string( t1, t1len ).find( "tmp" ) != std::string::npos );
+    char t2[4096] = {};
+    UNSIGNED16 t2len = sizeof( t2 );
+    REQUIRE( oads_TempFile( h, (UNSIGNED8*)"", (UNSIGNED8*)"tmp",
+                            (UNSIGNED8*)t2, &t2len ) == 0 );
+    CHECK( std::string( t2, t2len ) != std::string( t1, t1len ) );
+
+    // DirSpace: capacity positive, available/free no more than capacity
+    UNSIGNED64 ullCap = 0, ullAvail = 0, ullFree = 0;
+    REQUIRE( oads_DirSpace( h, (UNSIGNED8*)"", 1, &ullCap ) == 0 );
+    REQUIRE( oads_DirSpace( h, (UNSIGNED8*)"", 0, &ullAvail ) == 0 );
+    REQUIRE( oads_DirSpace( h, (UNSIGNED8*)"", 2, &ullFree ) == 0 );
+    CHECK( ullCap > 0 );
+    CHECK( ullAvail <= ullCap );
+    CHECK( ullFree <= ullCap );
+
+    REQUIRE( AdsDisconnect( h ) == 0 );
+    fs::remove_all( dir, ec );
+}
+
 TEST_CASE( "oads_* local: GetFileSize returns correct size" )
 {
     auto dir = fs::temp_directory_path() / "oads_file_size";

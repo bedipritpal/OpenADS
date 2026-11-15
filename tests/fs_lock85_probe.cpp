@@ -37,6 +37,11 @@ int main(int argc, char** argv) {
     auto child = [&](const char* kind, const char* expected) {
         std::string cmd = "\"" + fs::absolute(argv[0]).string() + "\" child \"" +
                           path.string() + "\" " + kind + " " + expected;
+#if defined(_WIN32)
+        // cmd.exe removes the first/last quote when the executable path
+        // starts quoted. Protect the complete command with an outer pair.
+        cmd = "\"" + cmd + "\"";
+#endif
         return std::system(cmd.c_str()) == 0;
     };
     auto locked = fs_lock_step(*f.value(),0,16,0,0);

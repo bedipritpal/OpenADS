@@ -11680,6 +11680,56 @@ UNSIGNED32 ENTRYPOINT AdsSetFileTime(ADSHANDLE hConn, UNSIGNED8* pucName,
     return ok();
 }
 
+// Each invocation makes one non-blocking attempt. Never sleep while holding
+// the ABI registry mutex or the per-file/connection mutex.
+extern "C++" {
+static openads::util::Result<bool> oads_fs_lock_once(ADSHANDLE hFile,
+        UNSIGNED64 start, UNSIGNED64 len, UNSIGNED16 type, std::uint8_t op) {
+    auto& s = state();
+    std::unique_lock<std::recursive_mutex> lk(s.mu);
+    if (auto it = remote_files_map().find(hFile); it != remote_files_map().end()) {
+        auto rf = it->second;
+        lk.unlock();
+        std::lock_guard<std::mutex> file_lk(rf->mu);
+        if (rf->closed) return openads::util::Error{5000, 0, "closed file", ""};
+        return rf->conn->file_lock_step(rf->file_id, start, len, type, op);
+    }
+    if (auto* lf = s.registry.lookup<openads::engine::FsFile>(
+            hFile, openads::session::HandleKind::LocalFile))
+        return openads::engine::fs_lock_step(*lf, start, len, type, op);
+    return openads::util::Error{5000, 0, "bad file handle", ""};
+}
+}
+
+UNSIGNED32 ENTRYPOINT AdsFLock(ADSHANDLE hFile, UNSIGNED64 ullStart,
+                               UNSIGNED64 ullLen, UNSIGNED16 usType) {
+    openads::abi::wire_caller::Entry wire_entry("AdsFLock", cli_trace_on());
+    for (;;) {
+        auto v = oads_fs_lock_once(hFile, ullStart, ullLen, usType, 0);
+        if (!v) return fail(v.error());
+        if (v.value()) return ok();
+        if ((usType & 0x0200u) == 0) return fail(5012, "file lock busy");
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+UNSIGNED32 ENTRYPOINT AdsFUnlock(ADSHANDLE hFile, UNSIGNED64 ullStart,
+                                 UNSIGNED64 ullLen) {
+    openads::abi::wire_caller::Entry wire_entry("AdsFUnlock", cli_trace_on());
+    auto v = oads_fs_lock_once(hFile, ullStart, ullLen, 0, 1);
+    if (!v) return fail(v.error());
+    return ok();
+}
+UNSIGNED32 ENTRYPOINT AdsFLockTest(ADSHANDLE hFile, UNSIGNED64 ullStart,
+             UNSIGNED64 ullLen, UNSIGNED16 usType, SIGNED32* plResult) {
+    openads::abi::wire_caller::Entry wire_entry("AdsFLockTest", cli_trace_on());
+    if (!plResult) return fail(5000, "null lock-test result");
+    *plResult = -1;
+    auto v = oads_fs_lock_once(hFile, ullStart, ullLen, usType, 2);
+    if (!v) return fail(v.error());
+    *plResult = v.value() ? 1 : 0;
+    return ok();
+}
+
 UNSIGNED32 ENTRYPOINT AdsFTrunc(ADSHANDLE hFile, UNSIGNED64 ullSize) {
     openads::abi::wire_caller::Entry wire_entry("AdsFTrunc", cli_trace_on());
     arc2_trace("AdsFTrunc");

@@ -1864,3 +1864,7 @@ HB_FUNC( OADS_COMPLETEAUTH ) {
 HB_FUNC( OADS_CANCELAUTH ) {
     hb_retl(OAdsCancelAuth((ADSHANDLE)hb_parnint(1))==0);
 }
+
+/* Compatibility spelling used by Vouch's current copy call. Same tested
+ * connection overloads and logical result as OADS_COPYFILE; no new behavior. */
+HB_FUNC_TRANSLATE( OADS_FCOPYFILE, OADS_COPYFILE )

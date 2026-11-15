@@ -1,0 +1,28 @@
+CopyFile TCP repair - mtfix86
+Pritpal Bedi
+2026-11-15 17:12
+
+One cumulative kit on top of mtfix85. No RDD changes.
+
+The TCP streaming reader had a separate opcode list that omitted the file
+calls added in mtfix82 to mtfix85. It rejected them before the file handler.
+The list now accepts those calls. A regression compares both decoders for
+all 256 opcode values, so another file addition cannot silently miss it.
+
+OAds_CopyFile(hConn,cSource,cTarget) -> logical remains unchanged.
+OAds_CopyFile(cSource,cTarget) uses OAds_SetConnection's default as before.
+OAds_FCopyFile has been added as an alias with the same arguments/result.
+This is the name used by Vouch's current copy call. It does not change the
+Harbour hb_vfCopyFile signature or claim full hb_vf coverage.
+
+The socket test uses a real server and client. It checks both spellings,
+explicit/default connection, overwrite, binary content, missing source and
+jail-escape denial. It does not bypass the TCP streaming reader.
+
+Use the mtfix86-full-qt492-x86.zip MinGW kit. Relink Vouch with its
+librddads.a, and run its matching 64-bit server with EnableFileFunc=1.
+Keep the existing INI, auth files and data. Keep mtfix85 for rollback.
+No automatic deployment or upstream changes.
+
+The full exact OAds_vf family is separate unfinished work for the next
+cumulative kit. Existing OAds_F* signatures are not being replaced.

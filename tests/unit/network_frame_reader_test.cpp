@@ -126,3 +126,14 @@ TEST_CASE("hardened FrameReader admits auth handshake opcodes") {
         CHECK(result.value()[0].opcode == op);
     }
 }
+
+TEST_CASE("FrameReader recognizes every opcode accepted by decode_frame") {
+    for (unsigned op=0;op<256;++op) {
+        const auto bytes=frame_bytes(static_cast<Opcode>(op),{});
+        const auto decoded=openads::network::decode_frame(bytes.data(),bytes.size());
+        FrameReader reader;
+        const auto streamed=reader.feed(bytes.data(),bytes.size());
+        INFO("opcode=",op);
+        CHECK(static_cast<bool>(streamed)==static_cast<bool>(decoded));
+    }
+}

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -152,8 +153,19 @@ util::Result<void> fs_copy(const std::string& abs_src,
     if (!ec && same)
         return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
                       "source and target are the same file", abs_src);
-    if (!fs::copy_file(abs_src, abs_dst,
-                       fs::copy_options::overwrite_existing, ec) || ec)
+    // Plain stream copy: MinGW's fs::copy_file is unreliable when the
+    // target already exists, and truncate-on-open is the wanted overwrite.
+    std::ifstream in(abs_src, std::ios::binary);
+    if (!in)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "open source failed", abs_src);
+    std::ofstream out(abs_dst, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "open target failed", abs_dst);
+    out << in.rdbuf();
+    out.flush();
+    if (!out || in.bad())
         return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
                       "copy failed", abs_src);
     return {};

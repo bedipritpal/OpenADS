@@ -11416,6 +11416,31 @@ UNSIGNED32 ENTRYPOINT AdsRenameFile(ADSHANDLE hConn, UNSIGNED8* pucOld,
     return ok();
 }
 
+UNSIGNED32 ENTRYPOINT AdsCopyFile(ADSHANDLE hConn, UNSIGNED8* pucSrc,
+                                  UNSIGNED8* pucDst) {
+    openads::abi::wire_caller::Entry wire_entry("AdsCopyFile", cli_trace_on());
+    arc2_trace("AdsCopyFile");
+    if (!pucSrc || !pucDst)
+        return fail(openads::AE_INTERNAL_ERROR, "null name");
+    auto s = openads::abi::to_internal(pucSrc, 0);
+    auto d = openads::abi::to_internal(pucDst, 0);
+    auto ctx = resolve_fs_conn(hConn);
+    if (ctx.remote) {
+        remote_flush_pools(ctx.remote);
+        remote_invalidate_index_parks(ctx.remote);
+        auto r = ctx.remote->file_copy(s, d);
+        if (!r) return fail(r.error());
+        return ok();
+    }
+    if (!ctx.local) return fail(openads::AE_INVALID_CONNECTION_HANDLE, "");
+    auto a = jail_local(ctx, s);
+    auto b = jail_local(ctx, d);
+    if (!a || !b) return fail(openads::AE_ACCESS_DENIED, "path");
+    auto r = openads::engine::fs_copy(*a, *b);
+    if (!r) return fail(r.error());
+    return ok();
+}
+
 UNSIGNED32 ENTRYPOINT AdsGetFileSize(ADSHANDLE hConn, UNSIGNED8* pucName,
                                      UNSIGNED32* pulSize) {
     openads::abi::wire_caller::Entry wire_entry("AdsGetFileSize", cli_trace_on());

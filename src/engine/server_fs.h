@@ -30,6 +30,8 @@ util::Result<bool>          fs_exists(const std::string& abs_path);
 util::Result<void>          fs_erase(const std::string& abs_path);
 util::Result<void>          fs_rename(const std::string& abs_old,
                                       const std::string& abs_new);
+util::Result<void>          fs_copy(const std::string& abs_src,
+                                    const std::string& abs_dst);
 util::Result<std::uint64_t> fs_size(const std::string& abs_path);
 util::Result<DirEntry>      fs_stat_entry(const std::string& abs_path);
 // mask may be "subdir/*.dbf" or "*.txt"; base_dir is the jail-resolved

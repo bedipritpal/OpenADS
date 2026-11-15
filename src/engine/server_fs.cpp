@@ -142,6 +142,23 @@ util::Result<void> fs_rename(const std::string& abs_old,
     return {};
 }
 
+util::Result<void> fs_copy(const std::string& abs_src,
+                           const std::string& abs_dst) {
+    std::error_code ec;
+    if (!fs::is_regular_file(abs_src, ec) || ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_NO_FILE_FOUND),
+                     "file not found", abs_src);
+    bool same = fs::equivalent(abs_src, abs_dst, ec);
+    if (!ec && same)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "source and target are the same file", abs_src);
+    if (!fs::copy_file(abs_src, abs_dst,
+                       fs::copy_options::overwrite_existing, ec) || ec)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "copy failed", abs_src);
+    return {};
+}
+
 util::Result<std::uint64_t> fs_size(const std::string& abs_path) {
     std::error_code ec;
     if (!fs::is_regular_file(abs_path, ec) || ec)

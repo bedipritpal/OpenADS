@@ -103,6 +103,8 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE  hConnect, UNSIGNED8* pucName,
 UNSIGNED32 ENTRYPOINT AdsDeleteFile    (ADSHANDLE  hConnect, UNSIGNED8* pucName);
 UNSIGNED32 ENTRYPOINT AdsRenameFile    (ADSHANDLE  hConnect, UNSIGNED8* pucOld,
                               UNSIGNED8* pucNew);
+UNSIGNED32 ENTRYPOINT AdsCopyFile      (ADSHANDLE  hConnect, UNSIGNED8* pucSrc,
+                              UNSIGNED8* pucDst);
 UNSIGNED32 ENTRYPOINT AdsGetFileSize   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED32* pulSize);
 UNSIGNED32 ENTRYPOINT AdsGetFileTime   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
@@ -183,6 +185,8 @@ UNSIGNED32 OADSAPI oads_CheckExistence (ADSHANDLE  hConnect, UNSIGNED8* pucName,
 UNSIGNED32 OADSAPI oads_DeleteFile     (ADSHANDLE  hConnect, UNSIGNED8* pucName);
 UNSIGNED32 OADSAPI oads_RenameFile     (ADSHANDLE  hConnect, UNSIGNED8* pucOld,
                                 UNSIGNED8* pucNew);
+UNSIGNED32 OADSAPI oads_CopyFile       (ADSHANDLE  hConnect, UNSIGNED8* pucSrc,
+                                UNSIGNED8* pucDst);
 UNSIGNED32 OADSAPI oads_GetFileSize    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                                 UNSIGNED32* pulSize);
 UNSIGNED32 OADSAPI oads_GetFileTime    (ADSHANDLE  hConnect, UNSIGNED8* pucName,

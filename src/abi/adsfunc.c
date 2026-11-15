@@ -77,6 +77,13 @@ UNSIGNED32 OADSAPI oads_RenameFile( ADSHANDLE hConnect,
     return AdsRenameFile( hConnect, pucOld, pucNew );
 }
 
+UNSIGNED32 OADSAPI oads_CopyFile( ADSHANDLE hConnect,
+                                     UNSIGNED8 *pucSrc,
+                                     UNSIGNED8 *pucDst )
+{
+    return AdsCopyFile( hConnect, pucSrc, pucDst );
+}
+
 UNSIGNED32 OADSAPI oads_GetFileSize( ADSHANDLE hConnect,
                                         UNSIGNED8 *pucName,
                                         UNSIGNED32 *pulSize )

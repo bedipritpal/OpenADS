@@ -1740,6 +1740,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             case Opcode::CreateIndex: case Opcode::Reindex:
             case Opcode::PackTable: case Opcode::ZapTable:
             case Opcode::FileExists: case Opcode::FileErase: case Opcode::FileRename:
+            case Opcode::FileCopy:
             case Opcode::FileSize: case Opcode::FileMTime: case Opcode::Directory:
             case Opcode::DirExist: case Opcode::DirMake: case Opcode::DirRemove:
             case Opcode::FOpen: case Opcode::FCreate: case Opcode::FClose:
@@ -4286,6 +4287,7 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FileExists:
         case Opcode::FileErase:
         case Opcode::FileRename:
+        case Opcode::FileCopy:
         case Opcode::FileSize:
         case Opcode::FileMTime:
         case Opcode::Directory:
@@ -4359,6 +4361,23 @@ DispatchResult Session::dispatch(const Frame& f) {
                     break;
                 }
                 reply.opcode = Opcode::FileRenameAck;
+            } else if (f.opcode == Opcode::FileCopy) {
+                std::size_t pos = 0;
+                std::string src_p, dst_p;
+                if (!read_lstr16(f.payload, pos, src_p) ||
+                    !read_lstr16(f.payload, pos, dst_p)) {
+                    reply = err("FileCopy: short payload"); break;
+                }
+                auto a = resolve_fs_client_path(src_p);
+                auto b = resolve_fs_client_path(dst_p);
+                if (!a || !b) { deny_path(src_p); break; }
+                auto r = openads::engine::fs_copy(*a, *b);
+                if (!r) {
+                    reply = err("FileCopy",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileCopyAck;
             } else if (f.opcode == Opcode::FileSize) {
                 std::size_t pos = 0;
                 std::string path;

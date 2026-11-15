@@ -210,6 +210,8 @@ bool valid_opcode(std::uint8_t opcode) noexcept {
         case static_cast<std::uint8_t>(Opcode::FileEraseAck):
         case static_cast<std::uint8_t>(Opcode::FileRename):
         case static_cast<std::uint8_t>(Opcode::FileRenameAck):
+        case static_cast<std::uint8_t>(Opcode::FileCopy):
+        case static_cast<std::uint8_t>(Opcode::FileCopyAck):
         case static_cast<std::uint8_t>(Opcode::FileSize):
         case static_cast<std::uint8_t>(Opcode::FileSizeAck):
         case static_cast<std::uint8_t>(Opcode::FileMTime):

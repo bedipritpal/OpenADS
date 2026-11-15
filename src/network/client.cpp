@@ -2964,6 +2964,20 @@ RemoteConnection::file_rename(const std::string& old_p,
     return {};
 }
 
+util::Result<void>
+RemoteConnection::file_copy(const std::string& src_p,
+                            const std::string& dst_p) {
+    Frame req;
+    req.opcode = Opcode::FileCopy;
+    push_lp_str(req.payload, src_p);
+    push_lp_str(req.payload, dst_p);
+    auto rep = request(req);
+    if (!rep) return rep.error();
+    if (rep.value().opcode != Opcode::FileCopyAck)
+        return fs_wire_err(rep.value(), "FileCopy");
+    return {};
+}
+
 util::Result<std::uint64_t>
 RemoteConnection::file_size(const std::string& path) {
     Frame req;

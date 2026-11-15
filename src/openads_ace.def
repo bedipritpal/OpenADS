@@ -120,6 +120,7 @@ EXPORTS
     AdsCacheRecords
     AdsCheckExistence
     AdsRenameFile
+    AdsCopyFile
     AdsGetFileSize
     AdsGetFileTime
     AdsGetFileDate
@@ -145,6 +146,7 @@ EXPORTS
     oads_CheckExistence
     oads_DeleteFile
     oads_RenameFile
+    oads_CopyFile
     oads_GetFileSize
     oads_GetFileTime
     oads_GetFileDate

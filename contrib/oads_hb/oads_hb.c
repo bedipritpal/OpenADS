@@ -479,6 +479,37 @@ HB_FUNC( OADS_RENAMEFILE )
 }
 
 /* ------------------------------------------------------------------ */
+/*  OADS_CopyFile( hConn, cSrcFile, cTgtFile ) -> lOk                 */
+/*  OADS_CopyFile( cSrcFile, cTgtFile )        -> lOk (default conn)  */
+/*  Server-side copy; overwrites the target if it exists.            */
+/* ------------------------------------------------------------------ */
+HB_FUNC( OADS_COPYFILE )
+{
+    ADSHANDLE  hConn;
+    const char *szSrc;
+    const char *szDst;
+    UNSIGNED32 ulRc   = 1;
+
+    if( hb_pcount() >= 3 )
+    {
+        hConn = ( ADSHANDLE ) hb_parnint( 1 );
+        szSrc = hb_parc( 2 );
+        szDst = hb_parc( 3 );
+    }
+    else
+    {
+        hConn = oads_default_connection();
+        szSrc = hb_parc( 1 );
+        szDst = hb_parc( 2 );
+    }
+
+    if( szSrc && szDst )
+        ulRc = oads_CopyFile( hConn, ( UNSIGNED8 * ) szSrc,
+                                     ( UNSIGNED8 * ) szDst );
+    hb_retl( ulRc == 0 );
+}
+
+/* ------------------------------------------------------------------ */
 /*  OADS_GetFileSize( hConn, cName ) -> nSize                         */
 /*  OADS_GetFileSize( cName )          -> nSize (default conn)        */
 /* ------------------------------------------------------------------ */

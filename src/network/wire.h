@@ -34,6 +34,10 @@ enum class Opcode : std::uint8_t {
     OpenTableAck       = 0x21,
     CloseTable         = 0x22,
     CloseTableAck      = 0x23,
+    // FileCopy: [u16 srcLen][src][u16 dstLen][dst] → empty ack
+    // Server-filesystem family (0xE0+) is full, so copy lives here.
+    FileCopy           = 0x24,
+    FileCopyAck        = 0x25,
     ExecuteSQL         = 0x30,
     ExecuteSQLAck      = 0x31,
     Fetch              = 0x32,

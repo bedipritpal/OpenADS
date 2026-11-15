@@ -422,6 +422,8 @@ public:
     util::Result<void>          file_erase(const std::string& path);
     util::Result<void>          file_rename(const std::string& old_p,
                                             const std::string& new_p);
+    util::Result<void>          file_copy(const std::string& src_p,
+                                          const std::string& dst_p);
     util::Result<std::uint64_t> file_size(const std::string& path);
     util::Result<openads::engine::DirEntry> file_mtime(
         const std::string& path);

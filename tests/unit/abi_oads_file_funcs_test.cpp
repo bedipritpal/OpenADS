@@ -2,7 +2,7 @@
 //
 // Exercises ALL 16 oads_*() C functions (the legacy filesystem aliases):
 //   oads_FOpen, oads_FCreate, oads_FClose, oads_FRead, oads_FWrite, oads_FSeek,
-//   oads_CheckExistence, oads_DeleteFile, oads_RenameFile,
+//   oads_CheckExistence, oads_DeleteFile, oads_RenameFile, oads_CopyFile,
 //   oads_GetFileSize, oads_GetFileDate, oads_GetFileTime,
 //   oads_DirMake, oads_DirRemove, oads_DirExist, oads_Directory
 //
@@ -486,6 +486,62 @@ TEST_CASE( "oads_* local: RenameFile renames a file" )
     CHECK( nr == 4 );
     CHECK( std::string( buf, nr ) == "data" );
     oads_FClose( hf2 );
+
+    REQUIRE( AdsDisconnect( h ) == 0 );
+    fs::remove_all( dir, ec );
+}
+
+TEST_CASE( "oads_* local: CopyFile copies a file" )
+{
+    auto dir = fs::temp_directory_path() / "oads_file_copy";
+    std::error_code ec;
+    fs::remove_all( dir, ec );
+    fs::create_directories( dir );
+
+    ADSHANDLE h = local_connect( dir );
+    ADSHANDLE hf = 0;
+
+    // create source
+    REQUIRE( oads_FCreate( h, (UNSIGNED8*)"src.txt", 0, &hf ) == 0 );
+    UNSIGNED32 nw = 0;
+    oads_FWrite( hf, "data", 4, &nw );
+    oads_FClose( hf );
+
+    // copy
+    REQUIRE( oads_CopyFile( h, (UNSIGNED8*)"src.txt",
+                                  (UNSIGNED8*)"dst.txt" ) == 0 );
+
+    // source still exists
+    UNSIGNED16 usExists = 0;
+    REQUIRE( oads_CheckExistence( h, (UNSIGNED8*)"src.txt", &usExists ) == 0 );
+    CHECK( usExists == 1 );
+
+    // target exists with same content
+    usExists = 0;
+    REQUIRE( oads_CheckExistence( h, (UNSIGNED8*)"dst.txt", &usExists ) == 0 );
+    CHECK( usExists == 1 );
+    ADSHANDLE hf2 = 0;
+    REQUIRE( oads_FOpen( h, (UNSIGNED8*)"dst.txt", ADS_READONLY, &hf2 ) == 0 );
+    char buf[16] = {};
+    UNSIGNED32 nr = 0;
+    oads_FRead( hf2, buf, sizeof( buf ), &nr );
+    CHECK( nr == 4 );
+    CHECK( std::string( buf, nr ) == "data" );
+    oads_FClose( hf2 );
+
+    // overwrite: shorter content replaces, not appends
+    REQUIRE( oads_FCreate( h, (UNSIGNED8*)"src2.txt", 0, &hf ) == 0 );
+    oads_FWrite( hf, "xy", 2, &nw );
+    oads_FClose( hf );
+    REQUIRE( oads_CopyFile( h, (UNSIGNED8*)"src2.txt",
+                                  (UNSIGNED8*)"dst.txt" ) == 0 );
+    UNSIGNED32 ulSize = 0;
+    REQUIRE( oads_GetFileSize( h, (UNSIGNED8*)"dst.txt", &ulSize ) == 0 );
+    CHECK( ulSize == 2 );
+
+    // missing source fails
+    CHECK( oads_CopyFile( h, (UNSIGNED8*)"gone.txt",
+                                (UNSIGNED8*)"dst2.txt" ) != 0 );
 
     REQUIRE( AdsDisconnect( h ) == 0 );
     fs::remove_all( dir, ec );

@@ -721,11 +721,16 @@ HB_FUNC( OADS_SETFILETIME )
         szTime = hb_parc( 3 );
     }
 
-    if( szName && lDate > 0 && hb_dateDecode( lDate, &iYear, &iMonth,
-                                              &iDay ) )
+    if( szName && lDate > 0 )
     {
-        if( szTime )
-            sscanf( szTime, "%d:%d:%d", &iHour, &iMin, &iSec );
+        hb_dateDecode( lDate, &iYear, &iMonth, &iDay );
+        if( szTime && ( sscanf( szTime, "%d:%d:%d", &iHour, &iMin, &iSec ) != 3 ||
+                       iHour < 0 || iHour > 23 || iMin < 0 || iMin > 59 ||
+                       iSec < 0 || iSec > 59 ) )
+        {
+            hb_retl( HB_FALSE );
+            return;
+        }
         hb_retl( oads_SetFileTime( hConn, ( UNSIGNED8 * ) szName,
                                    ( UNSIGNED16 ) iYear,
                                    ( UNSIGNED8 ) iMonth,
@@ -746,14 +751,15 @@ HB_FUNC( OADS_FTRUNC )
     ADSHANDLE hFile = ( ADSHANDLE ) hb_parnint( 1 );
     UNSIGNED64 ullSize = ( UNSIGNED64 ) hb_parnint( 2 );
 
-    hb_retl( hFile && oads_FTrunc( hFile, ullSize ) == 0 );
+    hb_retl( hFile && hb_parnint( 2 ) >= 0 &&
+             oads_FTrunc( hFile, ullSize ) == 0 );
 }
 
 /* ------------------------------------------------------------------ */
 /*  OADS_TempFile( hConn, cDir, cPrefix ) -> cName                    */
 /*  OADS_TempFile( cDir, cPrefix )        -> cName (default conn)     */
 /*  Creates an empty file with a unique name under cDir and returns   */
-/*  its full path, or "" on failure.                                  */
+/*  its jail-relative path, or "" on failure.                                  */
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_TEMPFILE )
 {
@@ -781,7 +787,7 @@ HB_FUNC( OADS_TEMPFILE )
         oads_TempFile( hConn, ( UNSIGNED8 * ) szDir,
                        ( UNSIGNED8 * ) szPrefix,
                        ( UNSIGNED8 * ) szName, &usLen ) == 0 )
-        hb_retc( szName );
+        hb_retclen( szName, usLen );
     else
         hb_retc( "" );
 }

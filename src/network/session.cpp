@@ -4482,6 +4482,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                     !read_lstr16(f.payload, pos, prefix)) {
                     reply = err("FileTemp: short payload"); break;
                 }
+                if (dir.empty()) dir = ".";
                 auto abs = resolve_fs_client_path(dir);
                 if (!abs) { deny_path(dir); break; }
                 auto name = openads::engine::fs_tempfile(*abs, prefix);
@@ -4491,7 +4492,10 @@ DispatchResult Session::dispatch(const Frame& f) {
                     break;
                 }
                 reply.opcode = Opcode::FileTempAck;
-                write_lstr16(name.value(), reply.payload);
+                auto client_name = (std::filesystem::path(
+                    openads::platform::fold_absolute_to_relative(dir)) /
+                    std::filesystem::path(name.value()).filename()).generic_string();
+                write_lstr16(client_name, reply.payload);
             } else if (f.opcode == Opcode::DirSpace) {
                 std::size_t pos = 0;
                 std::string dir;
@@ -4500,6 +4504,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                     reply = err("DirSpace: short payload"); break;
                 }
                 std::uint8_t type = f.payload[pos];
+                if (dir.empty()) dir = ".";
                 auto abs = resolve_fs_client_path(dir);
                 if (!abs) { deny_path(dir); break; }
                 auto bytes = openads::engine::fs_dir_space(*abs, type);
@@ -4857,8 +4862,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                                 openads::AE_INTERNAL_ERROR);
                     break;
                 }
-                auto r = openads::engine::fs_truncate(it->second->path,
-                                                      size);
+                auto r = openads::engine::fs_truncate(*it->second, size);
                 if (!r) {
                     reply = err("FileTrunc",
                                 static_cast<UNSIGNED32>(r.error().code));

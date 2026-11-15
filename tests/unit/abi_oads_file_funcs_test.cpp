@@ -637,15 +637,8 @@ TEST_CASE( "oads_* local: Load Save ReadAt WriteAt Flush Eof" )
     fs::remove_all( dir, ec );
 }
 
-TEST_CASE( "oads_* local: SetAttr SetTime FTrunc TempFile DirSpace" )
+static void metadata_round_trip( ADSHANDLE h, const fs::path& dir )
 {
-    auto dir = fs::temp_directory_path() / "oads_file_g3";
-    std::error_code ec;
-    fs::remove_all( dir, ec );
-    fs::create_directories( dir );
-
-    ADSHANDLE h = local_connect( dir );
-
     REQUIRE( oads_SaveFile( h, (UNSIGNED8*)"m.txt", "0123456789", 10 ) == 0 );
 
     // SetFileAttr: read-only clears write bits, clearing restores them
@@ -664,14 +657,13 @@ TEST_CASE( "oads_* local: SetAttr SetTime FTrunc TempFile DirSpace" )
     UNSIGNED8 aucDate[32] = {};
     UNSIGNED16 usLen = sizeof( aucDate );
     REQUIRE( oads_GetFileDate( h, (UNSIGNED8*)"m.txt", aucDate, &usLen ) == 0 );
-    CHECK( std::string( (char*) aucDate, usLen ) == "03/04/21" );
+    CHECK( std::string( (char*) aucDate, usLen ) == "20210304" );
     UNSIGNED8 aucTime[32] = {};
     usLen = sizeof( aucTime );
     REQUIRE( oads_GetFileTime( h, (UNSIGNED8*)"m.txt", aucTime, &usLen ) == 0 );
     CHECK( std::string( (char*) aucTime, usLen ).substr( 0, 5 ) == "05:06" );
 
-    // FTrunc shrinks, then grows (new bytes read as zero or stale -
-    // only the size is contracted here)
+    // FTrunc shrinks, then grows while preserving the prefix.
     ADSHANDLE hf = 0;
     REQUIRE( oads_FCreate( h, (UNSIGNED8*)"t.txt", 0, &hf ) == 0 );
     UNSIGNED32 nw = 0;
@@ -698,7 +690,11 @@ TEST_CASE( "oads_* local: SetAttr SetTime FTrunc TempFile DirSpace" )
     REQUIRE( oads_TempFile( h, (UNSIGNED8*)"", (UNSIGNED8*)"tmp",
                             (UNSIGNED8*)t1, &t1len ) == 0 );
     CHECK( t1len > 0 );
-    CHECK( fs::exists( std::string( t1, t1len ) ) );
+    ADSHANDLE ht = 0;
+    REQUIRE( oads_FOpen( h, (UNSIGNED8*)t1, ADS_READONLY, &ht ) == 0 );
+    CHECK( oads_FTrunc( ht, 10 ) != 0 );
+    REQUIRE( oads_FClose( ht ) == 0 );
+    CHECK( fs::exists( dir / std::string( t1, t1len ) ) );
     CHECK( std::string( t1, t1len ).find( "tmp" ) != std::string::npos );
     char t2[4096] = {};
     UNSIGNED16 t2len = sizeof( t2 );
@@ -714,6 +710,24 @@ TEST_CASE( "oads_* local: SetAttr SetTime FTrunc TempFile DirSpace" )
     CHECK( ullCap > 0 );
     CHECK( ullAvail <= ullCap );
     CHECK( ullFree <= ullCap );
+
+    CHECK( oads_SetFileAttr( h, (UNSIGNED8*)"../outside.txt", 1 ) != 0 );
+    CHECK( oads_SetFileTime( h, (UNSIGNED8*)"../outside.txt", 2021, 3, 4, 5, 6, 7 ) != 0 );
+    UNSIGNED16 deniedLen = sizeof( t1 );
+    CHECK( oads_TempFile( h, (UNSIGNED8*)"..", (UNSIGNED8*)"deny", (UNSIGNED8*)t1, &deniedLen ) != 0 );
+    CHECK( oads_DirSpace( h, (UNSIGNED8*)"..", 0, &ullAvail ) != 0 );
+}
+
+TEST_CASE( "oads_* local: SetAttr SetTime FTrunc TempFile DirSpace" )
+{
+    auto dir = fs::temp_directory_path() / "oads_file_g3";
+    std::error_code ec;
+    fs::remove_all( dir, ec );
+    fs::create_directories( dir );
+
+    ADSHANDLE h = local_connect( dir );
+
+    metadata_round_trip( h, dir );
 
     REQUIRE( AdsDisconnect( h ) == 0 );
     fs::remove_all( dir, ec );
@@ -868,6 +882,7 @@ TEST_CASE( "oads_* remote embedded: full round-trip" )
 
     ADSHANDLE h = remote_connect_embedded( data, srv.port() );
     oads_round_trip( h, "remote-embedded" );
+    metadata_round_trip( h, data );
 
     // verify file lands in server data dir, not client cwd
     CHECK_FALSE( fs::exists( app / "oads_test.txt" ) );
@@ -902,6 +917,13 @@ TEST_CASE( "oads_* remote embedded: EnableFileFunc off denies" )
     INFO( "FOpen with file func disabled rc=", rc );
     CHECK( rc != 0 );
 
+    CHECK( oads_SetFileAttr( h, (UNSIGNED8*)"nope.txt", 0 ) != 0 );
+    CHECK( oads_SetFileTime( h, (UNSIGNED8*)"nope.txt", 2021, 3, 4, 5, 6, 7 ) != 0 );
+    char name[4096] = {};
+    UNSIGNED16 nameLen = sizeof( name );
+    CHECK( oads_TempFile( h, (UNSIGNED8*)"", (UNSIGNED8*)"no", (UNSIGNED8*)name, &nameLen ) != 0 );
+    UNSIGNED64 bytes = 0;
+    CHECK( oads_DirSpace( h, (UNSIGNED8*)"", 0, &bytes ) != 0 );
     REQUIRE( AdsDisconnect( h ) == 0 );
     fs::remove_all( data );
 }

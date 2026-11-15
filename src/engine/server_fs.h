@@ -73,7 +73,9 @@ util::Result<void>          fs_dir_remove(const std::string& abs_path);
 struct FsFile {
     std::fstream stream;
     std::string  path;
+    bool writable = false;
 };
+util::Result<void> fs_truncate(FsFile& file, std::uint64_t size);
 
 // create=true → create/truncate (FCreate). mode uses ADS_FO_*.
 util::Result<std::unique_ptr<FsFile>> fs_open(const std::string& abs_path,

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <cstdio>
 
 namespace fs = std::filesystem;
 
@@ -284,6 +285,26 @@ util::Result<void> fs_truncate(const std::string& abs_path,
     return {};
 }
 
+util::Result<void> fs_truncate(FsFile& file, std::uint64_t size) {
+    if (!file.writable)
+        return io_err(static_cast<std::int32_t>(openads::AE_ACCESS_DENIED),
+                      "read-only handle", file.path);
+    file.stream.clear();
+    auto pos = file.stream.tellg();
+    file.stream.flush();
+    if (!file.stream)
+        return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
+                      "flush failed", file.path);
+    auto r = fs_truncate(file.path, size);
+    if (!r) return r;
+    file.stream.clear();
+    if (pos >= 0) {
+        file.stream.seekg(pos);
+        file.stream.seekp(pos);
+    }
+    return {};
+}
+
 util::Result<std::string> fs_tempfile(const std::string& abs_dir,
                                       const std::string& prefix) {
     std::error_code ec;
@@ -300,9 +321,11 @@ util::Result<std::string> fs_tempfile(const std::string& abs_dir,
         name << pfx << std::hex << (stamp + i) << ".tmp";
         fs::path cand = fs::path(abs_dir) / name.str();
         if (fs::exists(cand, ec)) continue;
-        std::ofstream out(cand, std::ios::binary);
+        // Exclusive creation: never truncate another caller's file.
+        std::FILE* out = std::fopen(cand.string().c_str(), "wbx");
         if (!out) continue;
-        return name.str();
+        std::fclose(out);
+        return cand.string();
     }
     return io_err(static_cast<std::int32_t>(openads::AE_INTERNAL_ERROR),
                   "no free temp name", abs_dir);
@@ -430,6 +453,7 @@ util::Result<std::unique_ptr<FsFile>> fs_open(const std::string& abs_path,
                                               bool create) {
     auto f = std::make_unique<FsFile>();
     f->path = abs_path;
+    f->writable = create || (mode != ADS_FO_READ && mode != 3);
     std::ios::openmode om = std::ios::binary;
     if (create) {
         om |= std::ios::in | std::ios::out | std::ios::trunc;

@@ -11698,7 +11698,7 @@ UNSIGNED32 ENTRYPOINT AdsFTrunc(ADSHANDLE hFile, UNSIGNED64 ullSize) {
     }
     if (auto* lf = s.registry.lookup<openads::engine::FsFile>(
             hFile, openads::session::HandleKind::LocalFile)) {
-        auto r = openads::engine::fs_truncate(lf->path, ullSize);
+        auto r = openads::engine::fs_truncate(*lf, ullSize);
         if (!r) return fail(r.error());
         lf->stream.clear();
         return ok();
@@ -11714,6 +11714,7 @@ UNSIGNED32 ENTRYPOINT AdsTempFile(ADSHANDLE hConn, UNSIGNED8* pucDir,
     if (!pucDir || !pucName || !pusNameLen)
         return fail(openads::AE_INTERNAL_ERROR, "null arg");
     auto dir = openads::abi::to_internal(pucDir, 0);
+    if (dir.empty()) dir = ".";
     std::string prefix;
     if (pucPrefix) prefix = openads::abi::to_internal(pucPrefix, 0);
     auto ctx = resolve_fs_conn(hConn);
@@ -11728,7 +11729,9 @@ UNSIGNED32 ENTRYPOINT AdsTempFile(ADSHANDLE hConn, UNSIGNED8* pucDir,
         if (!abs) return fail(openads::AE_ACCESS_DENIED, "path");
         auto r = openads::engine::fs_tempfile(*abs, prefix);
         if (!r) return fail(r.error());
-        name = std::move(r.value());
+        name = (std::filesystem::path(
+                    openads::platform::fold_absolute_to_relative(dir)) /
+                std::filesystem::path(r.value()).filename()).generic_string();
     }
     if (name.size() > *pusNameLen) {
         *pusNameLen = static_cast<UNSIGNED16>(name.size());
@@ -11747,6 +11750,7 @@ UNSIGNED32 ENTRYPOINT AdsDirSpace(ADSHANDLE hConn, UNSIGNED8* pucDir,
         return fail(openads::AE_INTERNAL_ERROR, "null arg");
     *pullBytes = 0;
     auto dir = openads::abi::to_internal(pucDir, 0);
+    if (dir.empty()) dir = ".";
     auto ctx = resolve_fs_conn(hConn);
     if (ctx.remote) {
         auto r = ctx.remote->dir_space(dir, ucType);

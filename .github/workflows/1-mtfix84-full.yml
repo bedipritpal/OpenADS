@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix84-full-test
-  PINNED_SOURCE: 1fc6abe40537cf0a82cdb57efa56afd11d3af263
+  PINNED_SOURCE: b2186bc19af79cd39bb35ad1a6a28852879a8970
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 1fc6abe40537cf0a82cdb57efa56afd11d3af263 HEAD
-        test -z "$(git diff --name-only 1fc6abe40537cf0a82cdb57efa56afd11d3af263 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor b2186bc19af79cd39bb35ad1a6a28852879a8970 HEAD
+        test -z "$(git diff --name-only b2186bc19af79cd39bb35ad1a6a28852879a8970 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -685,7 +685,7 @@ jobs:
         sets the file timestamp from a date plus "hh:mm:ss",
         OAds_FTrunc( hFile, nSize ) truncates or extends an open file,
         OAds_TempFile( hConn, cDir, cPrefix ) creates an empty uniquely
-        named file and returns its path, OAds_DirSpace( hConn, cDir,
+        named file and returns its jail-relative path, OAds_DirSpace( hConn, cDir,
         nType ) returns bytes (0 = free available, 1 = total capacity,
         2 = free). hConn is optional, SetConnection default. No lock,
         cache, RDD, Vouch or packaging change; the only wire additions
@@ -878,8 +878,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 1fc6abe40537cf0a82cdb57efa56afd11d3af263 HEAD
-        test -z "$(git diff --name-only 1fc6abe40537cf0a82cdb57efa56afd11d3af263 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor b2186bc19af79cd39bb35ad1a6a28852879a8970 HEAD
+        test -z "$(git diff --name-only b2186bc19af79cd39bb35ad1a6a28852879a8970 HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -996,7 +996,7 @@ jobs:
         sets the file timestamp from a date plus "hh:mm:ss",
         OAds_FTrunc( hFile, nSize ) truncates or extends an open file,
         OAds_TempFile( hConn, cDir, cPrefix ) creates an empty uniquely
-        named file and returns its path, OAds_DirSpace( hConn, cDir,
+        named file and returns its jail-relative path, OAds_DirSpace( hConn, cDir,
         nType ) returns bytes (0 = free available, 1 = total capacity,
         2 = free). hConn is optional, SetConnection default. No lock,
         cache, RDD, Vouch or packaging change; the only wire additions
@@ -1403,7 +1403,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit 1fc6abe40537cf0a82cdb57efa56afd11d3af263
+        Built from fork branch release/mtfix70-full, commit b2186bc19af79cd39bb35ad1a6a28852879a8970
         (cumulative81 plus the OAds_CopyFile remote copy; see case-lookup81.md).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1553,8 +1553,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 1fc6abe40537cf0a82cdb57efa56afd11d3af263 HEAD
-        test -z "$(git diff --name-only 1fc6abe40537cf0a82cdb57efa56afd11d3af263 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor b2186bc19af79cd39bb35ad1a6a28852879a8970 HEAD
+        test -z "$(git diff --name-only b2186bc19af79cd39bb35ad1a6a28852879a8970 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1706,7 +1706,7 @@ jobs:
         sets the file timestamp from a date plus "hh:mm:ss",
         OAds_FTrunc( hFile, nSize ) truncates or extends an open file,
         OAds_TempFile( hConn, cDir, cPrefix ) creates an empty uniquely
-        named file and returns its path, OAds_DirSpace( hConn, cDir,
+        named file and returns its jail-relative path, OAds_DirSpace( hConn, cDir,
         nType ) returns bytes (0 = free available, 1 = total capacity,
         2 = free). hConn is optional, SetConnection default. No lock,
         cache, RDD, Vouch or packaging change; the only wire additions
@@ -1840,7 +1840,7 @@ jobs:
         ls -la
         sha256sum mtfix84-full-qt492-x86.zip mtfix84-full-x64.zip openads-1.09.75-mtfix84-full-test-linux-x64.tar.gz openads-1.09.75-mtfix84-full-test-macos-universal.tar.gz
         sha256sum mtfix84-full-qt492-x86.zip mtfix84-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix84-full-test --target 1fc6abe40537cf0a82cdb57efa56afd11d3af263 --prerelease --latest=false --title "OpenADS mtfix84 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix84-full-qt492-x86.zip mtfix84-full-x64.zip openads-1.09.75-mtfix84-full-test-linux-x64.tar.gz openads-1.09.75-mtfix84-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix84-full-test-macos-universal.tar.gz openads-1.09.75-mtfix84-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix84-full-test --target b2186bc19af79cd39bb35ad1a6a28852879a8970 --prerelease --latest=false --title "OpenADS mtfix84 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix84-full-qt492-x86.zip mtfix84-full-x64.zip openads-1.09.75-mtfix84-full-test-linux-x64.tar.gz openads-1.09.75-mtfix84-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix84-full-test-macos-universal.tar.gz openads-1.09.75-mtfix84-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix84-full-test --json tagName,isPrerelease,url,assets
   stdcallABI:
     name: MSVC x86 exact additive stdcall wrapper ABI

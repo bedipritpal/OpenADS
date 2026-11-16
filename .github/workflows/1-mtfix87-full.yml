@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix87-full-test
-  PINNED_SOURCE: 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d
+  PINNED_SOURCE: edc97d21c75c4b4d70d57594f6c4837f9e33bad8
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d HEAD
-        test -z "$(git diff --name-only 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor edc97d21c75c4b4d70d57594f6c4837f9e33bad8 HEAD
+        test -z "$(git diff --name-only edc97d21c75c4b4d70d57594f6c4837f9e33bad8 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -441,10 +441,13 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/qt492/mingw32/bin"):$PWD/output:$PWD/srv:$PATH"
         HB="$(cygpath -u "$RUNNER_TEMP/harbour-old")"
         bash tests/build_vf87.sh "$HB/bin/win/mingw/hbmk2.exe" "$HB" "output" openace32 output/vf87 kit
-        output/vf87/vf_frontend87.exe
-        output/vf87/vf_local87.exe
-        output/vf87/vf_socket_member87.exe
-        python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe
+        failed=0
+        : > output/vf87-proof.txt
+        output/vf87/vf_frontend87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
+        python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
+        exit "$failed"
     - name: Native worker and encrypted auth regression
       run: |
         set -euxo pipefail
@@ -871,6 +874,7 @@ jobs:
         cp contrib/oads_hb/oads_vf*.c contrib/oads_hb/VF_PARITY_MTFIX87.txt "delivery/mtfix87-full/contrib/oads_hb/"
         cp include/openads/vf_wire.h "delivery/mtfix87-full/include/openads/"
         cp tests/smoke/harbour/vf_*87.* tests/build_vf87.sh tests/vf_socket87.py "delivery/mtfix87-full/tests/vf87/"
+        cp output/vf87-proof.txt delivery/mtfix87-full/docs/
         find delivery/mtfix87-full -type f -exec sha256sum {} \; > delivery/SHA256.txt
         7z a -tzip mtfix87-full-qt492-x86.zip ./delivery/*
 
@@ -899,7 +903,7 @@ jobs:
         retention-days: 14
     - uses: actions/upload-artifact@v4
       with:
-        name: kit-x86
+        name: part-x86
         path: mtfix87-full-qt492-x86.zip
         retention-days: 14
     timeout-minutes: 140
@@ -916,8 +920,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d HEAD
-        test -z "$(git diff --name-only 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor edc97d21c75c4b4d70d57594f6c4837f9e33bad8 HEAD
+        test -z "$(git diff --name-only edc97d21c75c4b4d70d57594f6c4837f9e33bad8 HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -1023,10 +1027,13 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PWD/build-x64/src:$PATH"
         HB="$(cygpath -u "$RUNNER_TEMP/harbour-x64")"
         bash tests/build_vf87.sh "$HB/bin/win/mingw64/hbmk2.exe" "$HB" "build-x64/src" openace64 output/vf87
-        output/vf87/vf_frontend87.exe
-        output/vf87/vf_local87.exe
-        output/vf87/vf_socket_member87.exe
-        python tests/vf_socket87.py --server build-x64/tools/serverd/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe
+        failed=0
+        : > output/vf87-proof.txt
+        output/vf87/vf_frontend87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
+        python tests/vf_socket87.py --server build-x64/tools/serverd/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
+        exit "$failed"
     - name: Package x64 test kit
       shell: bash
       run: |+
@@ -1188,6 +1195,7 @@ jobs:
         cp contrib/oads_hb/oads_vf*.c contrib/oads_hb/VF_PARITY_MTFIX87.txt "$D/contrib/oads_hb/"
         cp include/openads/vf_wire.h "$D/include/openads/"
         cp tests/smoke/harbour/vf_*87.* tests/build_vf87.sh tests/vf_socket87.py "$D/tests/vf87/"
+        cp output/vf87-proof.txt "$D/docs/"
         find $D -type f -exec sha256sum {} \; > delivery/SHA256.txt
         7z a -tzip mtfix87-full-x64.zip ./delivery/*
 
@@ -1339,10 +1347,13 @@ jobs:
         HB="$RUNNER_TEMP/harbour-rdd75"
         export LD_LIBRARY_PATH="$PWD/build/ninja-clang/src:${LD_LIBRARY_PATH:-}"
         bash tests/build_vf87.sh "$HB/bin/linux/gcc/hbmk2" "$HB" "build/ninja-clang/src" openace64 output/vf87
-        output/vf87/vf_frontend87
-        output/vf87/vf_local87
-        output/vf87/vf_socket_member87
-        python3 tests/vf_socket87.py --server build/ninja-clang/tools/serverd/openads_serverd --large-directory --probe output/vf87/vf_compare87 --probe output/vf87/vf_locks87 --probe output/vf87/vf_extra87 --probe output/vf87/vf_bulk87 --probe output/vf87/vf_flags87 --probe output/vf87/vf_pairs87 --probe output/vf87/vf_boundary87
+        failed=0
+        : > output/vf87-proof.txt
+        output/vf87/vf_frontend87 | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_local87 | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_socket_member87 | tee -a output/vf87-proof.txt || failed=1
+        python3 tests/vf_socket87.py --server build/ninja-clang/tools/serverd/openads_serverd --large-directory --probe output/vf87/vf_compare87 --probe output/vf87/vf_locks87 --probe output/vf87/vf_extra87 --probe output/vf87/vf_bulk87 --probe output/vf87/vf_flags87 --probe output/vf87/vf_pairs87 --probe output/vf87/vf_boundary87 | tee -a output/vf87-proof.txt || failed=1
+        exit "$failed"
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -1482,7 +1493,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d
+        Built from fork branch release/mtfix70-full, commit edc97d21c75c4b4d70d57594f6c4837f9e33bad8
         (cumulative81 plus the OAds_CopyFile remote copy; see case-lookup81.md).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1579,6 +1590,7 @@ jobs:
         cp contrib/oads_hb/oads_vf*.c contrib/oads_hb/VF_PARITY_MTFIX87.txt "$STAGE/contrib/oads_hb/"
         cp include/openads/vf_wire.h "$STAGE/include/openads/"
         cp tests/smoke/harbour/vf_*87.* tests/build_vf87.sh tests/vf_socket87.py "$STAGE/tests/vf87/"
+        cp output/vf87-proof.txt "$STAGE/"
         (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
         tar czf "$STAGE.tar.gz" "$STAGE"
         sha256sum "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
@@ -1636,8 +1648,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d HEAD
-        test -z "$(git diff --name-only 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor edc97d21c75c4b4d70d57594f6c4837f9e33bad8 HEAD
+        test -z "$(git diff --name-only edc97d21c75c4b4d70d57594f6c4837f9e33bad8 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1694,8 +1706,8 @@ jobs:
         HB="$RUNNER_TEMP/harbour-vf87"
         git clone https://github.com/harbour/core.git "$HB"
         git -C "$HB" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
-        HB_PLATFORM=darwin HB_COMPILER=clang HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_WITH_PCRE=local HB_WITH_ZLIB=local HB_USER_CFLAGS="-arch x86_64 -arch arm64" HB_USER_LDFLAGS="-arch x86_64 -arch arm64" make -C "$HB" -j3
-        lipo -verify_arch x86_64 arm64 "$HB/lib/darwin/clang/libhbvmmt.a"
+        HB_PLATFORM=darwin HB_COMPILER=clang HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_WITH_PCRE=local HB_WITH_ZLIB=local HB_WITH_X11=no HB_USER_CFLAGS="-arch x86_64 -arch arm64" HB_USER_LDFLAGS="-arch x86_64 -arch arm64" make -C "$HB" -j3
+        lipo "$HB/lib/darwin/clang/libhbvmmt.a" -verify_arch x86_64 arm64
         echo "HB_VF87=$HB" >> "$GITHUB_ENV"
     - name: Configure
       run: |
@@ -1724,10 +1736,13 @@ jobs:
         set -euxo pipefail
         export DYLD_LIBRARY_PATH="$PWD/build/default/src:${DYLD_LIBRARY_PATH:-}"
         bash tests/build_vf87.sh "$HB_VF87/bin/darwin/clang/hbmk2" "$HB_VF87" "build/default/src" openace64 output/vf87
-        output/vf87/vf_frontend87
-        output/vf87/vf_local87
-        output/vf87/vf_socket_member87
-        python3 tests/vf_socket87.py --server build/default/tools/serverd/openads_serverd --large-directory --probe output/vf87/vf_compare87 --probe output/vf87/vf_locks87 --probe output/vf87/vf_extra87 --probe output/vf87/vf_bulk87 --probe output/vf87/vf_flags87 --probe output/vf87/vf_pairs87 --probe output/vf87/vf_boundary87
+        failed=0
+        : > output/vf87-proof.txt
+        output/vf87/vf_frontend87 | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_local87 | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_socket_member87 | tee -a output/vf87-proof.txt || failed=1
+        python3 tests/vf_socket87.py --server build/default/tools/serverd/openads_serverd --large-directory --probe output/vf87/vf_compare87 --probe output/vf87/vf_locks87 --probe output/vf87/vf_extra87 --probe output/vf87/vf_bulk87 --probe output/vf87/vf_flags87 --probe output/vf87/vf_pairs87 --probe output/vf87/vf_boundary87 | tee -a output/vf87-proof.txt || failed=1
+        exit "$failed"
     - name: Stage and verify macOS kit
       run: |
         set -euxo pipefail
@@ -1768,6 +1783,7 @@ jobs:
         cp contrib/oads_hb/oads_vf*.c contrib/oads_hb/VF_PARITY_MTFIX87.txt "$STAGE/contrib/oads_hb/"
         cp include/openads/vf_wire.h "$STAGE/include/openads/"
         cp tests/smoke/harbour/vf_*87.* tests/build_vf87.sh tests/vf_socket87.py "$STAGE/tests/vf87/"
+        cp output/vf87-proof.txt "$STAGE/"
         (cd "$STAGE" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)
         tar czf "$STAGE.tar.gz" "$STAGE"
         shasum -a 256 "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
@@ -1796,6 +1812,7 @@ jobs:
     - linuxkit
     - mackit
     - stdcallABI
+    - assembleWindows
     steps:
     - uses: actions/download-artifact@v4
       with:
@@ -1805,38 +1822,51 @@ jobs:
       shell: bash
       run: |
         cat > RELEASE_NOTES.md <<'NOTES'
-        mtfix87 includes the prior TCP file-opcode allowlist repair, regression
-        tests and the OAds_FCopyFile compatibility alias for OAds_CopyFile.
-        CopyFile is checked over a real socket, with binary data, overwrite,
-        explicit/default connection, missing source and jail denial.
-        Relink Vouch with this kit's librddads.a and use the matching server.
-        Full OAds_vf parity remains unfinished work for the next kit.
-        # mtfix87 additive exact Harbour vf candidate
+        # OpenADS mtfix87 cumulative test kit
+        Pritpal Bedi
+        2026-11-15 19:11
 
-        Accepted remote ownership rule: each client connection is a
-        separate lock owner, like a separate Harbour process. Within one
-        connection, opens share Harbour-style merged range registrations.
-        This lets clients share read locks and WAIT for another client.
+        Adds the full OAds_vf family over Harbour's real vf front end.
+        Existing OAds_F calls and RDD behavior remain unchanged. This includes
+        the mtfix86 TCP file-opcode repair and OAds_FCopyFile alias.
 
-        Includes mtfix82 CopyFile, mtfix83 file I/O and mtfix84 metadata.
-        Adds OAds_FLock( hFile, nStart, nLen, nType ), OAds_FUnlock(
-        hFile, nStart, nLen ), OAds_FLockTest( hFile, nStart, nLen,
-        nType ). nType: 0 exclusive/no-wait, 0x100 shared, 0x200 wait.
-        WAIT retries on the client after OS contention until success or
-        error. Each server request is one non-blocking OS attempt, no
-        server sleep. Own overlapping registrations fail immediately,
-        like Harbour. Adjacent ranges merge; Unix unlock can split them.
-        Windows retains its native exact-range UnlockFileEx behavior.
-        LockTest: 0 free, positive PID where available (otherwise 1),
-        -1 error. Unix OFD owners do not have a PID. Last close within an
-        owner releases its native file and byte locks. No RDD/CDX lock,
-        cache or timer changes. EnableFileFunc and jail rules apply.
-        DirSpace now matches Harbour: 0=available, 1=free, 2=used, 3=total.
-        This corrects mtfix84's private numbering. Details and remaining
-        API limits are in contrib/oads_hb/FILE_LOCKS_MTFIX85.txt.
-        Prior kits stay frozen.
-        Inherited OPEN80 diagnostics below stay unchanged and default OFF.
-        No automatic deployment, service/config/auth/data replacement or upstream merge.
+        Plain paths stay client-local. Use OAds_vfPath(hConn,cRelativeName)
+        for an explicit remote connection. New vf opens return Harbour GC
+        pointers, not the numeric handles used by the older OAds_F calls.
+        Do not pass handles between the two families.
+
+        Remote calls require EnableFileFunc and stay inside the data root.
+        DirUnbuild cannot remove the root or any parent. Outside-root links
+        are refused or omitted from listings. Remote data handles are regular
+        files; client-local calls and FromSocket retain Harbour behavior.
+        TempFile stays local; TempFileServer takes an explicit remote folder.
+        Remote Handle returns -1, never a server-native handle or socket.
+        FromSocket is a separate archive member and needs Harbour hbtcpio.
+        CopyFileEx callbacks run on the client, never on the server.
+
+        Each remote client connection is a separate lock owner. Within one
+        connection, Unix retains Harbour's merged-open/range behavior until
+        last close. Windows retains Harbour's separate native opens and
+        per-handle lock release. WAIT retries on the client; no server byte
+        lock request waits. Existing OAds_F behavior stays unchanged.
+
+        The x86 archive contains the MinGW client plus the same candidate's
+        x64 Windows server and auth worker. The other kits contain the x64
+        Windows, x64 Linux and universal x86_64/arm64 macOS servers.
+        Relink Vouch with this kit's lib/librddads.a. Keep the client DLL,
+        server and worker from this cumulative kit together.
+        Detailed choices are in contrib/oads_hb/VF_PARITY_MTFIX87.txt.
+        The build retains the older compatibility checks and adds local and
+        real-TCP vf comparisons, flag/open matrices, locks, bulk transfers,
+        root-boundary checks and an x86-client/x64-server assembly check.
+        These checks are not Vouch certification.
+
+        No automatic deployment, service restart, config/auth/data replacement,
+        upstream merge or changes to prior frozen kits.
+
+        ## Inherited OPEN80 diagnostic instructions
+        These instructions describe the existing optional diagnostic capture,
+        not a requirement for the new vf family. It stays OFF by default.
 
         ## Enable / disable
 
@@ -1963,7 +1993,7 @@ jobs:
         ls -la
         sha256sum mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz
         sha256sum mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix87-full-test --target 8013c3c9a0dc6258e0956bba2ca1fc42b1a4fb9d --prerelease --latest=false --title "OpenADS mtfix87 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix87-full-test --target edc97d21c75c4b4d70d57594f6c4837f9e33bad8 --prerelease --latest=false --title "OpenADS mtfix87 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix87-full-test --json tagName,isPrerelease,url,assets
     if: ${{ inputs.publish }}
   stdcallABI:
@@ -1983,6 +2013,138 @@ jobs:
       with:
         name: mtfix87-msvc-abi-proof
         path: output/msvc-abi/exports.txt
+  assembleWindows:
+    name: Assemble and test x86 client plus x64 server kit
+    runs-on: windows-2022
+    needs:
+    - x86kit
+    - x64kit
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ env.PINNED_SOURCE }}
+    - uses: actions/download-artifact@v4
+      with:
+        name: part-x86
+        path: incoming/x86
+    - uses: actions/download-artifact@v4
+      with:
+        name: kit-x64
+        path: incoming/x64
+    - uses: actions/download-artifact@v4
+      with:
+        name: mtfix87-x86-proof
+        path: incoming/proof
+    - name: Assemble x86 client with verified x64 server pair
+      shell: bash
+      run: |
+        set -euxo pipefail
+        python - --x86 incoming/x86/mtfix87-full-qt492-x86.zip --x64 incoming/x64/mtfix87-full-x64.zip --output mtfix87-full-qt492-x86.zip --expanded assembled <<'PYASSEMBLE'
+        #!/usr/bin/env python3
+        """Assemble the MinGW x86 client with the same candidate's x64 server pair."""
+        import argparse
+        import hashlib
+        import pathlib
+        import shutil
+        import struct
+        import tempfile
+        import zipfile
+
+
+        def machine(path):
+            body = path.read_bytes()
+            assert body[:2] == b'MZ', path
+            offset = struct.unpack_from('<I', body, 60)[0]
+            assert body[offset:offset + 4] == b'PE\0\0', path
+            return struct.unpack_from('<H', body, offset + 4)[0]
+
+
+        def main():
+            p = argparse.ArgumentParser()
+            p.add_argument('--x86', required=True)
+            p.add_argument('--x64', required=True)
+            p.add_argument('--output', required=True)
+            p.add_argument('--expanded', required=True)
+            args = p.parse_args()
+            expanded = pathlib.Path(args.expanded)
+            expanded.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix='openads-assemble87-') as tmp:
+                x64 = pathlib.Path(tmp)
+                with zipfile.ZipFile(args.x86) as archive:
+                    archive.extractall(expanded)
+                with zipfile.ZipFile(args.x64) as archive:
+                    archive.extractall(x64)
+                client = expanded / 'mtfix87-full'
+                server = x64 / 'mtfix87-x64'
+                for name in ['openads_serverd.exe', 'openads_auth_worker.exe']:
+                    source = server / 'bin' / name
+                    assert machine(source) == 0x8664, source
+                    shutil.copy2(source, client / 'bin' / name)
+                assert machine(client / 'bin' / 'openace32.dll') == 0x14c
+                for name in ['openads_serverd.exe', 'openads_auth_worker.exe']:
+                    assert machine(client / 'bin' / name) == 0x8664
+                docs = client / 'docs'
+                docs.mkdir(exist_ok=True)
+                readme = docs / 'README.txt'
+                if readme.exists():
+                    (docs / 'HISTORICAL-DIAGNOSTIC-APPENDIX.txt').write_text(
+                        'Historical inherited text. Current kit instructions are in README.txt.\n\n' +
+                        readme.read_text(encoding='utf-8'), encoding='utf-8')
+                readme.write_text('''OpenADS mtfix87 cumulative test kit
+        Pritpal Bedi
+        2026-11-15 19:05
+
+        This folder contains the 32-bit MinGW client and the 64-bit Windows server.
+        Both server EXEs come from this candidate's x64 kit, not an earlier release.
+        Relink Vouch with lib/librddads.a and use bin/openace32.dll on the client.
+        Use bin/openads_serverd.exe and bin/openads_auth_worker.exe on the server.
+        Keep your existing INI, auth files, data and rollback files unchanged.
+        No automatic deployment or service restart is performed by this archive.
+
+        The new OAds_vf family is additive. Existing OAds_F calls remain unchanged.
+        Read contrib/oads_hb/VF_PARITY_MTFIX87.txt for the exact-family decisions,
+        remote path helper, regular-file boundary and platform lock differences.
+        Remote file calls require the existing EnableFileFunc setting and data jail.
+        The mtfix86 CopyFile socket repair and OAds_FCopyFile alias are cumulative.
+        This is a test kit, not Vouch certification or permission to deploy it.
+        ''', encoding='utf-8')
+                rows = []
+                for path in sorted(client.rglob('*')):
+                    if path.is_file():
+                        rows.append(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' +
+                                    path.relative_to(expanded).as_posix())
+                (expanded / 'SHA256.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+                with zipfile.ZipFile(args.output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                    for path in sorted(expanded.rglob('*')):
+                        if path.is_file():
+                            archive.write(path, path.relative_to(expanded).as_posix())
+            print('MTFIX87-ASSEMBLED client=0x14c server=0x8664 worker=0x8664')
+
+
+        if __name__ == '__main__':
+            main()
+
+        PYASSEMBLE
+    - name: Real TCP x86 client probes against the delivered x64 server
+      shell: pwsh
+      run: |
+        $env:PATH=(Resolve-Path assembled/mtfix87-full/bin).Path+';'+$env:PATH
+        $probes=@('vf_compare87','vf_locks87','vf_extra87','vf_bulk87','vf_flags87','vf_pairs87','vf_boundary87')
+        $args=@('tests/vf_socket87.py','--server','assembled/mtfix87-full/bin/openads_serverd.exe','--large-directory')
+        foreach($probe in $probes){$args+=@('--probe',"incoming/proof/output/vf87/$probe.exe")}
+        & python @args | Tee-Object -FilePath assembled-x86-x64-vf-proof.txt
+        if($LASTEXITCODE -ne 0){throw 'assembled x86-client/x64-server vf test failed'}
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-x86
+        path: mtfix87-full-qt492-x86.zip
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: mtfix87-x86-x64-assembly-proof
+        path: assembled-x86-x64-vf-proof.txt
+        if-no-files-found: warn
 'on':
   push:
     branches:

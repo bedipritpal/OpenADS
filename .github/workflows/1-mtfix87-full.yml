@@ -6,7 +6,7 @@ concurrency:
   cancel-in-progress: false
 env:
   KIT_VERSION: 1.09.75-mtfix87-full-test
-  PINNED_SOURCE: 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7
+  PINNED_SOURCE: 7ff988e81c919e911a894dcd559ca582c4f809c1
 jobs:
   x86kit:
     runs-on: windows-2022
@@ -19,8 +19,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 HEAD
-        test -z "$(git diff --name-only 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 7ff988e81c919e911a894dcd559ca582c4f809c1 HEAD
+        test -z "$(git diff --name-only 7ff988e81c919e911a894dcd559ca582c4f809c1 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -32,10 +32,14 @@ jobs:
         for name,url,sha in items:
          for attempt in range(3):
           try:
-           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
-          except Exception:
+           source=url if attempt==0 else url+'?openads_mtfix87_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
            if attempt==2:raise
-           time.sleep(3)
+           time.sleep(3*(attempt+1))
          archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
          dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
          with tarfile.open(archive) as z:
@@ -938,8 +942,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 HEAD
-        test -z "$(git diff --name-only 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 7ff988e81c919e911a894dcd559ca582c4f809c1 HEAD
+        test -z "$(git diff --name-only 7ff988e81c919e911a894dcd559ca582c4f809c1 HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -950,10 +954,14 @@ jobs:
         for name,url,sha in items:
          for attempt in range(3):
           try:
-           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
-          except Exception:
+           source=url if attempt==0 else url+'?openads_mtfix87_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
            if attempt==2:raise
-           time.sleep(3)
+           time.sleep(3*(attempt+1))
          archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
          dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
          with tarfile.open(archive) as z:
@@ -1275,10 +1283,14 @@ jobs:
         for name,url,sha in items:
          for attempt in range(3):
           try:
-           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
-          except Exception:
+           source=url if attempt==0 else url+'?openads_mtfix87_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
            if attempt==2:raise
-           time.sleep(3)
+           time.sleep(3*(attempt+1))
          archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
          dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
          with tarfile.open(archive) as z:
@@ -1529,7 +1541,7 @@ jobs:
 
         Pritpal Bedi. Fork bedipritpal/OpenADS from FiveTechSoft/OpenADS.
 
-        Built from fork branch release/mtfix70-full, commit 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7
+        Built from fork branch release/mtfix70-full, commit 7ff988e81c919e911a894dcd559ca582c4f809c1
         (cumulative81 plus the OAds_CopyFile remote copy; see case-lookup81.md).
         Remote key-edit navigation repair requires the74 server. Locks remain held; no forced hard flush.
         GoTop/Seek error masking, broad conditional navigation and remote descending are not certified.
@@ -1684,8 +1696,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 HEAD
-        test -z "$(git diff --name-only 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor 7ff988e81c919e911a894dcd559ca582c4f809c1 HEAD
+        test -z "$(git diff --name-only 7ff988e81c919e911a894dcd559ca582c4f809c1 HEAD -- . ':!.github/workflows')"
       shell: bash
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
@@ -1697,10 +1709,14 @@ jobs:
         for name,url,sha in items:
          for attempt in range(3):
           try:
-           body=urllib.request.urlopen(url,timeout=60).read();assert hashlib.sha256(body).hexdigest()==sha;break
-          except Exception:
+           source=url if attempt==0 else url+'?openads_mtfix87_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
            if attempt==2:raise
-           time.sleep(3)
+           time.sleep(3*(attempt+1))
          archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
          dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
          with tarfile.open(archive) as z:
@@ -2029,7 +2045,7 @@ jobs:
         ls -la
         sha256sum mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz
         sha256sum mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip > WINDOWS_SHA256SUMS.txt
-        gh release create v1.09.75-mtfix87-full-test --target 9ef6ce2b0895d13927b8e4f836cf2c5ca78bf8d7 --prerelease --latest=false --title "OpenADS mtfix87 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz.sha256
+        gh release create v1.09.75-mtfix87-full-test --target 7ff988e81c919e911a894dcd559ca582c4f809c1 --prerelease --latest=false --title "OpenADS mtfix87 full test kit - Windows x86 + Windows x64 + Linux x64 server + macOS universal" --notes-file RELEASE_NOTES.md WINDOWS_SHA256SUMS.txt mtfix87-full-qt492-x86.zip mtfix87-full-x64.zip openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz openads-1.09.75-mtfix87-full-test-linux-x64.tar.gz.sha256 MTFIX81_LINUX_SERVER_TEST.md openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz openads-1.09.75-mtfix87-full-test-macos-universal.tar.gz.sha256
         gh release view v1.09.75-mtfix87-full-test --json tagName,isPrerelease,url,assets
     if: ${{ inputs.publish }}
   stdcallABI:

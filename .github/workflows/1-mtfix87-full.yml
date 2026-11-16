@@ -704,7 +704,25 @@ jobs:
         cp include/openads/ace.h "$RUNNER_TEMP/harbour-old/contrib/rddads/ads.ch" delivery/mtfix87-full/include/
         cp contrib/oads_hb/FILE_LOCKS_MTFIX85.txt contrib/oads_hb/COPY_SOCKET_MTFIX86.txt delivery/mtfix87-full/docs/
         cat > delivery/mtfix87-full/docs/README.txt <<'NOTES'
-        # mtfix87 additive exact Harbour vf candidate
+        OpenADS mtfix87 cumulative test kit
+        Pritpal Bedi
+        2026-11-15 19:18
+
+        Adds the full OAds_vf family through Harbour's real vf front end.
+        Existing OAds_F functions and RDD behavior remain unchanged. The
+        mtfix86 socket allowlist repair and OAds_FCopyFile alias are included.
+        Use OAds_vfPath(hConn,cRelativeName) for explicit remote paths; plain
+        paths stay local. New vf handles are Harbour GC pointers, not the
+        numeric handles used by OAds_F. Do not mix the two handle types.
+        Read contrib/oads_hb/VF_PARITY_MTFIX87.txt for all choices and limits.
+        The new vf family preserves Unix merged opens and Windows separate
+        native opens. Windows closes release the closed handle's byte locks.
+        Keep the matching client DLL, server and worker from this kit together.
+        This test kit does not deploy or restart anything or certify Vouch.
+
+        Inherited OAds_F lock details and OPEN80 diagnostic appendix
+        The following ownership details concern the older OAds_F family.
+        The new vf platform distinction is documented above and in its note.
 
         Accepted remote ownership rule: each client connection is a
         separate lock owner, like a separate Harbour process. Within one
@@ -1047,7 +1065,25 @@ jobs:
         cp docs/case-lookup81.md output/case81-native-proof.txt $D/docs/
         echo "$PINNED_SOURCE" > $D/docs/source-commit.txt
         cat > $D/docs/README.txt <<'NOTES'
-        # mtfix87 additive exact Harbour vf candidate
+        OpenADS mtfix87 cumulative test kit
+        Pritpal Bedi
+        2026-11-15 19:18
+
+        Adds the full OAds_vf family through Harbour's real vf front end.
+        Existing OAds_F functions and RDD behavior remain unchanged. The
+        mtfix86 socket allowlist repair and OAds_FCopyFile alias are included.
+        Use OAds_vfPath(hConn,cRelativeName) for explicit remote paths; plain
+        paths stay local. New vf handles are Harbour GC pointers, not the
+        numeric handles used by OAds_F. Do not mix the two handle types.
+        Read contrib/oads_hb/VF_PARITY_MTFIX87.txt for all choices and limits.
+        The new vf family preserves Unix merged opens and Windows separate
+        native opens. Windows closes release the closed handle's byte locks.
+        Keep the matching client DLL, server and worker from this kit together.
+        This test kit does not deploy or restart anything or certify Vouch.
+
+        Inherited OAds_F lock details and OPEN80 diagnostic appendix
+        The following ownership details concern the older OAds_F family.
+        The new vf platform distinction is documented above and in its note.
 
         Accepted remote ownership rule: each client connection is a
         separate lock owner, like a separate Harbour process. Within one

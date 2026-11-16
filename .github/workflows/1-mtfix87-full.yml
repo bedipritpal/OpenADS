@@ -636,8 +636,8 @@ jobs:
         phase_cases=[n for n in summary['cases'] if n.startswith('open phase')]
         assert len(phase_cases)==3,phase_cases
         assert all(summary['cases'][n]['passed'] for n in phase_cases),'open phase regression failed'
-        assert summary['count']==1831 and summary['executed']==1831,'Coverage mismatch'
-        (out/'baseline-comparison.txt').write_text('mtfix62 baseline197failures; same197names and recorded assertion signatures; no additional failing cases;1831/1831executed;commitFusion4PASS;replacementBatch7PASS;bottomCount4PASS;callerScope5PASS;dirtyKeySkip12PASS;2ePASS;explicitRefresh113PASS;appendMeta181PASS6cases;0harnesserrors\n')
+        assert summary['count']==1832 and summary['executed']==1832,'Coverage mismatch'
+        (out/'baseline-comparison.txt').write_text('mtfix62 baseline197failures; same197names and recorded assertion signatures; no additional failing cases;1832/1832executed;commitFusion4PASS;replacementBatch7PASS;bottomCount4PASS;callerScope5PASS;dirtyKeySkip12PASS;2ePASS;explicitRefresh113PASS;appendMeta181PASS6cases;0harnesserrors\n')
 
 
         PYBATCH

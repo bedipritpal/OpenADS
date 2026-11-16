@@ -546,3 +546,6 @@ EXPORTS
     AdsMutexTryLock
     AdsMutexUnlock
     AdsMutexDestroy
+
+    AdsVfRequest
+    AdsVfFree

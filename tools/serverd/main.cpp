@@ -413,6 +413,9 @@ static void probe_ace_dlls(bool console) {
 // Run the actual server. Returns when g_running flips to false
 // (signal handler on POSIX / SCM stop control on Windows).
 int run_server(const Args& args, bool console) {
+#if defined(OPENADS_WITH_HARBOUR_UDF)
+    openads::engine::hrb_udf::register_vf_provider();
+#endif
     // Admin-owned config only. Never read master enable from environment.
     openads::util::set_logging_enabled(args.diagnostics);
     openads::util::open_phase::configure(args.open_phase_log);

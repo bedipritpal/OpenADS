@@ -11501,6 +11501,7 @@ UNSIGNED32 ENTRYPOINT AdsSaveFile(ADSHANDLE hConn, UNSIGNED8* pucName,
 UNSIGNED32 ENTRYPOINT AdsVfRequest(ADSHANDLE hConn, const void* request,
                                     UNSIGNED32 length, void** reply,
                                     UNSIGNED32* reply_length) {
+    openads::abi::wire_caller::Entry wire_entry("AdsVfRequest", cli_trace_on());
     if(!reply || !reply_length || !request)return fail(openads::AE_INTERNAL_ERROR,"null vf arg");
     *reply=nullptr;*reply_length=0;
     if(length<OADS_VF_REQUEST_SIZE || length>OADS_VF_REQUEST_SIZE+2u*OADS_VF_PATH_MAX+OADS_VF_CHUNK_MAX)
@@ -11520,7 +11521,10 @@ UNSIGNED32 ENTRYPOINT AdsVfRequest(ADSHANDLE hConn, const void* request,
     std::memcpy(out,r.value().data(),r.value().size());
     *reply=out;*reply_length=static_cast<UNSIGNED32>(r.value().size());return ok();
 }
-void ENTRYPOINT AdsVfFree(void* reply) { std::free(reply); }
+void ENTRYPOINT AdsVfFree(void* reply) {
+    openads::abi::wire_caller::Entry wire_entry("AdsVfFree", cli_trace_on());
+    std::free(reply);
+}
 
 UNSIGNED32 ENTRYPOINT AdsFReadAt(ADSHANDLE hFile, UNSIGNED64 ullOffset,
                                  void* pBuf, UNSIGNED32 ulLen,

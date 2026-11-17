@@ -127,7 +127,11 @@ PROCEDURE Main( cUri )
    OAds_DirRemove( h, cDir )
    VF87Disconnect( h )
 
-   OutStd( "FSARGS88 failures=" + hb_ntos( nBad ) + hb_eol() )
+   IF nBad == 0
+      OutStd( "FSARGS88 PASS failures=0" + hb_eol() )
+   ELSE
+      OutStd( "FSARGS88 FAILED failures=" + hb_ntos( nBad ) + hb_eol() )
+   ENDIF
    ErrorLevel( nBad )
 RETURN
 

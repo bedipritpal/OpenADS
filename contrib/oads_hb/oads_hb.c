@@ -37,10 +37,19 @@
  * has been set, the ACE default connection is used for compatibility:
  *   OAds_FOpen( cFileName, nMode )             -- uses default connection
  *   OAds_FOpen( hConn, cFileName, nMode )      -- uses explicit connection
+ *
+ * Argument convention (mtfix88): the first argument is the connection
+ * handle only when it is numeric AND a live connection; otherwise it is
+ * the first documented parameter (or a dead handle slot, e.g. the .F.
+ * of a no-arg OAds_SetConnection()) and the default connection applies.
+ * Extra trailing arguments are always accepted and never change the
+ * result; by-reference parameters are filled back only where documented.
+ * No argument shape raises an error; the server's answer decides.
  */
 
 #include "hbapi.h"
 #include "hbapiitm.h"
+#include "hbapifs.h"
 #include "hbdate.h"
 #include "hbjson.h"
 #include "hbthread.h"
@@ -90,6 +99,70 @@ static ADSHANDLE oads_default_connection( void )
     AdsGetDefaultConnection( &hConn );
     return hConn;
 }
+
+/* ------------------------------------------------------------------ */
+/*  OAds argument convention (mtfix88).                                */
+/*                                                                     */
+/*  Every OAds_* function validates the FIRST argument as a            */
+/*  connection handle before reading anything else: it is the handle   */
+/*  only when it is numeric, nonzero and a LIVE connection. Any other  */
+/*  first argument - a file name, 0, .F., NIL, a stale or foreign      */
+/*  numeric handle - is never treated as a connection: a string is     */
+/*  the first documented parameter itself, anything else marks a       */
+/*  dead handle slot and the documented parameters start at arg 2.     */
+/*  Either way the OAds default connection applies when no live        */
+/*  handle was passed. Extra trailing arguments (a by-reference name   */
+/*  in the leto_file style, for example) are always accepted and       */
+/*  never change the result; by-reference parameters are filled        */
+/*  back only where the function documents a fill. No argument         */
+/*  shape raises an error: the server's own answer decides the         */
+/*  result.                                                            */
+/* ------------------------------------------------------------------ */
+static int oads_live_connection( ADSHANDLE hConn )
+{
+    UNSIGNED16 usLive = 0;
+    if( hConn != 0 )
+        oads_IsLiveConnection( hConn, &usLive );
+    return usLive != 0;
+}
+
+static ADSHANDLE oads_arg_connection( int * pnBase )
+{
+    ADSHANDLE hConn = 0;
+    int       nBase = 1;
+
+    if( hb_pcount() >= 1 )
+    {
+        if( HB_ISNUM( 1 ) )
+        {
+            ADSHANDLE h = ( ADSHANDLE ) hb_parnint( 1 );
+            nBase = 2;                 /* the slot was meant for a handle */
+            if( oads_live_connection( h ) )
+                hConn = h;
+        }
+        else if( ! HB_ISCHAR( 1 ) )
+        {
+            nBase = 2;                 /* .F., NIL, ...: dead handle slot */
+        }
+    }
+    if( hConn == 0 )
+        hConn = oads_default_connection();
+    *pnBase = nBase;
+    return hConn;
+}
+
+/* FError() carries the raw ACE return code of a failed OAds_* call   */
+/* (ace.h), 0 on success - the server's own answer, unmapped.         */
+static void oads_set_ferror( UNSIGNED32 ulRc )
+{
+    hb_fsSetError( ( HB_ERRCODE ) ulRc );
+}
+
+/* oads_IsLiveConnection is an OpenADS extension (mtfix88+). Declared
+   here as well so this file still compiles against an older ace.h;
+   an identical redeclaration is legal C when the new ace.h is used. */
+extern UNSIGNED32 OADSAPI oads_IsLiveConnection( ADSHANDLE  hConnect,
+                                                 UNSIGNED16 *pbLive );
 
 /* AdsGetServerVersion is an OpenADS extension (v1.09.28+). Declared
    here as well so this file still compiles against an older ace.h;
@@ -255,24 +328,16 @@ HB_FUNC( OADS_SETLOGGING )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_FCREATE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED16 usAttr;
     ADSHANDLE  hFile   = 0;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-        usAttr = ( UNSIGNED16 ) hb_parni( 3 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-        usAttr = ( UNSIGNED16 ) hb_parni( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
+    usAttr = ( UNSIGNED16 ) hb_parni( nBase + 1 );
 
     if( szName )
         ulRc = oads_FCreate( hConn, ( UNSIGNED8 * ) szName, usAttr, &hFile );
@@ -285,24 +350,16 @@ HB_FUNC( OADS_FCREATE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_FOPEN )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED16 usMode;
     ADSHANDLE  hFile   = 0;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-        usMode = ( UNSIGNED16 ) hb_parni( 3 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-        usMode = ( UNSIGNED16 ) hb_parni( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
+    usMode = ( UNSIGNED16 ) hb_parni( nBase + 1 );
 
     if( szName )
         ulRc = oads_FOpen( hConn, ( UNSIGNED8 * ) szName, usMode, &hFile );
@@ -403,23 +460,21 @@ HB_FUNC( OADS_FSEEK )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_CHECKEXISTENCE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED16 usExists = 0;
+    UNSIGNED32 ulRc     = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
-        oads_CheckExistence( hConn, ( UNSIGNED8 * ) szName, &usExists );
+    {
+        ulRc = oads_CheckExistence( hConn, ( UNSIGNED8 * ) szName,
+                                    &usExists );
+        oads_set_ferror( ulRc );
+    }
     hb_retl( usExists != 0 );
 }
 
@@ -429,20 +484,13 @@ HB_FUNC( OADS_CHECKEXISTENCE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_DELETEFILE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         ulRc = oads_DeleteFile( hConn, ( UNSIGNED8 * ) szName );
@@ -455,23 +503,15 @@ HB_FUNC( OADS_DELETEFILE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_RENAMEFILE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szOld;
     const char *szNew;
     UNSIGNED32 ulRc   = 1;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-        szOld = hb_parc( 2 );
-        szNew = hb_parc( 3 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szOld = hb_parc( 1 );
-        szNew = hb_parc( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szOld = hb_parc( nBase );
+    szNew = hb_parc( nBase + 1 );
 
     if( szOld && szNew )
         ulRc = oads_RenameFile( hConn, ( UNSIGNED8 * ) szOld,
@@ -486,23 +526,15 @@ HB_FUNC( OADS_RENAMEFILE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_COPYFILE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szSrc;
     const char *szDst;
     UNSIGNED32 ulRc   = 1;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-        szSrc = hb_parc( 2 );
-        szDst = hb_parc( 3 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szSrc = hb_parc( 1 );
-        szDst = hb_parc( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szSrc = hb_parc( nBase );
+    szDst = hb_parc( nBase + 1 );
 
     if( szSrc && szDst )
         ulRc = oads_CopyFile( hConn, ( UNSIGNED8 * ) szSrc,
@@ -517,19 +549,12 @@ HB_FUNC( OADS_COPYFILE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_FLOAD )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn  = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
     {
@@ -560,26 +585,17 @@ HB_FUNC( OADS_FLOAD )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_FSAVE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     const char *szData;
     UNSIGNED32 ulLen;
     UNSIGNED32 ulRc = 1;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-        szData = hb_parc( 3 );
-        ulLen  = ( UNSIGNED32 ) hb_parclen( 3 );
-    }
-    else
-    {
-        hConn  = oads_default_connection();
-        szName = hb_parc( 1 );
-        szData = hb_parc( 2 );
-        ulLen  = ( UNSIGNED32 ) hb_parclen( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
+    szData = hb_parc( nBase + 1 );
+    ulLen  = ( UNSIGNED32 ) hb_parclen( nBase + 1 );
 
     if( szName && ( szData || ulLen == 0 ) )
         ulRc = oads_SaveFile( hConn, ( UNSIGNED8 * ) szName,
@@ -670,22 +686,14 @@ HB_FUNC( OADS_FEOF )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_SETFILEATTR )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulAttr;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-        ulAttr = ( UNSIGNED32 ) hb_parnint( 3 );
-    }
-    else
-    {
-        hConn  = oads_default_connection();
-        szName = hb_parc( 1 );
-        ulAttr = ( UNSIGNED32 ) hb_parnint( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
+    ulAttr = ( UNSIGNED32 ) hb_parnint( nBase + 1 );
 
     hb_retl( szName != NULL &&
              oads_SetFileAttr( hConn, ( UNSIGNED8 * ) szName,
@@ -699,6 +707,7 @@ HB_FUNC( OADS_SETFILEATTR )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_SETFILETIME )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     const char *szTime;
@@ -706,20 +715,10 @@ HB_FUNC( OADS_SETFILETIME )
     int        iYear = 0, iMonth = 0, iDay = 0;
     int        iHour = 0, iMin = 0, iSec = 0;
 
-    if( hb_pcount() >= 4 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-        lDate  = hb_pardl( 3 );
-        szTime = hb_parc( 4 );
-    }
-    else
-    {
-        hConn  = oads_default_connection();
-        szName = hb_parc( 1 );
-        lDate  = hb_pardl( 2 );
-        szTime = hb_parc( 3 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
+    lDate  = hb_pardl( nBase + 1 );
+    szTime = hb_parc( nBase + 2 );
 
     if( szName && lDate > 0 )
     {
@@ -800,24 +799,16 @@ HB_FUNC( OADS_FTRUNC )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_TEMPFILE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szDir;
     const char *szPrefix;
     char       szName[ 4096 ];
     UNSIGNED16 usLen = sizeof( szName );
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn    = ( ADSHANDLE ) hb_parnint( 1 );
-        szDir    = hb_parc( 2 );
-        szPrefix = hb_parc( 3 );
-    }
-    else
-    {
-        hConn    = oads_default_connection();
-        szDir    = hb_parc( 1 );
-        szPrefix = hb_parc( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szDir    = hb_parc( nBase );
+    szPrefix = hb_parc( nBase + 1 );
 
     szName[ 0 ] = '\0';
     if( szDir &&
@@ -836,23 +827,15 @@ HB_FUNC( OADS_TEMPFILE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_DIRSPACE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szDir;
     UNSIGNED8  ucType;
     UNSIGNED64 ullBytes = 0;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szDir  = hb_parc( 2 );
-        ucType = ( UNSIGNED8 ) hb_parnint( 3 );
-    }
-    else
-    {
-        hConn  = oads_default_connection();
-        szDir  = hb_parc( 1 );
-        ucType = ( UNSIGNED8 ) hb_parnint( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szDir  = hb_parc( nBase );
+    ucType = ( UNSIGNED8 ) hb_parnint( nBase + 1 );
 
     if( szDir )
         oads_DirSpace( hConn, ( UNSIGNED8 * ) szDir, ucType, &ullBytes );
@@ -865,20 +848,13 @@ HB_FUNC( OADS_DIRSPACE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_GETFILESIZE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulSize  = 0;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         oads_GetFileSize( hConn, ( UNSIGNED8 * ) szName, &ulSize );
@@ -891,21 +867,14 @@ HB_FUNC( OADS_GETFILESIZE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_GETFILEDATE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED8  aucDate[ 32 ] = { 0 };
     UNSIGNED16 usLen   = sizeof( aucDate );
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         oads_GetFileDate( hConn, ( UNSIGNED8 * ) szName, aucDate, &usLen );
@@ -918,21 +887,14 @@ HB_FUNC( OADS_GETFILEDATE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_GETFILETIME )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED8  aucTime[ 32 ] = { 0 };
     UNSIGNED16 usLen   = sizeof( aucTime );
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         oads_GetFileTime( hConn, ( UNSIGNED8 * ) szName, aucTime, &usLen );
@@ -945,20 +907,13 @@ HB_FUNC( OADS_GETFILETIME )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_DIRMAKE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szPath;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szPath = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szPath = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szPath = hb_parc( nBase );
 
     if( szPath )
         ulRc = oads_DirMake( hConn, ( UNSIGNED8 * ) szPath );
@@ -971,20 +926,13 @@ HB_FUNC( OADS_DIRMAKE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_DIRREMOVE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szPath;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szPath = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szPath = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szPath = hb_parc( nBase );
 
     if( szPath )
         ulRc = oads_DirRemove( hConn, ( UNSIGNED8 * ) szPath );
@@ -997,20 +945,13 @@ HB_FUNC( OADS_DIRREMOVE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_DIREXIST )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szPath;
     UNSIGNED16 usExists = 0;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szPath = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szPath = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szPath = hb_parc( nBase );
 
     if( szPath )
         oads_DirExist( hConn, ( UNSIGNED8 * ) szPath, &usExists );
@@ -1027,6 +968,7 @@ HB_FUNC( OADS_DIREXIST )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_DIRECTORY )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szMask;
     UNSIGNED16 usAttr;
@@ -1036,18 +978,9 @@ HB_FUNC( OADS_DIRECTORY )
     UNSIGNED32 off;
     PHB_ITEM pArray;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szMask = hb_parc( 2 );
-        usAttr = ( UNSIGNED16 ) hb_parni( 3 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szMask = hb_parc( 1 );
-        usAttr = ( UNSIGNED16 ) hb_parni( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szMask = hb_parc( nBase );
+    usAttr = ( UNSIGNED16 ) hb_parni( nBase + 1 );
 
     pArray = hb_itemArrayNew( 0 );
 
@@ -1136,23 +1069,21 @@ HB_FUNC( OADS_DIRECTORY )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_FEXIST )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED16 usExists = 0;
+    UNSIGNED32 ulRc     = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
-        oads_CheckExistence( hConn, ( UNSIGNED8 * ) szName, &usExists );
+    {
+        ulRc = oads_CheckExistence( hConn, ( UNSIGNED8 * ) szName,
+                                    &usExists );
+        oads_set_ferror( ulRc );
+    }
     hb_retl( usExists != 0 );
 }
 
@@ -1167,20 +1098,13 @@ HB_FUNC( OADS_FEXIST )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_MUTEXCREATE )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         ulRc = AdsMutexCreate( hConn, ( UNSIGNED8 * ) szName );
@@ -1194,23 +1118,15 @@ HB_FUNC( OADS_MUTEXCREATE )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_MUTEXLOCK )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulTimeOut;
     UNSIGNED32 ulRc      = 1;
 
-    if( hb_pcount() >= 3 )
-    {
-        hConn     = ( ADSHANDLE ) hb_parnint( 1 );
-        szName    = hb_parc( 2 );
-        ulTimeOut = ( UNSIGNED32 ) hb_parnint( 3 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName    = hb_parc( 1 );
-        ulTimeOut = ( UNSIGNED32 ) hb_parnint( 2 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName    = hb_parc( nBase );
+    ulTimeOut = ( UNSIGNED32 ) hb_parnint( nBase + 1 );
 
     if( szName )
         ulRc = AdsMutexLock( hConn, ( UNSIGNED8 * ) szName, ulTimeOut );
@@ -1224,20 +1140,13 @@ HB_FUNC( OADS_MUTEXLOCK )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_MUTEXTRYLOCK )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED16 usLocked = 0;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         AdsMutexTryLock( hConn, ( UNSIGNED8 * ) szName, &usLocked );
@@ -1251,20 +1160,13 @@ HB_FUNC( OADS_MUTEXTRYLOCK )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_MUTEXUNLOCK )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         ulRc = AdsMutexUnlock( hConn, ( UNSIGNED8 * ) szName );
@@ -1277,20 +1179,13 @@ HB_FUNC( OADS_MUTEXUNLOCK )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_MUTEXDESTROY )
 {
+    int        nBase;
     ADSHANDLE  hConn;
     const char *szName;
     UNSIGNED32 ulRc    = 1;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn  = ( ADSHANDLE ) hb_parnint( 1 );
-        szName = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szName = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szName = hb_parc( nBase );
 
     if( szName )
         ulRc = AdsMutexDestroy( hConn, ( UNSIGNED8 * ) szName );
@@ -1348,11 +1243,9 @@ HB_FUNC( OADS_SERVERVERSION )
     UNSIGNED16 usCap = ( UNSIGNED16 ) sizeof( szVer );
     UNSIGNED16 usLen = usCap;
     UNSIGNED32 ulRc;
+    int        nBase;
 
-    if( hb_pcount() >= 1 )
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-    else
-        hConn = oads_default_connection();
+    hConn = oads_arg_connection( &nBase );
 
     ulRc = AdsGetServerVersion( hConn, ( UNSIGNED8 * ) szVer, &usLen );
     szVer[ sizeof( szVer ) - 1 ] = '\0';
@@ -1466,11 +1359,13 @@ HB_FUNC( OADS_ZIP )
     PHB_ITEM    pRet;
 
     /* hConn is optional but the arities overlap (4..9 without, 5..10
-       with), so sniff the first param: numeric -> explicit handle. */
-    if( hb_pcount() >= 5 && hb_param( 1, HB_IT_NUMERIC ) != NULL )
+       with), so sniff the first param (mtfix88 rule): it is the handle
+       slot unless it is a string; the handle is used only when live. */
+    if( hb_pcount() >= 5 && ! HB_ISCHAR( 1 ) )
     {
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-        base  = 1;
+        ADSHANDLE h = ( ADSHANDLE ) hb_parnint( 1 );
+        base  = 1;                 /* the slot was meant for a handle */
+        hConn = oads_live_connection( h ) ? h : oads_default_connection();
     }
     else
     {
@@ -1561,11 +1456,13 @@ HB_FUNC( OADS_UNZIP )
     PHB_ITEM    pRet;
 
     /* hConn is optional but arities overlap, so sniff the first
-       param: numeric -> explicit handle (as in OADS_ZIP). */
-    if( hb_pcount() >= 2 && hb_param( 1, HB_IT_NUMERIC ) != NULL )
+       param (mtfix88 rule, as in OADS_ZIP): it is the handle slot
+       unless it is a string; the handle is used only when live. */
+    if( hb_pcount() >= 2 && ! HB_ISCHAR( 1 ) )
     {
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-        base  = 1;
+        ADSHANDLE h = ( ADSHANDLE ) hb_parnint( 1 );
+        base  = 1;                 /* the slot was meant for a handle */
+        hConn = oads_live_connection( h ) ? h : oads_default_connection();
     }
     else
     {
@@ -1624,20 +1521,13 @@ HB_FUNC( OADS_UNZIP )
 /* ------------------------------------------------------------------ */
 HB_FUNC( OADS_ZIPFILECOUNT )
 {
+    int        nBase;
     ADSHANDLE   hConn;
     const char *szZip;
     UNSIGNED32  ulLen = 0, ulCount = 0;
 
-    if( hb_pcount() >= 2 )
-    {
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-        szZip = hb_parc( 2 );
-    }
-    else
-    {
-        hConn = oads_default_connection();
-        szZip = hb_parc( 1 );
-    }
+    hConn = oads_arg_connection( &nBase );
+    szZip = hb_parc( nBase );
 
     if( szZip )
         AdsZipListFiles( hConn, ( UNSIGNED8 * ) szZip,
@@ -1718,10 +1608,13 @@ HB_FUNC( OADS_ZIPFILELIST )
     UNSIGNED32  i;
     int         ok;
 
-    if( hb_pcount() >= 2 && hb_param( 1, HB_IT_NUMERIC ) != NULL )
+    /* Same mtfix88 sniff as OADS_UNZIP: arg 1 is the handle slot
+       unless it is a string; the handle is used only when live. */
+    if( hb_pcount() >= 2 && ! HB_ISCHAR( 1 ) )
     {
-        hConn = ( ADSHANDLE ) hb_parnint( 1 );
-        base  = 1;
+        ADSHANDLE h = ( ADSHANDLE ) hb_parnint( 1 );
+        base  = 1;                 /* the slot was meant for a handle */
+        hConn = oads_live_connection( h ) ? h : oads_default_connection();
     }
     else
     {

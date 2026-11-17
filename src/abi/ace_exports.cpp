@@ -40309,6 +40309,27 @@ UNSIGNED32 ENTRYPOINT AdsIsConnectionAlive(ADSHANDLE hConnect, UNSIGNED16* p) {
     }
     return ok();
 }
+// ---- OAdsIsLiveConnection (mtfix88) -----------------------------------
+// The OAds_* Harbour wrappers validate a leading connection argument
+// with this before trusting it: a numeric first argument is the
+// connection handle only when it names a LIVE connection. A stale
+// handle, a file handle, or the .F. (0) of a no-arg OAds_SetConnection
+// must fall back to the default connection instead. Live means a
+// registered remote connection whose transport is still valid, or a
+// registered local connection. Registry-only: no wire traffic, no
+// blocking, safe to call on every OAds_* invocation.
+UNSIGNED32 ENTRYPOINT OAdsIsLiveConnection(ADSHANDLE hConnect, UNSIGNED16* pbLive) {
+    openads::abi::wire_caller::Entry wire_entry("OAdsIsLiveConnection", cli_trace_on());
+    if (pbLive == nullptr) return fail(openads::AE_INTERNAL_ERROR, "null out");
+    *pbLive = 0;
+    if (hConnect == 0) return ok();
+    if (auto* rc = get_remote_connection(hConnect)) {
+        *pbLive = rc->valid() ? 1 : 0;
+        return ok();
+    }
+    if (lookup_connection(hConnect) != nullptr) *pbLive = 1;
+    return ok();
+}
 UNSIGNED32 ENTRYPOINT AdsIsEmpty(ADSHANDLE hTable, UNSIGNED8* pucField,
                      UNSIGNED16* pbEmpty) {
     openads::abi::wire_caller::Entry wire_entry("AdsIsEmpty", cli_trace_on());

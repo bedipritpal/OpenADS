@@ -12,12 +12,14 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace openads::network {
@@ -109,6 +111,35 @@ public:
     void add_credential(const std::string& user,
                         const std::string& password);
     bool require_auth() const noexcept;
+    // Credential lookup used by tests and available to login paths:
+    // true when `user` exists and `password` verifies against the stored
+    // salted verifier. Takes creds_mu_ itself.
+    bool validate_credential(const std::string& user,
+                             const std::string& password);
+
+    // auth_user hot reload (serverd openads.ini). A reload source returns
+    // true and fills `out` with the COMPLETE replacement credential list
+    // (plaintext user/password pairs, already merged in startup
+    // precedence order) when a changed, fully valid source was read;
+    // it returns false for "no change" and for every failure, in which
+    // case the current map is kept (keep-last-good). The source performs
+    // its own change detection, produces no log output, and never throws.
+    using CredentialReloadFn =
+        std::function<bool(std::vector<std::pair<std::string, std::string>>& out)>;
+    // Arm the reload source. `interval_seconds` bounds how often the
+    // source is consulted across all login paths (0 = check every call).
+    void set_credential_reload(CredentialReloadFn fn,
+                               std::uint32_t interval_seconds);
+    // Called by login paths before consulting creds_. Interval-gated and
+    // serialized via try-lock: at most one reload runs at a time and
+    // concurrent logins never wait on it. The ONE call that wins the
+    // gate after an actual change performs bounded synchronous work
+    // (file read of a capped size plus one PBKDF2 hash per listed user)
+    // before its own credential check proceeds. On success the whole
+    // credential map is swapped atomically under creds_mu_ after hashing
+    // outside the lock, so a login in progress completes with the map
+    // it started with and existing sessions are never affected.
+    void maybe_reload_credentials();
     // Reconnect-resistant login throttling. No sleeps on reactor workers.
     bool login_allowed(const std::string& ip, const std::string& user);
     void login_failed(const std::string& ip, const std::string& user,
@@ -295,6 +326,14 @@ private:
     // M12.9 — credential map (user -> salted PBKDF2 verifier). Protected by creds_mu_
     // because add_credential() may run while sessions authenticate.
     mutable std::mutex                           creds_mu_;
+    // auth_user hot reload: source plus its gate. reload_mu_ serializes
+    // reload attempts (try-lock, never blocking a login);
+    // last_reload_check_ implements the interval gate.
+    CredentialReloadFn                           cred_reload_fn_;
+    std::mutex                                   reload_mu_;
+    std::chrono::steady_clock::time_point        last_reload_check_{};
+    bool                                         have_last_reload_check_ = false;
+    std::uint32_t                                reload_interval_seconds_ = 0;
     struct LoginAttempts {
         std::uint32_t failures = 0;
         std::chrono::steady_clock::time_point retry_at{};

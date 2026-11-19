@@ -205,6 +205,52 @@ bool Server::require_auth() const noexcept {
     return !creds_.empty();
 }
 
+bool Server::validate_credential(const std::string& user,
+                                 const std::string& password) {
+    std::lock_guard<std::mutex> lk(creds_mu_);
+    const auto it = creds_.find(user);
+    return it != creds_.end() &&
+           openads::engine::verify_password(it->second, password, false);
+}
+
+void Server::set_credential_reload(CredentialReloadFn fn,
+                                   std::uint32_t interval_seconds) {
+    std::lock_guard<std::mutex> lk(reload_mu_);
+    cred_reload_fn_ = std::move(fn);
+    reload_interval_seconds_ = interval_seconds;
+    last_reload_check_ = std::chrono::steady_clock::time_point{};
+    have_last_reload_check_ = false;
+}
+
+void Server::maybe_reload_credentials() {
+    // Serialize reload attempts; a login that finds a reload already in
+    // progress proceeds with the current map instead of waiting on I/O.
+    std::unique_lock<std::mutex> gate(reload_mu_, std::try_to_lock);
+    if (!gate.owns_lock() || !cred_reload_fn_) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (have_last_reload_check_ &&
+        now - last_reload_check_ <
+        std::chrono::seconds(reload_interval_seconds_)) return;
+    last_reload_check_ = now;
+    have_last_reload_check_ = true;
+    std::vector<std::pair<std::string, std::string>> next;
+    if (!cred_reload_fn_(next) || next.empty()) return;
+    // Hash outside creds_mu_: PBKDF2 is deliberately slow and must not
+    // block logins that are mid-verification with the current map.
+    std::unordered_map<std::string, std::string> fresh;
+    fresh.reserve(next.size());
+    for (auto& u : next) {
+        fresh[u.first] = openads::engine::hash_password(u.second);
+        // Wipe the plaintext copy as soon as it is hashed.
+        volatile char* w = u.second.empty() ? nullptr : &u.second[0];
+        if (w) for (std::size_t i = 0; i < u.second.size(); ++i) w[i] = 0;
+    }
+    {
+        std::lock_guard<std::mutex> lk(creds_mu_);
+        creds_.swap(fresh);
+    }
+}
+
 
 namespace {
 std::string login_user_key(std::string user) {

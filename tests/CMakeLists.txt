@@ -27,7 +27,10 @@ add_executable(openads_unit_tests
     unit/util_span_test.cpp
     unit/util_log_test.cpp
     unit/serverd_config_ini_test.cpp
+    unit/serverd_auth_reload_test.cpp
+    unit/network_server_reload_test.cpp
     ${CMAKE_SOURCE_DIR}/tools/serverd/config_ini.cpp
+    ${CMAKE_SOURCE_DIR}/tools/serverd/auth_reload.cpp
     unit/platform_file_test.cpp
     unit/platform_lock_test.cpp
     unit/file_jail_test.cpp

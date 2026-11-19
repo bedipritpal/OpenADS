@@ -1943,6 +1943,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply = err("Connect: authentication temporarily blocked", openads::AE_LOGIN_FAILED);
                 break;
             }
+            // auth_user hot reload: interval-gated inside; picks up
+            // openads.ini credential edits without a restart. Covers the
+            // plain Connect and the auth:// CompleteAuth internal
+            // Connect, which share this handler.
+            srv_->maybe_reload_credentials();
             if (srv_->require_auth()) {
                 std::lock_guard<std::mutex> clk(srv_->creds_mu_);
                 auto cit = srv_->creds_.find(user);
@@ -5770,6 +5775,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!srv_->login_allowed(ip, user)) {
                 reply = err("Management login blocked", openads::AE_LOGIN_FAILED); break;
             }
+            // auth_user hot reload (same hook as the Connect path).
+            srv_->maybe_reload_credentials();
             if (srv_->require_auth()) {
                 std::lock_guard<std::mutex> guard(srv_->creds_mu_);
                 const auto credential = srv_->creds_.find(user);

@@ -23,6 +23,7 @@
 #endif
 #include "openads_version.h"  // OPENADS_VERSION_STR (CMake-generated)
 #include "platform/path.h"
+#include "tools/serverd/auth_reload.h"
 #include "tools/serverd/config_ini.h"
 #include "tools/serverd/setup_wizard.h"
 #if defined(OPENADS_WITH_HTTP)
@@ -160,6 +161,13 @@ struct Args {
     std::uint32_t error_log_max_kb = 0;
     std::vector<std::pair<std::string, std::string>> http_users;
     std::vector<std::pair<std::string, std::string>> auth_users;
+    // The --config path (empty when the daemon runs on flags alone) and
+    // the CLI-only auth_user pairs. The auth_user hot reload needs both:
+    // the file to watch, and the CLI pairs to re-append after the file's
+    // entries so the CLI keeps winning same-user collisions on reload
+    // (startup precedence: defaults < ini < CLI).
+    std::string config_path;
+    std::vector<std::pair<std::string, std::string>> auth_users_cli;
     // Multi-port: extra listeners from --listen PORT:DIR or [port:NNNN] INI.
     std::vector<openads::serverd::PortEntry> extra_listeners;
 };
@@ -271,6 +279,8 @@ bool parse_args(int argc, char** argv, Args& out) {
             }
             out.auth_users.emplace_back(up.substr(0, colon),
                                         up.substr(colon + 1));
+            out.auth_users_cli.emplace_back(up.substr(0, colon),
+                                            up.substr(colon + 1));
         }
         else {
             std::fprintf(stderr, "unknown arg: %s\n", a.c_str());
@@ -328,6 +338,7 @@ bool load_config_and_args(int argc, char** argv, Args& out) {
             return false;
         }
         apply_ini(cfg, out);
+        out.config_path = config_path;
     }
     // Second pass: CLI flags overlay the file.
     return parse_args(argc, argv, out);
@@ -560,6 +571,17 @@ int run_server(const Args& args, bool console) {
     if (args.has_max_sessions) srv.set_max_sessions(args.max_sessions, args.max_sessions_source);
     for (const auto& u : args.auth_users)
         srv.add_credential(u.first, u.second);
+    // auth_user hot reload: watch the startup openads.ini and pick up
+    // auth_user edits without a service restart. Only auth_user lines
+    // are applied live; every other key stays restart-only. A file that
+    // fails to parse or has zero auth_user lines keeps the current list
+    // (keep-last-good), and established sessions are never disconnected.
+    if (!args.config_path.empty()) {
+        srv.set_credential_reload(
+            openads::serverd::make_auth_user_reloader(args.config_path,
+                                                      args.auth_users_cli),
+            /*interval_seconds=*/2);
+    }
 
     // The HTTP Studio console browses one directory; when --data lists
     // several roots (";"-separated, for the wire-protocol jail — see

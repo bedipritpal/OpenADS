@@ -1,7 +1,7 @@
 name: Stage 5a remote file transport review on current parent
 on:
   push:
-    branches: [stage5a/vf-file-transport]
+    branches: [stage5a/vf-file-transport, stage5a/vf-file-transport-v2]
   workflow_dispatch: {}
 permissions:
   contents: read

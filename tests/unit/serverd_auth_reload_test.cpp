@@ -53,6 +53,28 @@ TEST_CASE("auth_user reloader applies a changed valid file") {
     CHECK(out3[1].first == "bob");
 }
 
+TEST_CASE("auth_user reloader detects a change in high-bit bytes") {
+    IniGuard g{temp_ini("highbit.ini")};
+    // Bytes above 0x7F (e.g. UTF-8 in a comment) must feed the change
+    // hash as unsigned values; a flip between two high-bit bytes is a
+    // real change even where plain char is signed.
+    write_ini(g.path, "# caf\xC3\xA9\nauth_user = alice:pw1\n");
+    auto reload = openads::serverd::make_auth_user_reloader(g.path.string(), {});
+
+    PairList out;
+    REQUIRE(reload(out));
+    REQUIRE(out.size() == 1);
+
+    PairList out2;
+    CHECK_FALSE(reload(out2));  // unchanged
+
+    write_ini(g.path, "# caf\xC3\xA8\nauth_user = alice:pw1\n");
+    PairList out3;
+    REQUIRE(reload(out3));  // one high-bit byte differs: detected
+    REQUIRE(out3.size() == 1);
+    CHECK(out3[0].first == "alice");
+}
+
 TEST_CASE("auth_user reloader keeps last good on parse error, then recovers") {
     IniGuard g{temp_ini("bad.ini")};
     write_ini(g.path, "auth_user = alice:pw1\n");

@@ -1,0 +1,73 @@
+name: ci-review-auth-user-ini-reload
+
+on:
+  push:
+    branches: [ci-review/auth-user-ini-reload]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.preset }}${{ matrix.tls && ' / TLS' || '' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            preset: msvc-x64
+            tls: false
+          # 32-bit MSVC: many deployments still ship x86. CI must build it
+          # so x86-only breakage (bitness-dependent narrowing C4244/C2220,
+          # SQLLEN*/SQLPOINTER signatures C2733, /WX C4100) can't slip past.
+          - os: windows-2022
+            preset: msvc-x86
+            tls: false
+          - os: ubuntu-24.04
+            preset: ninja-clang
+            tls: false
+          - os: macos-14
+            preset: default
+            tls: false
+          # M12.12 — verify the OPENADS_WITH_TLS path (vendored
+          # mbedtls 3.6) on at least one runner per release.
+          - os: ubuntu-24.04
+            preset: ninja-clang
+            tls: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Version string comes from `git describe --tags`: without
+          # tag refs a main-branch checkout reports a bare SHA (no
+          # dots) and network_version_test fails everywhere. Releases
+          # check out the tag itself so they never hit this.
+          # fetch-tags alone stays shallow (default fetch-depth: 1), so
+          # describe still can't see v* tags - fetch the full history.
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Install Ninja (Linux / macOS)
+        if: runner.os != 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
+      - name: Configure
+        run: |
+          cmake --preset ${{ matrix.preset }} \
+                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }}
+        shell: bash
+
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }} --config Release --target dbf_cdx_bench openads_unit_tests
+
+      - name: Test
+        run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure -C Release
+
+      - name: Bench smoke (CDX multi-tag create)
+        # Small run to smoke the optimized INDEX ON / bulk create path (#128)
+        run: |
+          BENCH="build/${{ matrix.preset }}/tests/Release/dbf_cdx_bench${{ runner.os == 'Windows' && '.exe' || '' }}"
+          if [ -f "$BENCH" ]; then
+            "$BENCH" 1000 || true
+          fi
+        shell: bash
+

@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -111,9 +112,16 @@ public:
     void add_credential(const std::string& user,
                         const std::string& password);
     bool require_auth() const noexcept;
-    // Credential lookup used by tests and available to login paths:
-    // true when `user` exists and `password` verifies against the stored
-    // salted verifier. Takes creds_mu_ itself.
+    // Login verification used by every login path (plain TCP Connect,
+    // the auth:// CompleteAuth internal Connect, management login).
+    // Passes the writer-waiting gate below, then verifies under
+    // creds_mu_, so a credential reload cannot be starved by a login
+    // flood and a login always sees one complete credential map.
+    bool verify_login(const std::string& user,
+                      const std::string& password);
+    // Credential lookup used by tests: same gate + verify as the login
+    // paths. True when `user` exists and `password` verifies against the
+    // stored salted verifier.
     bool validate_credential(const std::string& user,
                              const std::string& password);
 
@@ -334,6 +342,16 @@ private:
     std::chrono::steady_clock::time_point        last_reload_check_{};
     bool                                         have_last_reload_check_ = false;
     std::uint32_t                                reload_interval_seconds_ = 0;
+    // Writer-waiting gate: a login checks writer_waiting_ under
+    // gate_mu_ and acquires creds_mu_ while still holding gate_mu_, so
+    // the check and the acquisition are one atomic step. The flag is
+    // atomic because the swap stores it BEFORE taking any lock: the
+    // next login through the gate then waits on gate_cv_ instead of
+    // racing the writer for creds_mu_, so a credential change lands
+    // even under a continuous login flood.
+    std::mutex                                   gate_mu_;
+    std::condition_variable                      gate_cv_;
+    std::atomic<bool>                            writer_waiting_{false};
     struct LoginAttempts {
         std::uint32_t failures = 0;
         std::chrono::steady_clock::time_point retry_at{};

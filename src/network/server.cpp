@@ -205,12 +205,25 @@ bool Server::require_auth() const noexcept {
     return !creds_.empty();
 }
 
-bool Server::validate_credential(const std::string& user,
-                                 const std::string& password) {
-    std::lock_guard<std::mutex> lk(creds_mu_);
+bool Server::verify_login(const std::string& user,
+                          const std::string& password) {
+    // Writer-waiting gate: the predicate is checked under gate_mu_ and
+    // creds_mu_ is acquired before gate_mu_ is released, so the check
+    // and the mutex acquisition are atomic - a reader that passed the
+    // check before the writer's flag store is the single in-flight
+    // verification the writer waits for. Waiting readers block on the
+    // condition variable (no busy-spin) and are woken after the swap.
+    std::unique_lock<std::mutex> g(gate_mu_);
+    gate_cv_.wait(g, [this] { return !writer_waiting_.load(); });
+    std::lock_guard<std::mutex> c(creds_mu_);
     const auto it = creds_.find(user);
     return it != creds_.end() &&
            openads::engine::verify_password(it->second, password, false);
+}
+
+bool Server::validate_credential(const std::string& user,
+                                 const std::string& password) {
+    return verify_login(user, password);
 }
 
 void Server::set_credential_reload(CredentialReloadFn fn,
@@ -234,7 +247,12 @@ void Server::maybe_reload_credentials() {
     last_reload_check_ = now;
     have_last_reload_check_ = true;
     std::vector<std::pair<std::string, std::string>> next;
-    if (!cred_reload_fn_(next) || next.empty()) return;
+    try {
+        if (!cred_reload_fn_(next) || next.empty()) return;
+    } catch (...) {
+        // A misbehaving source must never take a login down.
+        return;
+    }
     // Hash outside creds_mu_: PBKDF2 is deliberately slow and must not
     // block logins that are mid-verification with the current map.
     std::unordered_map<std::string, std::string> fresh;
@@ -245,7 +263,26 @@ void Server::maybe_reload_credentials() {
         volatile char* w = u.second.empty() ? nullptr : &u.second[0];
         if (w) for (std::size_t i = 0; i < u.second.size(); ++i) w[i] = 0;
     }
+    // Writer-waiting gate: the flag is atomic and is stored BEFORE any
+    // lock is taken, so the next reader to pass through gate_mu_ sees it
+    // and waits on the condition variable instead of racing the writer
+    // for creds_mu_ - the swap competes only with the single in-flight
+    // verification. (Storing the flag under gate_mu_ instead would just
+    // move the starvation to the flag-setting acquisition itself.)
+    // The guard clears the flag and wakes the gate on every exit path,
+    // including a throw from the map swap.
     {
+        struct FlagGuard {
+            Server& s;
+            ~FlagGuard() {
+                {
+                    std::lock_guard<std::mutex> g(s.gate_mu_);
+                    s.writer_waiting_.store(false);
+                }
+                s.gate_cv_.notify_all();
+            }
+        } flag_guard{*this};
+        writer_waiting_.store(true);
         std::lock_guard<std::mutex> lk(creds_mu_);
         creds_.swap(fresh);
     }

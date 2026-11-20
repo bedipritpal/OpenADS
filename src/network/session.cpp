@@ -1949,9 +1949,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             // Connect, which share this handler.
             srv_->maybe_reload_credentials();
             if (srv_->require_auth()) {
-                std::lock_guard<std::mutex> clk(srv_->creds_mu_);
-                auto cit = srv_->creds_.find(user);
-                if (cit == srv_->creds_.end() || !openads::engine::verify_password(cit->second, pw, false)) {
+                // verify_login passes the writer-waiting gate and checks
+                // one complete credential map.
+                if (!srv_->verify_login(user, pw)) {
                     srv_->login_failed(peer_ip_, user);
                     reply = err("Connect: authentication failed",
                                 openads::AE_LOGIN_FAILED);
@@ -5778,10 +5778,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             // auth_user hot reload (same hook as the Connect path).
             srv_->maybe_reload_credentials();
             if (srv_->require_auth()) {
-                std::lock_guard<std::mutex> guard(srv_->creds_mu_);
-                const auto credential = srv_->creds_.find(user);
-                if (credential == srv_->creds_.end() ||
-                    !openads::engine::verify_password(credential->second, password, false)) {
+                // verify_login passes the writer-waiting gate and checks
+                // one complete credential map.
+                if (!srv_->verify_login(user, password)) {
                     srv_->login_failed(ip, user);
                     reply = err("Management login failed", openads::AE_LOGIN_FAILED); break;
                 }

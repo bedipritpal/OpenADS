@@ -1,9 +1,15 @@
 #include "doctest.h"
 #include "network/server.h"
+#include "network/socket.h"
+#include "network/wire.h"
+#include "openads/ace.h"
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -224,4 +230,149 @@ TEST_CASE("credential reload under concurrent logins keeps the map consistent") 
     CHECK(applied.load() >= 1);
     CHECK(srv.validate_credential("fresh", "newpw"));
     CHECK_FALSE(srv.validate_credential("old", "oldpw"));
+}
+
+TEST_CASE("credential reload: a throwing source keeps last good and the gate recovers") {
+    Server srv;
+    srv.add_credential("keeper", "pw");
+    int calls = 0;
+    srv.set_credential_reload(
+        [&](PairList& out) -> bool {
+            if (++calls == 1) throw std::runtime_error("broken source");
+            out = {{"keeper2", "pw2"}};
+            return true;
+        },
+        /*interval_seconds=*/0);
+
+    srv.maybe_reload_credentials();  // throws inside: contained
+    CHECK(srv.validate_credential("keeper", "pw"));
+
+    // The gate and the reload path recover: a later valid source applies.
+    srv.maybe_reload_credentials();
+    CHECK(srv.validate_credential("keeper2", "pw2"));
+    CHECK_FALSE(srv.validate_credential("keeper", "pw"));
+}
+
+TEST_CASE("credential reload never accepts failed credentials across swaps") {
+    Server srv;
+    srv.add_credential("u", "right");
+    std::atomic<bool> apply{false};
+    srv.set_credential_reload(
+        [&](PairList& out) -> bool {
+            if (!apply.load()) return false;
+            out = {{"u", "right2"}};
+            return true;
+        },
+        /*interval_seconds=*/0);
+    apply = true;
+    for (int i = 0; i < 5; ++i) {
+        srv.maybe_reload_credentials();
+        CHECK_FALSE(srv.validate_credential("u", "wrong"));
+        CHECK_FALSE(srv.validate_credential("ghost", "right"));
+        CHECK(srv.require_auth());
+    }
+    CHECK(srv.validate_credential("u", "right2"));
+}
+
+namespace {
+
+// Real Connect frame against a running server, over a real TCP socket.
+openads::network::Opcode try_tcp_login(openads::network::Server& srv,
+                                       const std::string& dir,
+                                       const char* user,
+                                       const char* pw) {
+    using namespace openads::network;
+    auto cli = connect_tcp("127.0.0.1", srv.port());
+    REQUIRE(cli.has_value());
+    Socket cs = cli.value();
+    Frame req;
+    req.opcode = Opcode::Connect;
+    auto pushlen = [](std::vector<std::uint8_t>& o, std::uint16_t n) {
+        o.push_back(static_cast<std::uint8_t>(n & 0xFFu));
+        o.push_back(static_cast<std::uint8_t>((n >> 8) & 0xFFu));
+    };
+    auto pushstr = [&](const char* s) {
+        const auto n = static_cast<std::uint16_t>(std::strlen(s));
+        pushlen(req.payload, n);
+        req.payload.insert(req.payload.end(), s, s + n);
+    };
+    pushstr(dir.c_str());
+    pushstr(user);
+    pushstr(pw);
+    REQUIRE(write_frame(cs, req).has_value());
+    auto reply = read_frame(cs);
+    REQUIRE(reply.has_value());
+    const Opcode op = reply.value().opcode;
+    sock_close(cs);
+    return op;
+}
+
+}  // namespace
+
+TEST_CASE("credential reload E2E: plain TCP Connect logins observe the reloaded map") {
+    namespace fs = std::filesystem;
+    auto dir = fs::temp_directory_path() / "openads_reload_e2e";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+
+    Server srv;
+    srv.add_credential("alice", "pw1");
+    std::atomic<int> version{1};
+    srv.set_credential_reload(
+        [&](PairList& out) -> bool {
+            if (version.load() == 1) return false;
+            out = {{"bob", "pw2"}};  // alice removed, bob added
+            return true;
+        },
+        /*interval_seconds=*/0);
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+
+    using openads::network::Opcode;
+    CHECK(try_tcp_login(srv, dir.string(), "alice", "pw1") == Opcode::ConnectAck);
+
+    // Simulates the operator saving a changed openads.ini. Positive
+    // checks come first: the server's pre-existing per-IP login
+    // throttling penalizes every intentional failure below.
+    version = 2;
+    CHECK(try_tcp_login(srv, dir.string(), "bob", "pw2") == Opcode::ConnectAck);  // addition
+    CHECK(try_tcp_login(srv, dir.string(), "alice", "pw1") == Opcode::Error);      // removal
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // throttle window
+    CHECK(try_tcp_login(srv, dir.string(), "bob", "bad") == Opcode::Error);        // wrong pw
+
+    srv.stop();
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("credential reload E2E: management login observes the reloaded map") {
+    Server srv;
+    srv.add_credential("admin", "pw1");
+    std::atomic<int> version{1};
+    srv.set_credential_reload(
+        [&](PairList& out) -> bool {
+            if (version.load() == 1) return false;
+            out = {{"admin2", "pw2"}};  // admin removed, admin2 added
+            return true;
+        },
+        /*interval_seconds=*/0);
+    REQUIRE(srv.start("127.0.0.1", 0).has_value());
+    std::string endpoint = "127.0.0.1:" + std::to_string(srv.port());
+
+    UNSIGNED8 admin[] = "admin", pw1[] = "pw1";
+    UNSIGNED8 admin2[] = "admin2", pw2[] = "pw2";
+    ADSHANDLE h = 0;
+    REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), admin, pw1, &h) == 0);
+    REQUIRE(AdsMgDisconnect(h) == 0);
+
+    // Simulates the operator saving a changed openads.ini. Positive
+    // check first: pre-existing per-IP login throttling penalizes the
+    // intentional failure below.
+    version = 2;
+    h = 0;
+    REQUIRE(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), admin2, pw2, &h) == 0);
+    REQUIRE(AdsMgDisconnect(h) == 0);
+    h = 0;
+    CHECK(AdsMgConnect(reinterpret_cast<UNSIGNED8*>(endpoint.data()), admin, pw1, &h) != 0);  // removal
+
+    srv.stop();
 }

@@ -106,7 +106,24 @@ TEST_CASE("auth_user reloader rejects zero auth_user lines") {
     CHECK_FALSE(reload(out));
 }
 
-TEST_CASE("auth_user reloader rejects malformed auth_user and missing file") {
+TEST_CASE("auth_user reloader skips malformed entries, applies valid ones") {
+    // Operator rule: a malformed auth_user line is ignored; the valid
+    // users still load. The affected user cannot log in until fixed.
+    IniGuard g{temp_ini("malformed_skip.ini")};
+    write_ini(g.path,
+              "auth_user = justaname\n"   // no colon: ignored
+              "auth_user = :pw\n"         // empty user: ignored
+              "auth_user = bob:\n"        // empty password: ignored
+              "auth_user = alice:pw1\n");
+    auto reload = openads::serverd::make_auth_user_reloader(g.path.string(), {});
+    PairList out;
+    REQUIRE(reload(out));
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].first == "alice");
+}
+
+TEST_CASE("auth_user reloader rejects an all-malformed list and a missing file") {
+    // Zero VALID entries must never replace a working list.
     IniGuard g{temp_ini("malformed.ini")};
     write_ini(g.path, "auth_user = justaname\n");
     auto reload = openads::serverd::make_auth_user_reloader(g.path.string(), {});

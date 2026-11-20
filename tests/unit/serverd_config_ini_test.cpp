@@ -173,10 +173,30 @@ TEST_CASE("parse_ini rejects http_user without a colon") {
     CHECK_FALSE(parse_ini("http_user = adminsecret\n", cfg, err));
 }
 
-TEST_CASE("parse_ini rejects auth_user without a colon") {
+TEST_CASE("parse_ini ignores malformed auth_user entries, keeps valid ones") {
+    // Operator rule: one bad auth_user line must not stop the server or
+    // block the other users; the affected user cannot log in until fixed.
     IniConfig cfg;
     std::string err;
-    CHECK_FALSE(parse_ini("auth_user = clientsecret\n", cfg, err));
+    REQUIRE(parse_ini(
+        "auth_user = alice:pw1\n"
+        "auth_user = user-paswd\n"      // no colon: ignored
+        "auth_user = :pw\n"            // empty user: ignored
+        "auth_user = bob:\n"           // empty password: ignored
+        "auth_user = carol:pw3\n",
+        cfg, err));
+    REQUIRE(cfg.auth_users.size() == 2);
+    CHECK(cfg.auth_users[0].first == "alice");
+    CHECK(cfg.auth_users[1].first == "carol");
+}
+
+TEST_CASE("parse_ini all-malformed auth_user parses with an empty list") {
+    // The file itself is valid; zero valid entries is the callers'
+    // decision (startup anonymous check / reload keep-last-good).
+    IniConfig cfg;
+    std::string err;
+    REQUIRE(parse_ini("auth_user = user-paswd\n", cfg, err));
+    CHECK(cfg.auth_users.empty());
 }
 
 TEST_CASE("parse_ini rejects a line with no equals sign") {

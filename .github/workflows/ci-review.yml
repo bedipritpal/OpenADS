@@ -109,6 +109,15 @@ jobs:
       - name: Build
         run: cmake --build build/${{ matrix.preset }} --config Release --target dbf_cdx_bench openads_unit_tests
 
+      - name: Assert auth:// reload probe is scheduled (TLS lane)
+        if: matrix.tls
+        shell: bash
+        run: |
+          set -e
+          test -x build/${{ matrix.preset }}/tools/serverd/auth_reload_probe
+          test -f build/${{ matrix.preset }}/tools/serverd/auth-reload-test-only.hrb
+          ctest --test-dir build/${{ matrix.preset }} -N -R '^auth_reload_v1$' | grep -q 'auth_reload_v1'
+
       - name: Test
         run: ctest --test-dir build/${{ matrix.preset }} --output-on-failure -C Release
 

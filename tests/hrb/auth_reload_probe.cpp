@@ -7,6 +7,12 @@
 //   3. A reload restoring usr makes it succeed again.
 //   4. A blob the mock rejects is never authenticated.
 //
+// Ordering respects the server's per-IP login backoff (a security
+// control, not to be probed through): every intentional rejection trips
+// it, so positive checks run before the next intentional failure and a
+// bounded wait clears the one unavoidable rejection (step 2) before the
+// restore check.
+//
 // Usage: auth_reload_probe <openads_auth_worker> <auth-reload-test-only.hrb>
 #include "network/server.h"
 #include "network/client.h"
@@ -14,10 +20,12 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -69,11 +77,15 @@ int main(int argc, char** argv) {
     };
 
     assert(login("test-only"));    // module approves; usr:pw accepted
-    assert(!login("wrong-suffix"));  // module rejects: never authenticated
     version = 1;
     assert(!login("test-only"));   // module still approves; usr removed
+    // That rejection is one per-IP login failure; the server enforces a
+    // 1s backoff (1 << (failures-1)). Wait it out rather than trip a
+    // security control the probe is not testing.
+    std::this_thread::sleep_for(std::chrono::seconds(2));
     version = 2;
     assert(login("test-only"));    // usr restored
+    assert(!login("wrong-suffix"));  // module rejects: never authenticated
     srv.stop();
     std::cerr << "auth_reload_v1 ok\n";
     return 0;

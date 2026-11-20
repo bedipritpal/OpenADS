@@ -152,7 +152,10 @@ data = .
 # ------------------------------------------------------------------
 # When at least one auth_user is configured, every remote connection
 # must supply a matching user/password in AdsConnect60. Use tls:// in
-# client URIs to protect credentials in transit.
+# client URIs to protect credentials in transit. A malformed auth_user
+# line (no colon, empty user, or empty password) is ignored rather than
+# rejected, so a typo never blocks startup; fix the line to restore the
+# account. If every auth_user line is malformed the file is rejected.
 # auth_user = client:change-me
 
 # ------------------------------------------------------------------

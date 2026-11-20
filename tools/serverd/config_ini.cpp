@@ -232,12 +232,21 @@ bool parse_ini(const std::string& text, IniConfig& out, std::string& error) {
             out.http_users.emplace_back(val.substr(0, colon),
                                         val.substr(colon + 1));
         } else if (key == "auth_user") {
-            auto colon = val.find(':');
-            if (colon == std::string::npos || colon == 0) {
-                error = "line " + std::to_string(lineno) +
-                        ": auth_user must be user:password";
-                return false;
-            }
+            // Operator rule (settled 2026-11-19): a malformed auth_user
+            // line is IGNORED, never a parse error - one typo must not
+            // stop the server or block the other valid users. The
+            // affected user simply cannot log in until the line is
+            // fixed (fail-closed). Malformed means: no colon, empty
+            // user, or empty password (an empty password would be a
+            // passwordless login - never create one).
+            // Zero VALID entries is handled by the callers: startup's
+            // anonymous check refuses non-loopback without credentials,
+            // and the runtime reloader rejects an empty result, keeping
+            // the last valid list. Authentication is never switched off.
+            const auto colon = val.find(':');
+            if (colon == std::string::npos || colon == 0 ||
+                colon + 1 == val.size())
+                continue;  // ignored malformed entry, by design
             out.auth_users.emplace_back(val.substr(0, colon),
                                         val.substr(colon + 1));
         } else {

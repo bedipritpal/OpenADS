@@ -111,14 +111,17 @@ TEST_CASE("credential reload is interval-gated") {
     CHECK(srv.validate_credential("b", "pw"));
 }
 
-// KNOWN DEFECT (auth_user reload stage): password verification holds
-// creds_mu_ for the whole PBKDF2 run (pre-existing session.cpp behavior),
-// so readers that re-acquire it immediately can starve a reload swap for
-// as long as the flood lasts - a credential removal is then delayed, not
-// lost. This stress test reproduces the flood with spin-pacing and a hard
-// deadline: it FAILS until a bounded-progress design lands. Do not weaken
-// it; the paced variant below is the additional evidence for the swap
-// semantics themselves.
+// PRE-EXISTING DEFECT, worked around in this change (auth_user reload
+// stage): password verification holds creds_mu_ for the whole PBKDF2 run
+// (pre-existing session.cpp behavior), so readers that re-acquire it
+// immediately can starve a reload swap for as long as the flood lasts.
+// The writer-waiting gate added with the reload hook blocks new readers
+// before they take creds_mu_, and this unchanged stress now PASSES: the
+// swap lands within the deadline under a continuous login flood. The
+// underlying long lock hold itself is still in place - the gate bounds
+// its effect on the reload writer, it does not shorten the hold. Do not
+// weaken this test; the paced variant below is the additional evidence
+// for the swap semantics themselves.
 TEST_CASE("credential reload STRESS: swap must land under a continuous login flood") {
     // Heap-held so the failure path can leak it: when the swap starves,
     // the driver thread stays blocked inside maybe_reload_credentials

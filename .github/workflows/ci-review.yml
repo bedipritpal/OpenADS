@@ -50,10 +50,60 @@ jobs:
         if: runner.os != 'Windows'
         uses: seanmiddleditch/gha-setup-ninja@v6
 
+      # auth:// reload probe needs the server-side Harbour UDF lane
+      # (.hrb module). SDK bootstrap mirrors release.yml's Linux leg:
+      # build Harbour once, cache it, pass explicit include/lib/compiler
+      # paths to CMake.
+      - name: Cache Harbour SDK (Linux, TLS lane)
+        if: runner.os == 'Linux' && matrix.tls
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/harbour-udf
+          key: harbour-udf-linux-4ec2e154ed92757418bc30af571ab90240ab3209-v1
+
+      - name: Provision Harbour SDK (Linux, TLS lane)
+        if: runner.os == 'Linux' && matrix.tls
+        shell: bash
+        env:
+          HARBOUR_REF: 4ec2e154ed92757418bc30af571ab90240ab3209
+        run: |
+          set -e
+          HB="$RUNNER_TEMP/harbour-udf"
+          echo "HB_ROOT=$HB/install" >> "$GITHUB_ENV"
+          if [ -f "$HB/install/include/hbvm.h" ] && \
+             [ -n "$(find "$HB/install" -name 'libhbvmmt.a' 2>/dev/null | head -1)" ] && \
+             [ -n "$(find "$HB/install" -name harbour -type f 2>/dev/null | head -1)" ]; then
+            echo "Harbour SDK cached at $HB/install"
+          else
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev libx11-dev
+          rm -rf "$HB"
+          mkdir -p "$HB"
+          git clone --depth 1 --branch master https://github.com/harbour/core.git "$HB/src"
+          git -C "$HB/src" fetch --depth 1 origin "$HARBOUR_REF"
+          git -C "$HB/src" checkout "$HARBOUR_REF"
+          cd "$HB/src"
+          make -j"$(nproc)" install HB_INSTALL_PREFIX="$HB/install" HB_BUILD_3RDEXT=no
+          fi
+          HB_INC="$(dirname "$(find "$HB/install" -name hbvm.h | head -1)")"
+          HB_LIBDIR="$(dirname "$(find "$HB/install" -name 'libhbvmmt.a' | head -1)")"
+          HB_CC="$(find "$HB/install" -name harbour -type f -executable | head -1)"
+          if [ -z "$HB_INC" ] || [ -z "$HB_LIBDIR" ] || [ -z "$HB_CC" ]; then
+            echo "::error::Harbour SDK layout unexpected"
+            find "$HB/install" -maxdepth 4 | sort | head -80
+            exit 1
+          fi
+          {
+            echo "HARBOUR_INCLUDE_DIR=$HB_INC"
+            echo "HARBOUR_LIB_DIR=$HB_LIBDIR"
+            echo "HARBOUR_COMPILER=$HB_CC"
+          } >> "$GITHUB_ENV"
+
       - name: Configure
         run: |
           cmake --preset ${{ matrix.preset }} \
-                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }}
+                ${{ matrix.tls && '-DOPENADS_WITH_TLS=ON' || '' }} \
+                ${{ matrix.tls && format('-DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_INCLUDE_DIR={0} -DHARBOUR_LIB_DIR={1} -DHARBOUR_COMPILER={2}', env.HARBOUR_INCLUDE_DIR, env.HARBOUR_LIB_DIR, env.HARBOUR_COMPILER) || '' }}
         shell: bash
 
       - name: Build

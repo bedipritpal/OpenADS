@@ -18,8 +18,10 @@ constexpr std::size_t kMaxIniBytes = 1u << 20;
 // security hash, so a fast non-crypto hash is the right tool.
 std::uint64_t fnv1a64(const std::string& bytes) {
     std::uint64_t h = 14695981039346656037ull;
-    for (unsigned char c : bytes) {
-        h ^= c;
+    for (char ch : bytes) {
+        // Explicit widening: bytes above 0x7F hash as their unsigned
+        // value on both signed- and unsigned-char platforms.
+        h ^= static_cast<unsigned char>(ch);
         h *= 1099511628211ull;
     }
     return h;

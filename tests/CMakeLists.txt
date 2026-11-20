@@ -624,3 +624,12 @@ if(UNIX AND TARGET auth_mutual_probe)
         "${CMAKE_BINARY_DIR}/tools/serverd/mutual-test-only.hrb")
     set_tests_properties(auth_mutual_v2 PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
 endif()
+
+# auth:// hot-reload proof, same TLS+UDF lane as the mutual proof.
+if(UNIX AND TARGET auth_reload_probe)
+    add_dependencies(openads_unit_tests auth_reload_probe)
+    add_test(NAME auth_reload_v1 COMMAND auth_reload_probe
+        $<TARGET_FILE:openads_auth_worker>
+        "${CMAKE_BINARY_DIR}/tools/serverd/auth-reload-test-only.hrb")
+    set_tests_properties(auth_reload_v1 PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+endif()

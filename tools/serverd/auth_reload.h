@@ -5,15 +5,16 @@
 // client. This reloader lets the running server pick up auth_user changes
 // only. Every other key in the file stays restart-only.
 //
-// Agreed operator rules (decided with the owner before implementation):
+// Operator rules agreed with the owner before implementation (his
+// "I go with your recommendation" reply to the proposed rule sheet):
 //   - Only a fully parsed file is applied. Any parse error keeps the
 //     current working credential list (keep-last-good).
 //   - A file with ZERO auth_user lines is rejected for the same reason:
 //     an empty list must never switch authentication off on a live server.
 //   - Removals and password changes apply to NEW logins only; established
 //     sessions are never disconnected by a reload.
-//   - The reloader produces no log output (owner preference) and never
-//     throws.
+//   - The reloader produces no log output (no new log code was in the
+//     approved scope) and never throws.
 //
 // Change detection: the file is read twice per check and compared, so a
 // file observed mid-write is skipped until the next check; unchanged

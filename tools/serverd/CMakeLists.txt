@@ -61,10 +61,15 @@ if(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF)
  add_executable(auth_mutual_probe ${CMAKE_SOURCE_DIR}/tests/hrb/mutual/mutual_probe.cpp)
  target_link_libraries(auth_mutual_probe PRIVATE openads_core MbedTLS::mbedcrypto)
  target_include_directories(auth_mutual_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+ add_executable(auth_reload_probe ${CMAKE_SOURCE_DIR}/tests/hrb/auth_reload_probe.cpp)
+ target_link_libraries(auth_reload_probe PRIVATE openads_core MbedTLS::mbedcrypto)
+ target_include_directories(auth_reload_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
  if(MSVC)
  target_compile_options(auth_mutual_probe PRIVATE /UNDEBUG)
+ target_compile_options(auth_reload_probe PRIVATE /UNDEBUG)
  else()
  target_compile_options(auth_mutual_probe PRIVATE -UNDEBUG)
+ target_compile_options(auth_reload_probe PRIVATE -UNDEBUG)
  endif()
 endif()
 
@@ -81,4 +86,19 @@ if(OPENADS_BUILD_TESTS AND TARGET auth_mutual_probe)
         VERBATIM)
     add_custom_target(auth_mutual_test_hrb DEPENDS "${_mutual_hrb}")
     add_dependencies(auth_mutual_probe auth_mutual_test_hrb openads_auth_worker)
+endif()
+
+# Public V1 mock for the auth:// hot-reload probe (test-only, never installed).
+if(OPENADS_BUILD_TESTS AND TARGET auth_reload_probe)
+    set(_reload_hrb "${CMAKE_CURRENT_BINARY_DIR}/auth-reload-test-only.hrb")
+    add_custom_command(OUTPUT "${_reload_hrb}"
+        COMMAND "${HARBOUR_COMPILER}"
+            "${CMAKE_SOURCE_DIR}/tests/hrb/auth-spike/test_only.prg" -gh
+            "-o${_reload_hrb}"
+        COMMAND ${CMAKE_COMMAND} "-DHRB=${_reload_hrb}"
+            -P "${CMAKE_SOURCE_DIR}/tests/hrb/mutual/protect_fixture.cmake"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tests/hrb/auth-spike/test_only.prg"
+        VERBATIM)
+    add_custom_target(auth_reload_test_hrb DEPENDS "${_reload_hrb}")
+    add_dependencies(auth_reload_probe auth_reload_test_hrb openads_auth_worker)
 endif()

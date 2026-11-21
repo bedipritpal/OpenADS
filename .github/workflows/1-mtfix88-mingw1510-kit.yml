@@ -465,6 +465,23 @@ jobs:
         echo "frontend_diff=$frontend_diff" | tee -a output/vf87-proof.txt
         echo '--- diagnostic: same probe with different stdin states ---' | tee -a output/vf87-diag.txt
         for i in 1 2 3; do echo "inherited-stdin run $i" | tee -a output/vf87-diag.txt; output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-diag.txt || true; done
+        cat > output/ferr_trace.prg <<'TRACE'
+        PROCEDURE Main( cOrder )
+           LOCAL c := "include/openads/ace.h", d, x
+           OutStd( "TRACE order=" + cOrder + " START FError=" + hb_ntos( FError() ) + hb_eol() )
+           FOR x := 1 TO 2
+              IF cOrder == "native-first"
+                 hb_vfExists( c, @d ); OutStd( "hb_vfExists #" + hb_ntos( x ) + " FError=" + hb_ntos( FError() ) + hb_eol() )
+                 OAds_vfExists( c, @d ); OutStd( "OAds_vfExists #" + hb_ntos( x ) + " FError=" + hb_ntos( FError() ) + hb_eol() )
+              ELSE
+                 OAds_vfExists( c, @d ); OutStd( "OAds_vfExists #" + hb_ntos( x ) + " FError=" + hb_ntos( FError() ) + hb_eol() )
+                 hb_vfExists( c, @d ); OutStd( "hb_vfExists #" + hb_ntos( x ) + " FError=" + hb_ntos( FError() ) + hb_eol() )
+              ENDIF
+           NEXT
+           RETURN
+        TRACE
+        "$HBMK" output/ferr_trace.prg tests/smoke/harbour/vf_transport87.c -plat=win -comp=mingw -Lkit -lrddads -Loutput -lopenace32 -iinclude/openads -mt -gtstd -ooutput/vf87/ferr_trace 2>&1 | tail -2
+        for mode in inherited nul; do for ord in native-first wrapper-first; do echo "== trace $ord stdin=$mode" | tee -a output/vf87-diag.txt; if [ $mode = nul ]; then output/vf87/ferr_trace.exe $ord < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true; else output/vf87/ferr_trace.exe $ord 2>&1 | tee -a output/vf87-diag.txt || true; fi; done; done
         echo "direct to file" | tee -a output/vf87-diag.txt; output/vf87/vf_frontend87.exe > output/vf87-direct.txt 2>&1 || true; cat output/vf87-direct.txt | tee -a output/vf87-diag.txt
         output/vf87/vf_frontend87.exe < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true
         echo | output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-diag.txt || true
@@ -681,7 +698,7 @@ jobs:
         echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5 || true
     - name: Set up a complete MSYS2 perl for OpenSSL Configure
       id: msys
-      uses: msys2/setup-msys2@v2
+      uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0, upstream tag v2.33.0, checked 2026-11-21
       with:
         msystem: MSYS
         update: false
@@ -968,7 +985,7 @@ jobs:
         echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5 || true
     - name: Set up a complete MSYS2 perl for OpenSSL Configure
       id: msys
-      uses: msys2/setup-msys2@v2
+      uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0, upstream tag v2.33.0, checked 2026-11-21
       with:
         msystem: MSYS
         update: false

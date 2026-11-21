@@ -394,7 +394,74 @@ jobs:
         failed=0
         frontend_diff=0
         : > output/vf87-proof.txt
-        output/vf87/vf_frontend87.exe | tee -a output/vf87-proof.txt || { echo 'VF87-READONLY-UNEXPLAINED-DIFF: nonzero from vf_frontend87 under GCC 15.1 + owner Harbour r2602281433; diagnostics continue, readiness gate at job end fails' | tee -a output/vf87-proof.txt; frontend_diff=1; echo 'unexplained VF87-READONLY FError differences' > output/READINESS-BLOCKED-vf-frontend.txt; }
+        # Original unmodified reproducer: kept and recorded. Under inherited stdin it shows the
+        # startup hb_fsError=109 state (see ferr_order diagnostic); that run is recorded, not gated.
+        echo '--- original vf_frontend87, inherited stdin (recorded, see matched harness below) ---' | tee -a output/vf87-proof.txt
+        output/vf87/vf_frontend87.exe 2>&1 | tee output/vf87-original-inherited.txt | tee -a output/vf87-proof.txt || true
+        echo '--- original vf_frontend87, NUL stdin (gated) ---' | tee -a output/vf87-proof.txt
+        set +e; output/vf87/vf_frontend87.exe < /dev/null 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[0]}; set -e; test "$rc" = 0 || { frontend_diff=1; echo 'VF87-READONLY difference under NUL stdin' > output/READINESS-BLOCKED-vf-frontend.txt; }
+        echo '--- original vf_frontend87, pipe stdin (gated) ---' | tee -a output/vf87-proof.txt
+        set +e; echo | output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[1]}; set -e; test "$rc" = 0 || { frontend_diff=1; echo 'VF87-READONLY difference under pipe stdin' > output/READINESS-BLOCKED-vf-frontend.txt; }
+        # Matched-initial-state harness: same 18 cases (probe functions extracted unchanged from the
+        # original file), each probe preceded by an established and verified hb_fsError state (0 and
+        # a nonzero 2), in both call orders. Differences or an unestablished state fail the gate.
+        {
+        cat <<'MATCHED'
+        #include "fileio.ch"
+        PROCEDURE Main()
+           LOCAL nBad := 0, nState := 0, nRuns := 0, nS, cOrd, a, b, n
+           FOR EACH nS IN { 0, 2 }
+              FOR EACH cOrd IN { "native-first", "wrapper-first" }
+                 IF cOrd == "native-first"
+                    IF ! Prime( nS ); nState++; ENDIF
+                    a := NativeProbe()
+                    IF ! Prime( nS ); nState++; ENDIF
+                    b := OadsProbe()
+                 ELSE
+                    IF ! Prime( nS ); nState++; ENDIF
+                    b := OadsProbe()
+                    IF ! Prime( nS ); nState++; ENDIF
+                    a := NativeProbe()
+                 ENDIF
+                 nRuns++
+                 FOR n := 1 TO Len( a )
+                    IF hb_ValToExp( a[ n ] ) != hb_ValToExp( b[ n ] )
+                       OutStd( "DIFF state=" + hb_ntos( nS ) + " order=" + cOrd + " case=" + hb_ntos( n ) + " " + hb_ValToExp( a[ n ] ) + " / " + hb_ValToExp( b[ n ] ) + hb_eol() )
+                       nBad++
+                    ENDIF
+                 NEXT
+              NEXT
+           NEXT
+           OutStd( "VF87-MATCHED runs=" + hb_ntos( nRuns ) + " cases=" + hb_ntos( Len( a ) ) + " differences=" + hb_ntos( nBad ) + " state_not_established=" + hb_ntos( nState ) + hb_eol() )
+           ErrorLevel( nBad + nState )
+           RETURN
+        STATIC FUNCTION Prime( nWant )
+           IF nWant == 0
+              hb_vfLoad( "include/openads/ace.h", 17 )
+           ELSE
+              hb_vfLoad( "include/openads/no-such-file-87.h", 17 )
+           ENDIF
+           RETURN DIAG_FSERROR() == nWant
+        #pragma BEGINDUMP
+        #include "hbapi.h"
+        #include "hbapifs.h"
+        HB_FUNC( DIAG_FSERROR ) { hb_retni( ( int ) hb_fsError() ); }
+        #pragma ENDDUMP
+        MATCHED
+        sed -n '/^FUNCTION NativeProbe/,$p' tests/smoke/harbour/vf_frontend87.prg
+        } > output/vf_frontend87_matched.prg
+        "$HBMK" output/vf_frontend87_matched.prg tests/smoke/harbour/vf_transport87.c -plat=win -comp=mingw -Lkit -lrddads -Loutput -lopenace32 -iinclude/openads -mt -gtstd -ooutput/vf87/vf_frontend87_matched 2>&1 | tail -3
+        for mode in inherited nul pipe; do
+          echo "--- matched harness, $mode stdin (gated) ---" | tee -a output/vf87-proof.txt
+          set +e
+          case $mode in
+            nul) output/vf87/vf_frontend87_matched.exe < /dev/null 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[0]};;
+            pipe) echo | output/vf87/vf_frontend87_matched.exe 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[1]};;
+            *) output/vf87/vf_frontend87_matched.exe 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[0]};;
+          esac
+          set -e
+          if [ "$rc" != 0 ]; then frontend_diff=1; echo "VF87 matched-state harness failed under $mode stdin" > output/READINESS-BLOCKED-vf-frontend.txt; fi
+        done
         output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
         output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
         python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1

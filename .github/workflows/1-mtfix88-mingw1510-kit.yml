@@ -1491,7 +1491,7 @@ jobs:
         set -euo pipefail
         mkdir -p output
         build-legacy/tests/openads_fs_lock85_probe.exe | tee output/fs-lock85-process.txt
-    - name: Login gate and remote prefetch diagnostics with debugger capture (stops at first crash or hang)
+    - name: Login gate and remote prefetch diagnostics with debugger capture (first hang stack kept, stops at first crash)
       shell: bash
       run: |
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
@@ -1526,7 +1526,7 @@ jobs:
           counts['hang']+=1;rows.append('run %d HANG >25s'%i)
           g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8')
           p.kill();rows.append('hang stack captured');break
-        rows.append('summary until first crash or hang: %s runs_started=%d'%(counts,sum(counts.values())))
+        rows.append('summary until first crash (hangs are counted and the first hang stack kept): %s runs_started=%d'%(counts,sum(counts.values())))
         # separate finding: remote ordered prefetch, 20 isolated runs
         res=[]
         for i in range(20):
@@ -1781,7 +1781,7 @@ jobs:
           counts['hang']+=1;rows.append('run %d HANG >25s'%i)
           g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8')
           p.kill();rows.append('hang stack captured');break
-        rows.append('summary until first crash or hang: %s runs_started=%d'%(counts,sum(counts.values())))
+        rows.append('summary until first crash (hangs are counted and the first hang stack kept): %s runs_started=%d'%(counts,sum(counts.values())))
         # separate finding: remote ordered prefetch, 20 isolated runs
         res=[]
         for i in range(20):

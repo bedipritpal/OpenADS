@@ -405,6 +405,36 @@ jobs:
         awk '/LOCAL a := NativeProbe\(\), b := OadsProbe\(\), nBad := 0, n/ {print "   LOCAL a, b, nBad := 0, n"; print "   OutStd(\"MAIN-ENTRY FError=\"+hb_ntos(FError())+hb_eol())"; print "   a := NativeProbe(); OutStd(\"AFTER-NATIVE FError=\"+hb_ntos(FError())+hb_eol()); b := OadsProbe()"; next} /LOCAL cName := "include\/openads\/ace.h", cDest/ && !d {print; print "   OutStd(\"NATIVE-ENTRY FError=\"+hb_ntos(FError())+hb_eol())"; d=1; next} {print}' tests/smoke/harbour/vf_frontend87.prg > output/vf_frontend87_diag.prg
         "$HBMK" output/vf_frontend87_diag.prg tests/smoke/harbour/vf_transport87.c -plat=win -comp=mingw -Lkit -lrddads -Loutput -lopenace32 -iinclude/openads -mt -gtstd -ooutput/vf87/vf_frontend87_diag 2>&1 | tail -2
         for mode in inherited nul; do echo "== frontend87 diag copy stdin=$mode" | tee -a output/vf87-diag.txt; if [ $mode = nul ]; then output/vf87/vf_frontend87_diag.exe < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true; else output/vf87/vf_frontend87_diag.exe 2>&1 | tee -a output/vf87-diag.txt || true; fi; done
+        cat > output/ferr_order.prg <<'ORD'
+        PROCEDURE Main( cOrder )
+           LOCAL aS := {}, c := "include/openads/ace.h", d, x
+           AAdd( aS, { "entry", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+           DO CASE
+           CASE cOrder == "native-first"
+              x := hb_vfExists( c, @d ); AAdd( aS, { "native-exists", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+              x := OAds_vfExists( c, @d ); AAdd( aS, { "wrapper-exists", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+           CASE cOrder == "wrapper-first"
+              x := OAds_vfExists( c, @d ); AAdd( aS, { "wrapper-exists", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+              x := hb_vfExists( c, @d ); AAdd( aS, { "native-exists", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+           CASE cOrder == "load-then-native"
+              x := hb_vfLoad( c, 17 ); AAdd( aS, { "native-load", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+              x := hb_vfExists( c, @d ); AAdd( aS, { "native-exists", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+              x := OAds_vfExists( c, @d ); AAdd( aS, { "wrapper-exists", FError(), DIAG_FSERROR(), DIAG_FSOSERROR() } )
+           ENDCASE
+           OutStd( "ORDER " + cOrder + hb_eol() )
+           FOR EACH x IN aS
+              OutStd( "  " + PadR( x[ 1 ], 16 ) + " FError=" + hb_ntos( x[ 2 ] ) + " hb_fsError=" + hb_ntos( x[ 3 ] ) + " hb_fsOsError=" + hb_ntos( x[ 4 ] ) + hb_eol() )
+           NEXT
+           RETURN
+        #pragma BEGINDUMP
+        #include "hbapi.h"
+        #include "hbapifs.h"
+        HB_FUNC( DIAG_FSERROR ) { hb_retni( ( int ) hb_fsError() ); }
+        HB_FUNC( DIAG_FSOSERROR ) { hb_retni( ( int ) hb_fsOsError() ); }
+        #pragma ENDDUMP
+        ORD
+        "$HBMK" output/ferr_order.prg tests/smoke/harbour/vf_transport87.c -plat=win -comp=mingw -Lkit -lrddads -Loutput -lopenace32 -iinclude/openads -mt -gtstd -ooutput/vf87/ferr_order 2>&1 | tail -2
+        for mode in inherited nul pipe; do for ord in native-first wrapper-first load-then-native; do echo "== ferr_order $ord stdin=$mode" | tee -a output/vf87-diag.txt; case $mode in nul) output/vf87/ferr_order.exe $ord < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true;; pipe) echo | output/vf87/ferr_order.exe $ord 2>&1 | tee -a output/vf87-diag.txt || true;; *) output/vf87/ferr_order.exe $ord 2>&1 | tee -a output/vf87-diag.txt || true;; esac; done; done
         cat > output/ferr_trace.prg <<'TRACE'
         PROCEDURE Main( cOrder )
            LOCAL c := "include/openads/ace.h", d, x
@@ -810,8 +840,12 @@ jobs:
         "$HBMK" t2.prg -plat=win -comp=mingw -gtstd -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
         objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
         if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
-        CA="/c/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
-        test -f "$CA"
+        MS="$(dirname "$(dirname "$(dirname "$PERLX")")")"
+        CA=""
+        for c in "/c/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt" "/c/Program Files/Git/usr/ssl/certs/ca-bundle.crt" "$MS/usr/ssl/certs/ca-bundle.crt" "$MS/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem" "$MS/usr/ssl/cert.pem"; do if [ -f "$c" ]; then CA="$c"; break; fi; done
+        echo "CA bundle: $CA"
+        test -n "$CA"
+        grep -c 'BEGIN CERTIFICATE' "$CA"
         export OADS_CAFILE="$(cygpath -m "$CA")"
         ./t2.exe | tee t2-proof.txt
         head -1 t2-proof.txt | grep -q '^ *0'
@@ -1102,8 +1136,12 @@ jobs:
         "$HBMK" t2.prg -plat=win -comp=mingw -gtstd -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
         objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
         if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
-        CA="/c/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
-        test -f "$CA"
+        MS="$(dirname "$(dirname "$(dirname "$PERLX")")")"
+        CA=""
+        for c in "/c/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt" "/c/Program Files/Git/usr/ssl/certs/ca-bundle.crt" "$MS/usr/ssl/certs/ca-bundle.crt" "$MS/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem" "$MS/usr/ssl/cert.pem"; do if [ -f "$c" ]; then CA="$c"; break; fi; done
+        echo "CA bundle: $CA"
+        test -n "$CA"
+        grep -c 'BEGIN CERTIFICATE' "$CA"
         export OADS_CAFILE="$(cygpath -m "$CA")"
         ./t2.exe | tee t2-proof.txt
         head -1 t2-proof.txt | grep -q '^ *0'

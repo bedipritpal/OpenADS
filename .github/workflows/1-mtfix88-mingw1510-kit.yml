@@ -406,6 +406,9 @@ jobs:
         PROCEDURE Main( cOrder )
            LOCAL c := "include/openads/ace.h", d, x
            OutStd( "TRACE order=" + cOrder + " START FError=" + hb_ntos( FError() ) + hb_eol() )
+           x := hb_vfIsLocal( c ); OutStd( "after hb_vfIsLocal FError=" + hb_ntos( FError() ) + hb_eol() )
+           x := hb_vfExists( c, @d ); OutStd( "after hb_vfExists FError=" + hb_ntos( FError() ) + hb_eol() )
+           x := { hb_vfIsLocal( c ), hb_vfExists( c, @d ), d, FError() }; OutStd( "array form FError element=" + hb_ntos( x[ 4 ] ) + hb_eol() )
            FOR x := 1 TO 2
               IF cOrder == "native-first"
                  hb_vfExists( c, @d ); OutStd( "hb_vfExists #" + hb_ntos( x ) + " FError=" + hb_ntos( FError() ) + hb_eol() )
@@ -676,7 +679,7 @@ jobs:
         mingw32-make -f win32/Makefile.gcc PREFIX= libz.a -j2
         cp libz.a "$P/lib"; cp zlib.h zconf.h "$P/include"; cd ..
         tar xf ../dl/zstd-1.5.7.tar.gz --exclude='zstd-1.5.7/tests' --exclude='zstd-1.5.7/contrib'; cd zstd-1.5.7/lib
-        mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib -j2
+        mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib LIB_SRCDIR="$(cygpath -m "$PWD")" -j2
         cp libzstd.a "$P/lib"; cp zstd.h zdict.h zstd_errors.h "$P/include"; cd ../..
         tar xf ../dl/brotli-1.2.1.tar.gz
         cmake -S brotli-1.2.1 -B brotli-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DBROTLI_DISABLE_TESTS=ON -DBUILD_SHARED_LIBS=OFF
@@ -684,7 +687,7 @@ jobs:
         for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
         tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
         "$PERLX" ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
-        mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
+        mingw32-make PERL="$PERLX" -j2 build_libs; mingw32-make PERL="$PERLX" install_dev; cd ..
         tar xf ../dl/libssh2-1.11.1.tar.xz
         cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
         cmake --build ssh2-b -j2; cmake --install ssh2-b
@@ -963,7 +966,7 @@ jobs:
         mingw32-make -f win32/Makefile.gcc PREFIX= libz.a -j2
         cp libz.a "$P/lib"; cp zlib.h zconf.h "$P/include"; cd ..
         tar xf ../dl/zstd-1.5.7.tar.gz --exclude='zstd-1.5.7/tests' --exclude='zstd-1.5.7/contrib'; cd zstd-1.5.7/lib
-        mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib -j2
+        mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib LIB_SRCDIR="$(cygpath -m "$PWD")" -j2
         cp libzstd.a "$P/lib"; cp zstd.h zdict.h zstd_errors.h "$P/include"; cd ../..
         tar xf ../dl/brotli-1.2.1.tar.gz
         cmake -S brotli-1.2.1 -B brotli-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DBROTLI_DISABLE_TESTS=ON -DBUILD_SHARED_LIBS=OFF
@@ -971,7 +974,7 @@ jobs:
         for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
         tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
         "$PERLX" ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
-        mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
+        mingw32-make PERL="$PERLX" -j2 build_libs; mingw32-make PERL="$PERLX" install_dev; cd ..
         tar xf ../dl/libssh2-1.11.1.tar.xz
         cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
         cmake --build ssh2-b -j2; cmake --install ssh2-b

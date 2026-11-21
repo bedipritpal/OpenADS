@@ -1,0 +1,1127 @@
+name: mtfix88 mingw1510 x86 kit and modernized deps family
+permissions:
+  contents: write
+concurrency:
+  group: mtfix88-mingw1510
+  cancel-in-progress: false
+env:
+  KIT_VERSION: 1.09.75-mtfix88-mingw1510
+  PINNED_SOURCE: b0b66c49c404b6fa4055d98cf7fe7a1f53776161
+  HARBOUR_PIN: 4ec2e154ed92757418bc30af571ab90240ab3209
+'on':
+  push:
+    branches:
+    - kit/mtfix88-mingw1510
+    paths:
+    - .github/workflows/1-mtfix88-mingw1510-kit.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Create the prerelease after the candidate has been inspected
+        required: false
+        default: false
+        type: boolean
+jobs:
+  kitx86:
+    name: Build and prove x86 client kit with GCC 15.1 UCRT
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: kit/mtfix88-mingw1510
+    - name: Verify cumulative candidate pin and workflow-only build recipe
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/kit/mtfix88-mingw1510
+        git merge-base --is-ancestor $PINNED_SOURCE HEAD
+        test -z "$(git diff --name-only $PINNED_SOURCE HEAD -- . ':!.github/workflows')"
+      shell: bash
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           source=url if attempt==0 else url+'?openads_mtfix88_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
+           if attempt==2:raise
+           time.sleep(3*(attempt+1))
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Download exact GCC 15.1 UCRT toolchain and owner-tested Harbour archive
+      run: |
+        function Download-Exact($url,$out) {
+         for($i=0;$i -lt 4;$i++) {
+          try { Invoke-WebRequest $url -OutFile $out; return }
+          catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+         }
+        }
+        Download-Exact 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.1.0posix-12.0.0-ucrt-r1/winlibs-i686-posix-dwarf-gcc-15.1.0-mingw-w64ucrt-12.0.0-r1.zip' "$env:RUNNER_TEMP/winlibs15.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs15.zip" -Algorithm SHA256).Hash.ToLower() -ne '869fa6c0e17ef9581a9b796bd8a965a34d1ec1e2746528bc1067caadf2aa04c2'){throw 'Winlibs 15.1 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs15.zip" "-o$env:RUNNER_TEMP/winlibs15" -y
+        Download-Exact 'https://github.com/FiveTechSoft/harbour_and_xharbour_builds/raw/master/harbour_mingw1510_32_20260404.zip' "$env:RUNNER_TEMP/harbour1510.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/harbour1510.zip" -Algorithm SHA256).Hash.ToLower() -ne 'e90b249a48c553b967b452f0edd6b31e7a705a7df7cc8423b5bd163bdc330998'){throw 'Harbour 1510 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/harbour1510.zip" "-o$env:RUNNER_TEMP/hb1510" -y
+      shell: pwsh
+    - name: Build engine, DLL, server and auth worker with pinned GCC 15.1
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 15.1.0
+        HB="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=$KIT_VERSION -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker -j2
+      shell: bash
+    - name: Provision pinned Harbour source for rddads units and fixtures
+      run: |
+        set -euxo pipefail
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/hbsrc"
+        git -C "$RUNNER_TEMP/hbsrc" checkout --detach $HARBOUR_PIN
+        git -C "$RUNNER_TEMP/hbsrc" apply "$PWD/patches/harbour/rddads-pending-fields.patch"
+      shell: bash
+    - name: Exact GCC 15.1 and mingw-w64 12 runtime notices (Winlibs omits them)
+      run: |
+        set -euxo pipefail
+        W="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32")"
+        mkdir -p "$W/share/licenses/gcc" "$W/share/licenses/crt" "$W/share/licenses/winpthreads"
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING3 -o "$W/share/licenses/gcc/COPYING3"
+        echo '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903  '"$W/share/licenses/gcc/COPYING3" | sha256sum -c -
+        curl -fL https://raw.githubusercontent.com/gcc-mirror/gcc/ee5c3db6c5b2c3332912fb4c9cfa2864569ebd9a/COPYING.RUNTIME -o "$W/share/licenses/gcc/COPYING.RUNTIME"
+        echo '9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74  '"$W/share/licenses/gcc/COPYING.RUNTIME" | sha256sum -c -
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt -o "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt"
+        echo 'e9b2dc02451ea29092a1f25fa0f3c07207ed421f1807dffb0c4e6dce69dee7bd  '"$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt" | sha256sum -c -
+        curl -fL https://raw.githubusercontent.com/mingw-w64/mingw-w64/98dad1fefed2a07ade0b37ca6c610ad66739631a/mingw-w64-libraries/winpthreads/COPYING -o "$W/share/licenses/winpthreads/COPYING"
+        echo '63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177  '"$W/share/licenses/winpthreads/COPYING" | sha256sum -c -
+        mkdir -p kit/runtime-notices
+        cp "$W/share/licenses/gcc/COPYING3" kit/runtime-notices/gcc-COPYING3.txt
+        cp "$W/share/licenses/gcc/COPYING.RUNTIME" kit/runtime-notices/gcc-COPYING.RUNTIME.txt
+        cp "$W/share/licenses/crt/COPYING.MinGW-w64-runtime.txt" kit/runtime-notices/MinGW-w64-runtime.txt
+        cp "$W/share/licenses/winpthreads/COPYING" kit/runtime-notices/winpthreads-COPYING.txt
+      shell: bash
+    - name: Build DLL import RDDADS and threaded fixtures with owner toolchain
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 15.1.0
+        HB="$(cygpath -u "$RUNNER_TEMP/hbsrc")"
+        HBMK="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        mkdir -p srv mtdata output kit
+        cp build-legacy/src/*.dll build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/openads_auth_worker.exe srv/
+        cat > output/local_create.prg <<'PRG'
+        #include "ads.ch"
+        REQUEST ADS, ADSCDX
+        PROCEDURE Main( cDir )
+           LOCAL cDbf := cDir + "/TestIndex.dbf", cIdx := cDir + "/TestIndex.cdx"
+           FIELD NAME,CITY,INS
+           OAds_SetLogging( .F. )
+           AdsSetServerType( ADS_LOCAL_SERVER )
+           AdsConnect( "." )
+           AdsSetFileType( ADS_CDX )
+           RddSetDefault( "ADSCDX" )
+           DbCreate( cDbf, { { "NAME", "C", 19, 0 }, { "CITY", "C", 15, 0 }, { "AGE", "N", 3, 0 }, { "TS", "C", 23, 0 }, { "THD", "N", 3, 0 }, { "INS", "N", 4, 0 }, { "RDD", "C", 3, 0 } }, "ADSCDX" )
+           dbCloseArea()
+           USE ( cDbf ) VIA "ADSCDX" ALIAS _STG SHARED NEW
+           INDEX ON NAME TAG "IDX01" TO ( cIdx )
+           INDEX ON CITY TAG "IDX02" TO ( cIdx )
+           INDEX ON INS TAG "IDX03" TO ( cIdx )
+           dbCloseArea()
+           OutStd( "exact fixture ready" + hb_eol() )
+        RETURN
+
+        PRG
+        cat > output/probe_mt.prg <<'PRG'
+        #include "ads.ch"
+        #define __HLP__(s) .T.
+        REQUEST ADS, ADSCDX
+        STATIC s_hConn := 0
+        STATIC s_cRdd := "ADSCDX"
+        STATIC s_nRandom := 1
+        PROCEDURE Main( cUri, cDir )
+           LOCAL cChallenge, hPending := 0, i, x, aThreads := {}, cErr := Space(512)
+           ErrorBlock( {| e | OutStd( "ERROR " + hb_ValToExp(e) + hb_eol() ), Break(e) } )
+           AdsSetFileType( ADS_CDX )
+           AdsSetServerType( ADS_REMOTE_SERVER )
+           RddSetDefault( s_cRdd )
+           s_hConn := AdsConnect( cUri )
+           IF Empty( s_hConn )
+              OutStd( "CONNECT-FAIL" + hb_eol() )
+              ErrorLevel(3) ; QUIT
+           ENDIF
+           FOR i := 1 TO 9
+              AAdd(aThreads,hb_threadStart({|| StageExact(cDir)}))
+           NEXT
+           StageExact(cDir)
+           OutStd( "MAIN-STAGE-PASS" + hb_eol() )
+           dbGoTop()
+           OutStd( "MAIN-GOTOP-PASS lastrec=" + hb_ntos(LastRec()) + hb_eol() )
+           FOR EACH x IN aThreads
+              hb_threadJoin(x)
+           NEXT
+           OutStd( "EXACT-THREADS-JOINED lastrec=" + hb_ntos(LastRec()) + hb_eol() )
+           dbCloseArea()
+        RETURN
+        PROCEDURE StageExact(cDir)
+           BEGIN SEQUENCE
+              IF HeyAddRecords(cDir+"/TestIndex.dbf",cDir+"/TestIndex.cdx")
+         dbGoTop()
+              ENDIF
+              Mark("stage done")
+           RECOVER
+              Mark("RECOVER")
+              ErrorLevel(4)
+           END SEQUENCE
+        RETURN
+        PROCEDURE Mark(c)
+           OutStd("t"+hb_ntos(hb_threadId())+" "+c+hb_eol())
+        RETURN
+        PROCEDURE LogEvents(c)
+           Mark(c)
+        RETURN
+        FUNCTION HeyAddRecords( cDbf, cIdx )
+           LOCAL aRec, aData, lAppended
+           LOCAL lAdded := .T.
+
+           IF .T.
+              Mark( "before USE" )
+              USE ( cDbf ) VIA ( s_cRdd ) ALIAS _STG SHARED NEW
+           ENDIF
+           Mark( "after USE" )
+           IF ! Alias() == "_STG"
+              lAdded := .F.
+              ? "Could not Open: ", cDbf
+           ELSE
+              IF __HLP__( "__Switching it ON do not display records in the browser as well as referencing them__" )
+         Mark( "before dbSetIndex" )
+         dbSetIndex( cIdx )
+         Mark( "after dbSetIndex" )
+         dbSetOrder( 0 )
+              ENDIF
+              aData := { { "Alice"  , "Madrid"    }, ;
+                 { "Bob"    , "Barcelona" }, ;
+                 { "Phillip", "Panipat"   }, ;
+                 { "Charlie", "Valencia"  }, ;
+                 { "Linda"  , "Iris"      }, ;
+                 { "Finland", "Dallas"    }, ;
+                 { "Diana"  , "Sevilla"   }, ;
+                 { "Lucy"   , "Sevilla"   }, ;
+                 { "Jony"   , "Walker"    }, ;
+                 { "Edward" , "Bilbao"    } }
+              FOR EACH aRec IN aData
+         Mark( "before append " + hb_ntos( aRec:__enumIndex() ) )
+        #if 0
+         IF aRec:__enumIndex() > 1
+            EXIT
+         ENDIF
+        #endif
+         IF ! lAppended := _STG->( DbAppend() )
+            hb_idleSleep()
+            lAppended := _STG->( DbAppend() )
+         ENDIF
+         Mark( "after append ok=" + hb_ValToExp(lAppended) + " neterr=" + hb_ValToExp(NetErr()) + " recno=" + hb_ntos(RecNo()) )
+         IF lAppended
+            REPLACE _STG->NAME WITH aRec[ 1 ]
+            REPLACE _STG->CITY WITH aRec[ 2 ]
+            REPLACE _STG->AGE  WITH hb_randInt( 20, 120 )
+            REPLACE _STG->TS   WITH hb_TSToStr( hb_DateTime() )
+            REPLACE _STG->THD  WITH hb_threadId()
+            REPLACE _STG->INS  WITH s_nRandom
+            REPLACE _STG->RDD  WITH s_cRdd
+            //
+            Mark( "before commit" )
+            _STG->( DbCommit() ) ; _STG->( dbUnlock() )
+            Mark( "after commit/unlock" )  /* a must for networked applications */
+         ELSE
+            LogEvents( "Could not APPEND " + aRec[ 1 ] )
+         ENDIF
+              NEXT
+           ENDIF
+           RETURN lAdded
+
+
+        PRG
+        # DLL import library only. Never place a combined archive in kit.
+        cp build-legacy/src/libopenace32.dll.a kit/libopenace32.dll.a
+        cp build-legacy/src/openace32.dll output/openace32.dll
+        objdump -p output/openace32.dll > output/dll-pe.txt
+        if grep -Ei 'DLL Name:.*(libstdc|libgcc|libwinpthread|libssl|libcrypto|mbedtls|zlib).*\.dll' output/dll-pe.txt;then exit 1;fi
+        for unit in ads1 adsfunc adsmgmnt adsx;do
+         gcc -std=gnu99 -c "$HB/contrib/rddads/$unit.c" -I"$HB/include" -I"$HB/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
+        done
+        gcc -std=gnu99 -c contrib/oads_hb/oads_hb.c -I"$HB/include" -Iinclude/openads -o output/oads_hb.o
+        for member in oads_vf oads_vf_driver oads_vf_socket; do
+         gcc -std=gnu99 -c "contrib/oads_hb/$member.c" -I"$HB/include" -Iinclude/openads -o "output/$member.o"
+        done
+        ar rcs kit/librddads.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o output/oads_hb.o output/oads_vf.o output/oads_vf_driver.o output/oads_vf_socket.o
+        for name in local_create probe_mt;do
+         "$HBMK" "output/$name.prg" -plat=win -comp=mingw -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd -o"output/$name.exe"
+        done
+        cp output/probe_mt.exe output/probe_mt_dll.exe
+        "$HBMK" tests/smoke/harbour/copy_socket86.prg tests/smoke/harbour/copy_transport86.c -plat=win -comp=mingw -Lkit -lrddads -lopenace32 -iinclude/openads -mt -gtstd -ooutput/copy_socket86.exe
+        cat > output/check_rows.prg <<'CHECKROWS'
+        #include "ads.ch"
+        REQUEST ADS, ADSCDX
+        PROCEDURE Main(cDir)
+         LOCAL nRows:=0, nEmpty:=0
+         FIELD NAME,CITY
+         AdsSetServerType(ADS_LOCAL_SERVER)
+         AdsSetFileType(ADS_CDX)
+         RddSetDefault("ADSCDX")
+         USE (cDir+"/TestIndex.dbf") VIA "ADSCDX" SHARED NEW
+         dbGoTop()
+         DO WHILE !Eof()
+           nRows++
+           IF Empty(NAME) .OR. Empty(CITY)
+              nEmpty++
+           ENDIF
+           dbSkip()
+         ENDDO
+         OutStd("STORED rows="+hb_ntos(nRows)+" lastrec="+hb_ntos(LastRec())+" empty="+hb_ntos(nEmpty)+hb_eol())
+         dbCloseAll()
+        RETURN
+        CHECKROWS
+        "$HBMK" output/check_rows.prg -plat=win -comp=mingw -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd  -lws2_32 -lbcrypt -lpsapi -ooutput/check_rows.exe
+        cat > output/auth_static.prg <<'PRG'
+        #include "ads.ch"
+        REQUEST ADS, ADSCDX
+        PROCEDURE Main(cUrl)
+         LOCAL cChallenge,hPending:=0,hConn:=0,cBlob
+         IF !OAds_SetLogging(.T.)
+          OutStd("LOGGING-OPTIN-FAIL"+hb_eol())
+          ErrorLevel(6);QUIT
+         ENDIF
+         cChallenge:=OAds_BeginAuth(cUrl,@hPending)
+         IF Len(cChallenge)!=32
+          OutStd("AUTH-BEGIN-FAIL"+hb_eol())
+          ErrorLevel(3);QUIT
+         ENDIF
+         cBlob:=cChallenge+"test-only"
+         hConn:=OAds_CompleteAuth(hPending,cBlob)
+         IF Empty(hConn)
+          OutStd("AUTH-COMPLETE-FAIL"+hb_eol())
+          ErrorLevel(4);QUIT
+         ENDIF
+         OAds_SetConnection(hConn)
+         dbUseArea(.T.,"ADSCDX","TestIndex.dbf","TRACEPROBE",.T.,.F.)
+         IF !Used()
+          ErrorLevel(5);QUIT
+         ENDIF
+         dbCloseAll()
+         AdsDisconnect(hConn)
+         OAds_SetLogging(.F.)
+         OutStd("STATIC-AUTH-PASS"+hb_eol())
+        RETURN
+        PRG
+        "$HBMK" output/auth_static.prg -plat=win -comp=mingw -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd  -lws2_32 -lbcrypt -lpsapi -ooutput/auth_static.exe
+        objdump -p output/auth_static.exe > output/static-auth-pe.txt
+        grep -qi 'DLL Name: openace32.dll' output/static-auth-pe.txt
+        "$HBMK" tests/smoke/harbour/refresh_peer.prg -plat=win -comp=mingw -Lkit -lrddads -lopenace32 -iinclude/openads -i"$HB/contrib/rddads" -mt -gtstd -ooutput/refresh_peer.exe
+        objdump -p output/refresh_peer.exe > output/refresh-peer-pe.txt
+        grep -qi 'DLL Name: openace32.dll' output/refresh-peer-pe.txt
+        echo "$PINNED_SOURCE" > output/source-commit.txt
+        objdump -p output/openace32.dll | sed -n '/\[Ordinal\/Name Pointer\] Table/,$p' > output/dll-exports.txt
+        if grep -E '^.*\][[:space:]]+(_Z|\?)[^[:space:]]+' output/dll-exports.txt;then exit 1;fi
+      shell: bash
+    - name: Run twenty threaded B_BIG integrity fixtures through the GCC 15.1 client
+      run: |+
+        $data=(Resolve-Path mtdata).Path
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        & $srv --help | Out-File srv/help.txt
+        & $srv --version | Out-File srv/version.txt
+        $p=Start-Process -FilePath $srv -ArgumentList ('--port 16262 --data '+$data) -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput srv/stdout.log -RedirectStandardError srv/stderr.log -PassThru
+        $ok=$false
+        for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 16262 -WarningAction SilentlyContinue; if($c.TcpTestSucceeded){$ok=$true;break}; Start-Sleep -Milliseconds 500 }
+        if(-not $ok){throw 'server did not listen'}
+        $env:Path = (Resolve-Path srv).Path + ';' + $env:Path
+        for($trial=1;$trial -le 20;$trial++) {
+         $trialDir=Join-Path (Get-Location) "mtdata/dll$trial"
+         New-Item -ItemType Directory -Path $trialDir -Force | Out-Null
+         $trialDir=$trialDir.Replace('\','/')
+         & output/local_create.exe $trialDir | Out-File "output/dll$trial-fixture.txt"
+         $trialUrl="tcp://127.0.0.1:16262/$trialDir"
+         $clock=[System.Diagnostics.Stopwatch]::StartNew()
+         $p=Start-Process -FilePath (Resolve-Path output/probe_mt_dll.exe).Path -ArgumentList @($trialUrl,$trialDir) -RedirectStandardOutput "output/dll$trial-stdout.txt" -RedirectStandardError "output/dll$trial-stderr.txt" -PassThru
+         if(-not $p.WaitForExit(45000)){$p.Kill();throw "dll trial $trial hung"}
+         if($p.ExitCode -ne 0){throw "dll trial $trial failed exit $($p.ExitCode)"}
+         $clock.Stop()
+         $elapsed=$clock.Elapsed.TotalMilliseconds
+         $end=Select-String -Path "output/dll$trial-stdout.txt" -Pattern 'EXACT-THREADS-JOINED'
+         $fails=@(Select-String -Path "output/dll$trial-stdout.txt" -Pattern 'Could not APPEND').Count
+         $stored=& output/check_rows.exe $trialDir
+         $bytes=[System.IO.File]::ReadAllBytes("$trialDir/TestIndex.dbf")
+         $disk=[BitConverter]::ToUInt32($bytes,4)
+         "dll TRIAL $trial PASS $end elapsed_ms=$elapsed failed_appends=$fails disk_header=$disk $stored" | Tee-Object -FilePath output/repeat-summary.txt -Append
+         if(-not $end){throw "dll trial $trial incomplete"}
+         if($fails -ne 0 -or $disk -ne 100 -or $stored -notmatch 'rows=100 lastrec=100 empty=0'){throw "dll integrity mismatch"}
+        }
+        Get-Content output/dll-pe.txt
+      shell: pwsh
+    - name: Actual TCP CopyFile and FCopyFile through the packaged MinGW glue
+      shell: pwsh
+      run: |
+        python tests/copy_socket86.py --client output/openace32.dll --server srv/openads_serverd.exe --harbour-probe output/copy_socket86.exe --harbour-only | Tee-Object -FilePath output/copy86-tcp.txt
+        if($LASTEXITCODE -ne 0){throw 'actual socket CopyFile regression failed'}
+    - name: Exact Harbour vf family through the packaged MinGW archive
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PWD/output:$PWD/srv:$PATH"
+        HB="$(cygpath -u "$RUNNER_TEMP/hbsrc")"
+        HBMK="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        bash tests/build_vf87.sh "$HBMK" "$HB" "output" openace32 output/vf87 kit
+        bash tests/build_fsargs88.sh "$HBMK" "$HB" "output" openace32 output/vf87 kit
+        failed=0
+        : > output/vf87-proof.txt
+        output/vf87/vf_frontend87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
+        python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
+        python tests/vf_socket87.py --server srv/openads_serverd.exe --probe output/vf87/fs_args88.exe | tee -a output/vf87-proof.txt || failed=1
+        exit "$failed"
+    - name: DLL Harbour BeginAuth CompleteAuth native smoke
+      run: |
+        $env:OPENADS_WIRE_TRACE="1"
+        $env:OPENADS_WIRE_TRACE_FILE=(Join-Path $PWD "output/auth-wire-trace.txt")
+        $data=(Resolve-Path mtdata).Path
+        & output/local_create.exe $data | Out-File output/auth-trace-fixture.txt
+        if($LASTEXITCODE -ne 0){throw "auth trace fixture create failed"}
+        $mod=(Resolve-Path auth-probe.hrb).Path
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        $args='--port 17262 --data "'+$data+'" --auth_user usr:pw --auth_module "'+$mod+'"'
+        $p=Start-Process -FilePath $srv -ArgumentList $args -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput output/auth-server-stdout.txt -RedirectStandardError output/auth-server-stderr.txt -PassThru
+        try {
+         $ok=$false
+         for($i=0;$i -lt 60;$i++){ $c=Test-NetConnection -ComputerName 127.0.0.1 -Port 17262 -WarningAction SilentlyContinue;if($c.TcpTestSucceeded){$ok=$true;break};Start-Sleep -Milliseconds 500 }
+         if(-not $ok){throw 'auth server did not listen'}
+         $uri='auth://127.0.0.1:17262/'+$data.Replace('\','/')
+         $q=Start-Process -FilePath (Resolve-Path output/auth_static.exe).Path -ArgumentList $uri -RedirectStandardOutput output/static-auth-stdout.txt -RedirectStandardError output/static-auth-stderr.txt -PassThru
+         if(-not $q.WaitForExit(45000)){$q.Kill();throw 'static auth hung'}
+         if($q.ExitCode -ne 0){throw "static auth failed $($q.ExitCode)"}
+         if(-not (Select-String output/static-auth-stdout.txt -Pattern STATIC-AUTH-PASS)){throw 'static auth proof missing'}
+        } finally {if(-not $p.HasExited){$p.Kill()}}
+        if(-not (Select-String output/auth-wire-trace.txt -Pattern "wire  op[.]")){throw "auth wire trace missing"}
+        if(Select-String output/auth-wire-trace.txt -Pattern "wire  op[.]0x(3D|3F) "){throw "auth handshake leaked to wire trace"}
+        Get-Content output/static-auth-stdout.txt
+      shell: pwsh
+    - name: Compile the auth probe module with the owner Harbour
+      run: |
+        set -euxo pipefail
+        HBC="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/harbour.exe")"
+        "$HBC" tests/hrb/auth-spike/test_only.prg -gh -oauth-probe.hrb
+        MSYS_NO_PATHCONV=1 icacls.exe auth-probe.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
+      shell: bash
+    - name: Actual GCC 15.1 Harbour peer refresh with staged matched DLL and daemon
+      shell: pwsh
+      run: |
+        $ErrorActionPreference='Stop'
+        $data=(Resolve-Path mtdata).Path
+        $testdata=Join-Path $data 'refresh-peer'
+        New-Item -ItemType Directory -Force $testdata | Out-Null
+        $srv=(Resolve-Path srv/openads_serverd.exe).Path
+        $p=Start-Process $srv -ArgumentList @('--host','127.0.0.1','--allow_anonymous','--port','17264','--data',$testdata) -WorkingDirectory (Split-Path $srv) -RedirectStandardOutput output/refresh-server.txt -RedirectStandardError output/refresh-server-error.txt -PassThru
+        try {
+         $ready=$false
+         for($i=0;$i -lt 60;$i++) {
+          if($p.HasExited){throw 'refresh daemon exited'}
+          $c=New-Object System.Net.Sockets.TcpClient
+          try {$c.Connect('127.0.0.1',17264);$ready=$true} catch {} finally {$c.Dispose()}
+          if($ready){break};Start-Sleep -Milliseconds 500
+         }
+         if(-not $ready){throw 'refresh readiness timeout'}
+         & output/refresh_peer.exe reader ('tcp://127.0.0.1:17264/'+$testdata.Replace('\','/')) ($testdata+'\') *> output/refresh-peer-gcc-proof.txt
+         $rc=$LASTEXITCODE
+         Get-Content output/refresh-peer-gcc-proof.txt
+         if($rc -ne 0 -or -not(Select-String output/refresh-peer-gcc-proof.txt -Pattern REFRESH-PEER-HARBOUR-PASS -Quiet)){throw 'GCC x86 refresh proof failed'}
+        } finally {Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+    - name: Matched DLL import library and unsupported old-DLL guard
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        mkdir -p output/import-new output/import-old
+        nm kit/librddads.a | grep ' U _AdsFlushPendingFields' | tee output/rdd-symbol.txt
+        nm kit/libopenace32.dll.a | grep AdsFlushPendingFields | tee output/import-symbol.txt
+        objdump -p output/openace32.dll | grep AdsFlushPendingFields | tee output/export-symbol.txt
+        gcc tests/harbour_batch/abi_probe.c -Iinclude -Lkit -lopenace32 -o output/import-new/probe.exe
+        cp output/openace32.dll output/import-new/
+        (cd output/import-new && ./probe.exe) | tee output/import-proof.txt
+        python - <<'PYOLD'
+        import hashlib,pathlib,urllib.request,zipfile,io,os
+        u='https://api.github.com/repos/bedipritpal/OpenADS/releases/assets/722812042'
+        b=urllib.request.urlopen(urllib.request.Request(u,headers={'Accept':'application/octet-stream','Authorization':'Bearer '+os.environ['GH_TOKEN']}),timeout=120).read()
+        assert hashlib.sha256(b).hexdigest()=='f1281ea85425288b0bcf470183dd6d7ee6a7030ea82dff9a673a095e04cf8ee0'
+        z=zipfile.ZipFile(io.BytesIO(b));n=[n for n in z.namelist() if n.endswith('/bin/openace32.dll')];assert len(n)==1,n
+        pathlib.Path('output/import-old/openace32.dll').write_bytes(z.read(n[0]))
+        PYOLD
+        cp output/import-new/probe.exe output/import-old/
+        python - <<'PYLOAD'
+        import ctypes,pathlib,subprocess
+        ctypes.windll.kernel32.SetErrorMode(3)
+        p=pathlib.Path('output/import-old').resolve()
+        r=subprocess.run([str(p/'probe.exe')],cwd=p,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=20)
+        assert r.returncode!=0,(r.returncode,r.stdout)
+        pathlib.Path('output/old-dll-guard.txt').write_text('Unsupported oldDLL/newimport missing-export failure: '+str(r.returncode)+'\n')
+        print('OLD-DLL-MISSING-EXPORT-PASS',r.returncode)
+        PYLOAD
+    - name: Package the x86 kit delivery folder
+      run: |
+        set -euxo pipefail
+        K=delivery/mtfix88-mingw1510
+        mkdir -p "$K/bin" "$K/lib" "$K/include" "$K/docs" "$K/runtime-notices" "$K/fixtures"
+        cp output/openace32.dll "$K/bin/"
+        cp auth-probe.hrb "$K/bin/"
+        cp kit/libopenace32.dll.a kit/librddads.a "$K/lib/"
+        cp include/openads/ace.h "$RUNNER_TEMP/hbsrc/contrib/rddads/ads.ch" "$K/include/"
+        cp contrib/oads_hb/FILE_LOCKS_MTFIX85.txt contrib/oads_hb/COPY_SOCKET_MTFIX86.txt contrib/oads_hb/VF_PARITY_MTFIX87.txt "$K/docs/"
+        cp output/local_create.prg output/probe_mt.prg output/check_rows.prg output/auth_static.prg "$K/fixtures/"
+        cp output/import-proof.txt output/old-dll-guard.txt output/rdd-symbol.txt output/dll-exports.txt output/source-commit.txt "$K/docs/"
+        cp output/refresh-peer-gcc-proof.txt "$K/docs/" || true
+        cp kit/runtime-notices/* "$K/runtime-notices/"
+        cat > "$K/docs/README.txt" <<'NOTES'
+        OpenADS mtfix88 x86 client kit - MinGW GCC 15.1 UCRT build
+        Pritpal Bedi
+
+        Same mtfix88 code as the published qt492 kit (source pin
+        b0b66c49c404b6fa4055d98cf7fe7a1f53776161), built with the toolchain
+        tested today: winlibs i686 posix dwarf GCC 15.1.0 UCRT (C:\mingw32_15,
+        zip hash 869fa6c0...04c2) and Antonio Linares'
+        harbour_mingw1510_32_20260404 (C:\harbour-bin, zip hash
+        e90b249a...0998) for the Harbour compiler, headers and link libraries.
+
+        Layout: bin\openace32.dll (client DLL, keep matched with lib) +
+        auth-probe.hrb; lib\libopenace32.dll.a + librddads.a (rddads units
+        ads1/adsfunc/adsmgmnt/adsx + oads_hb/oads_vf/oads_vf_driver/
+        oads_vf_socket, compiled with GCC 15.1); include\ace.h + ads.ch;
+        docs\ the mtfix85/86/87 behavior notes and this run's proofs;
+        fixtures\ the four fixture .prg sources used in CI;
+        runtime-notices\ license texts of the shipped toolchain runtime.
+
+        Verified in this CI run with this exact toolchain: twenty threaded
+        B_BIG integrity fixtures (auto-open, 2000 ops, all PASS), actual TCP
+        CopyFile/FCopyFile through the packaged MinGW glue, the vf87 family
+        and fs_args88, the BeginAuth/CompleteAuth native smoke, the auth
+        static fixture, the auth probe module compile, the Harbour peer
+        refresh against the staged matched DLL and daemon, the matched
+        DLL/import-library export check (AdsFlushPendingFields present, no
+        C++ mangled exports) and the unsupported old-DLL guard.
+        The full 1832-case unit suite is NOT rerun under GCC 15.1 here; the
+        qt492 mtfix88 kit remains the published verified runtime. The first
+        Vouch/B_BIG link against this kit is yours. This kit does not deploy
+        or restart anything.
+
+        Functional content is unchanged from mtfix88: OAds_* connection-
+        argument repair, the full OAds_vf family (see VF_PARITY_MTFIX87.txt),
+        the mtfix86 socket allowlist repair and OAds_FCopyFile alias, and the
+        inherited mtfix82-85 file I/O, metadata and lock behavior described
+        in FILE_LOCKS_MTFIX85.txt. Prior kits stay frozen.
+        NOTES
+        sed -i 's/^        //' "$K/docs/README.txt"
+        (cd "$K" && find . -type f -exec sha256sum {} \;) > "$K/SHA256.txt"
+        7z a -tzip mtfix88-mingw1510-x86.zip ./delivery/mtfix88-mingw1510
+        sha256sum mtfix88-mingw1510-x86.zip
+      shell: bash
+    - uses: actions/upload-artifact@v4
+      with:
+        name: part-kit-x86
+        path: mtfix88-mingw1510-x86.zip
+        retention-days: 14
+  depsucrt:
+    name: Modernized static OpenSSL/CURL family x86 (mingw1510)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      EXPECT_GCC: 15.1.0
+    steps:
+    - name: Download exact GCC 15.1 UCRT toolchain and owner-tested Harbour archive
+      run: |
+        function Download-Exact($url,$out) {
+         for($i=0;$i -lt 4;$i++) {
+          try { Invoke-WebRequest $url -OutFile $out; return }
+          catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+         }
+        }
+        Download-Exact 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.1.0posix-12.0.0-ucrt-r1/winlibs-i686-posix-dwarf-gcc-15.1.0-mingw-w64ucrt-12.0.0-r1.zip' "$env:RUNNER_TEMP/winlibs15.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs15.zip" -Algorithm SHA256).Hash.ToLower() -ne '869fa6c0e17ef9581a9b796bd8a965a34d1ec1e2746528bc1067caadf2aa04c2'){throw 'Winlibs 15.1 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs15.zip" "-o$env:RUNNER_TEMP/toolchain" -y
+        Download-Exact 'https://github.com/FiveTechSoft/harbour_and_xharbour_builds/raw/master/harbour_mingw1510_32_20260404.zip' "$env:RUNNER_TEMP/harbour1510.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/harbour1510.zip" -Algorithm SHA256).Hash.ToLower() -ne 'e90b249a48c553b967b452f0edd6b31e7a705a7df7cc8423b5bd163bdc330998'){throw 'Harbour 1510 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/harbour1510.zip" "-o$env:RUNNER_TEMP/hb1510" -y
+      shell: pwsh
+
+    - name: Select the owner-tested Harbour as fixture compiler
+      shell: bash
+      run: |
+        set -euxo pipefail
+        echo "HBROOT=$(cygpath -u "$RUNNER_TEMP/hb1510")" >> "$GITHUB_ENV"
+        "$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")" --version | head -2
+    - name: Record toolchain identity
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
+        gcc -dumpversion
+        gcc -dumpmachine
+        echo 'int main(){return 0}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
+    - name: Download hash-pinned dependency sources
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p dl work && cd dl
+        dl() { curl -fL --retry 3 -o "$2" "$1"; echo "$3  $2" | sha256sum -c -; }
+        dl https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.xz zlib-1.4.tar.xz 4f11c512053d7bab8d9e9b89bde3575add3e4c50a383b42ef6cb837035fc5a7c
+        dl https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+        dl https://github.com/google/brotli/archive/refs/tags/v1.2.1.tar.gz brotli-1.2.1.tar.gz 98d35d11a78dc453aebb7d10c3748f3f73ff78c8267c0dc697b8631f67bf7e8f
+        dl https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz openssl-3.5.9.tar.gz 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+        dl https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz openssl-1.1.1w.tar.gz cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+        dl https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.xz libssh2-1.11.1.tar.xz 9954cb54c4f548198a7cbebad248bdc87dd64bd26185708a294b2b50771e3769
+        dl https://github.com/nghttp2/nghttp2/releases/download/v1.71.0/nghttp2-1.71.0.tar.xz nghttp2-1.71.0.tar.xz c0f55121d88650e4b9227aec28cebaf664d2417ca60fe70be0f8d38829f52116
+        dl https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.xz curl-8.23.0.tar.xz 8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
+    - name: Build the static family with the pinned toolchain
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:/c/Strawberry/perl/bin:$PATH"
+        test "$(gcc -dumpversion)" = "$EXPECT_GCC"
+        P="$(cygpath -u "$PWD/out")"; mkdir -p "$P/lib" "$P/include"
+        MK="$(command -v mingw32-make)"
+        cd work
+        tar xf ../dl/zlib-1.4.tar.xz; cd zlib-1.4
+        mingw32-make -f win32/Makefile.gcc PREFIX= libz.a -j2
+        cp libz.a "$P/lib"; cp zlib.h zconf.h "$P/include"; cd ..
+        tar xf ../dl/zstd-1.5.7.tar.gz; cd zstd-1.5.7/lib
+        mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib -j2
+        cp libzstd.a "$P/lib"; cp zstd.h zdict.h zstd_errors.h "$P/include"; cd ../..
+        tar xf ../dl/brotli-1.2.1.tar.gz
+        cmake -S brotli-1.2.1 -B brotli-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DBROTLI_DISABLE_TESTS=ON -DBUILD_SHARED_LIBS=OFF
+        cmake --build brotli-b -j2; cmake --install brotli-b
+        for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
+        tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
+        perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
+        mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
+        tar xf ../dl/libssh2-1.11.1.tar.xz
+        cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
+        cmake --build ssh2-b -j2; cmake --install ssh2-b
+        tar xf ../dl/nghttp2-1.71.0.tar.xz
+        cmake -S nghttp2-1.71.0 -B ng-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DENABLE_STATIC_LIB=ON -DENABLE_SHARED_LIB=OFF -DBUILD_TESTING=OFF
+        cmake --build ng-b -j2; cmake --install ng-b
+        tar xf ../dl/curl-8.23.0.tar.xz
+        cmake -S curl-8.23.0 -B curl-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_COMPILER_WORKS=1 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" "-DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DNGHTTP2_STATICLIB" -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCURL_STATICLIB=ON -DBUILD_CURL_EXE=ON -DBUILD_TESTING=OFF -DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DCURL_USE_LIBSSH2=ON -DUSE_NGHTTP2=ON -DCURL_BROTLI=ON -DCURL_ZSTD=ON -DCURL_ZLIB=ON -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF -DCURL_USE_SCHANNEL=OFF -DENABLE_WEBSOCKETS=ON
+        cmake --build curl-b -j2; cmake --install curl-b
+        echo FAMILY_BUILD_DONE
+    - name: Generate and merge the legacy OpenSSL symbol shim
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:$PATH"
+        P="$(cygpath -u "$PWD/out")"
+        H="$P/include/openssl"
+        grep -hE '^[[:space:]]*#[[:space:]]*define[[:space:]]+[A-Za-z0-9_]+[[:space:]]+[A-Za-z0-9_]+[[:space:]]*(/\*.*)?$' $H/*.h | sed -E 's/^[[:space:]]*#[[:space:]]*define[[:space:]]+([A-Za-z0-9_]+)[[:space:]]+([A-Za-z0-9_]+).*/\1 \2/' | sort -u > pairs.txt
+        nm "$P/lib/libcrypto.a" "$P/lib/libssl.a" 2>/dev/null | awk '$2~/^[TDBRC]$/{print $3}' | sed 's/^_//' | sort -u > d.txt
+        awk 'NR==FNR{d[$1]=1;next} ($2 in d) && !($1 in d){print}' d.txt pairs.txt > legacy.txt
+        grep -E "^(EVP_|SSL|X509_|DES_)" legacy.txt | grep -vE "^(EVP_MD_CTX_size|EVP_PKEY_CTX_hkdf_mode) " > legacy2.txt
+        wc -l legacy.txt legacy2.txt
+        test "$(wc -l < legacy2.txt)" -ge 55
+        {
+        echo '/* OpenSSL 1.1.x -> 3.x legacy symbol shim: tail-jumps to the renamed 3.x functions. */'
+        while read old new; do
+         echo "__asm__(\".text\\n.globl _${old}\\n_${old}:\\n\\tjmp _${new}\\n\");"
+        done < legacy2.txt
+        cat <<'C'
+        #include <openssl/evp.h>
+        #include <openssl/ssl.h>
+        #undef EVP_PKEY_get1_tls_encodedpoint
+        #undef EVP_PKEY_set1_tls_encodedpoint
+        size_t EVP_PKEY_get1_tls_encodedpoint(EVP_PKEY *pkey, unsigned char **ppt)
+        { return EVP_PKEY_get1_encoded_public_key(pkey, ppt); }
+        int EVP_PKEY_set1_tls_encodedpoint(EVP_PKEY *pkey, const unsigned char *pt, size_t ptlen)
+        { return EVP_PKEY_set1_encoded_public_key(pkey, pt, ptlen); }
+        C
+        } > legacy.c
+        gcc -O2 -I"$P/include" -c legacy.c -o ossl_legacy.o
+        cp "$P/lib/libcrypto.a" libcrypto-noshim.a
+        ar q "$P/lib/libcrypto.a" ossl_legacy.o; ranlib "$P/lib/libcrypto.a"
+        nm "$P/lib/libcrypto.a" | grep " T _EVP_CIPHER_nid" | head -3
+        cp legacy2.txt "$P/LEGACY-SYMBOLS.txt"
+    - name: Build old-style hbssl and hbcurls against the family
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:$PATH"
+        P="$(cygpath -u "$PWD/out")"
+        HBMK="$(cygpath -u "$HBROOT/bin/win/mingw/hbmk2.exe")"
+        cd work
+        tar xf ../dl/openssl-1.1.1w.tar.gz
+        cd openssl-1.1.1w
+        perl Configure mingw no-asm >/dev/null
+        mingw32-make include/openssl/opensslconf.h >/dev/null
+        cd ..
+        git clone https://github.com/harbour/core.git hbsrc
+        git -C hbsrc checkout --detach $HARBOUR_PIN
+        export HB_INSTALL_PREFIX="$(cygpath -m "$HBROOT")"
+        export HB_WITH_OPENSSL="$(cygpath -m "$PWD/openssl-1.1.1w/include")"
+        mkdir -p ../hbssl-old
+        cd hbsrc/contrib/hbssl
+        "$HBMK" hbssl.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbssl-old/hbssl-x86" 2>&1 | tail -3
+        cd "$(cygpath -u "$OLDPWD")"
+        ls hbssl-old/
+        export HB_WITH_CURL="$(cygpath -m "$P/include")"
+        mkdir -p ../hbcurl-out
+        cd work/hbsrc/contrib/hbcurl
+        "$HBMK" hbcurls.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbcurl-out/hbcurls" 2>&1 | tail -3
+        cd "$(cygpath -u "$OLDPWD")"
+        ls hbcurl-out/
+    - name: Prove old hbssl symbol coverage and link plus run real HTTPS fixtures
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:$PATH"
+        P="$(cygpath -u "$PWD/out")"
+        HBMK="$(cygpath -u "$HBROOT/bin/win/mingw/hbmk2.exe")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$HBROOT")"
+        nm hbssl-old/libhbssl-x86.a 2>/dev/null | awk '$1=="U"{print $2}' | sed 's/^_//' | sort -u > u.txt
+        nm "$P/lib/libcrypto.a" "$P/lib/libssl.a" 2>/dev/null | awk '$2~/^[TDBRC]$/{print $3}' | sed 's/^_//' | sort -u > d2.txt
+        comm -23 u.txt d2.txt | grep -E "^(EVP|SSL|X509|BIO|ERR|RSA|PEM|OPENSSL|OBJ|ASN1|SSLeay|RAND|CRYPTO|d2i|i2d|ENGINE|OpenSSL|DH|DSA|EC|HMAC|MD|SHA|CONF|BN|sk_|OCSP|PKCS)" > missing.txt || true
+        cat missing.txt
+        test ! -s missing.txt
+        mkdir -p lt && cd lt
+        cat > t1.prg <<'PRG'
+        PROCEDURE Main()
+           ? SSL_INIT()
+           ? OpenSSL_version()
+           ? EVP_CIPHER_NID( EVP_get_cipherbyname( "aes-128-cbc" ) ), EVP_CIPHER_KEY_LENGTH( EVP_get_cipherbyname( "aes-128-cbc" ) ), EVP_CIPHER_BLOCK_SIZE( EVP_get_cipherbyname( "aes-128-cbc" ) )
+           ? EVP_MD_SIZE( EVP_get_digestbyname( "sha256" ) ), EVP_MD_BLOCK_SIZE( EVP_get_digestbyname( "sha256" ) )
+           RETURN
+        PRG
+        cat > t2.prg <<'PRG'
+        #include "hbcurl.ch"
+        PROCEDURE Main()
+           LOCAL h
+           curl_global_init()
+           h := curl_easy_init()
+           curl_easy_setopt( h, HB_CURLOPT_URL, "https://example.com/" )
+           curl_easy_setopt( h, HB_CURLOPT_DL_BUFF_SETUP )
+           ? curl_easy_perform( h )
+           ? SSL_INIT(), OpenSSL_version()
+           RETURN
+        PRG
+        WHOLE="$(cygpath -m "$PWD/../hbssl-old/libhbssl-x86.a")"
+        "$HBMK" t1.prg -plat=win -comp=mingw -ot1 -L../hbssl-old -L"$P/lib" -lhbssl-x86 -lssl -lcrypto -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32
+        ./t1.exe | tee t1-proof.txt
+        grep -q "OpenSSL 3.5.9" t1-proof.txt
+        grep -q 419 t1-proof.txt
+        "$HBMK" t2.prg -plat=win -comp=mingw -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
+        objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
+        if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
+        ./t2.exe | tee t2-proof.txt
+        head -1 t2-proof.txt | grep -q '^ *0'
+        grep -q "OpenSSL 3.5.9" t2-proof.txt
+    - name: Package the family kit
+      shell: bash
+      run: |
+        set -euxo pipefail
+        P="$(cygpath -u "$PWD/out")"
+        K="$(cygpath -u "$PWD/openssl-curl-mingw1510-x86")"
+        mkdir -p "$K/lib" "$K/include" "$K/harbour-hbcurl" "$K/test" "$K/bin"
+        cp "$P/lib/"*.a "$K/lib/"
+        cp -r "$P/include/"* "$K/include/"
+        rm -rf "$K/include/nghttp2/"*.in 2>/dev/null || true
+        cp hbcurl-out/libhbcurls.a "$K/harbour-hbcurl/"
+        cp work/hbsrc/contrib/hbcurl/hbcurl.ch work/hbsrc/contrib/hbcurl/hbcurl.hbx "$K/harbour-hbcurl/"
+        cp "$P/LEGACY-SYMBOLS.txt" "$K/"
+        cp lt/t1.prg "$K/test/test_hbssl.prg"; cp lt/t2.prg "$K/test/test_https.prg"
+        cp lt/t1-proof.txt lt/t2-proof.txt lt/missing.txt "$K/test/" 2>/dev/null || true
+        cp "$P/bin/curl.exe" "$K/bin/" || true
+        cat > "$K/README.txt" <<'NOTES'
+        Static OpenSSL + CURL kit for MinGW-w64 x86 - modernized rebuild
+        Versions: OpenSSL 3.5.9 (current 3.x LTS patch, built WITH deprecated/1.1.x APIs),
+        curl 8.23.0, libssh2 1.11.1, nghttp2 1.71.0, brotli 1.2.1 (plain and -static names),
+        zstd 1.5.7, zlib 1.4. Built with GCC 15.1.0 i686 UCRT posix dwarf (winlibs 15.1.0posix-12.0.0-ucrt-r1).
+        Use this set with the new toolchain world: C:\mingw32_15 + C:\harbour-bin
+        (harbour_mingw1510_32_20260404), the combination proven with B_BIG_1510.
+        These libraries are UCRT. Do NOT mix them into the Qt 4.9 / HbQt static
+        (MSVCRT) builds; keep the mingw10 set for that world.
+
+        The stock libhbssl.a keeps working: OpenSSL 3.x no longer exports the old function
+        names it calls (EVP_CIPHER_nid, EVP_MD_size, EVP_PKEY_size, ...), so libcrypto.a in
+        this kit carries a small merged compat object (ossl_legacy.o) that provides them as
+        tail-jump wrappers to the renamed 3.x functions. No hbssl recompile, no link-line
+        change. The exact symbol list is in LEGACY-SYMBOLS.txt.
+
+        Install: copy lib\*.a and include\* into the toolchain's lib/include folders (keep
+        a backup of the replaced files). Link line stays:
+          -lcrypto -lssl -lssh2 -lnghttp2 -lbrotlicommon-static -lbrotlidec-static -lbrotlienc-static -lzstd -lz
+        (order matters: curl, hbssl, ssh2, ssl, crypto, nghttp2, brotli x3, zstd, z).
+        Keep -lbcrypt in the .hbp (curl needs BCryptGenRandom); hbmk2 adds the other Windows
+        libs (ws2_32 crypt32 wldap32 ...). Define CURL_STATICLIB when compiling against
+        include\curl (harbour-hbcurl\libhbcurls.a is already built with it; hbcurl.ch and
+        hbcurl.hbx included). bin\curl.exe is the static curl tool. test\ holds the two
+        sample programs CI linked AND RAN against this exact kit: test_hbssl.prg prints the
+        OpenSSL version through the old-name shim; test_https.prg fetches https://example.com/
+        through hbcurl with the whole family linked in.
+
+        CI proof (this kit): old-style hbssl (compiled against OpenSSL 1.1.1w headers, the
+        same raw old-name references as the stock libhbssl.a) links with zero undefined
+        OpenSSL symbols; both sample programs ran on the GitHub Windows runner against this
+        exact build. First run inside a real Vouch/B_BIG build is still yours.
+
+        NOTES
+        (cd "$K" && find . -type f -exec sha256sum {} \;) > "$K/SHA256.txt"
+        7z a -tzip "openssl-curl-mingw1510-x86-ossl35.zip" "./openssl-curl-mingw1510-x86"
+        sha256sum "openssl-curl-mingw1510-x86-ossl35.zip"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: part-deps-mingw1510
+        path: openssl-curl-mingw1510-x86-ossl35.zip
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        if-no-files-found: warn
+        name: deps-mingw1510-proof
+        path: |
+          lt/
+          legacy2.txt
+          u.txt
+          d2.txt
+          missing.txt
+        retention-days: 14
+  depsmsvcrt:
+    name: Modernized static OpenSSL/CURL family x86 (mingw10)
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      EXPECT_GCC: 10.2.0
+    steps:
+    - name: Download exact Winlibs GCC 10.2 MSVCRT toolchain
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $headers=@{Accept='application/octet-stream';Authorization="Bearer $env:GH_TOKEN"}
+        Invoke-WebRequest -Headers $headers 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966370' -OutFile "$env:RUNNER_TEMP/winlibs10.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs10.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'){throw 'Winlibs 10.2 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs10.7z" "-o$env:RUNNER_TEMP/toolchain" -y
+      shell: pwsh
+
+    - name: Build pinned Harbour with the MSVCRT toolchain as fixture compiler
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/hb10src"
+        git -C "$RUNNER_TEMP/hb10src" checkout --detach $HARBOUR_PIN
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/hb10src" -j2
+        echo "HBROOT=$(cygpath -u "$RUNNER_TEMP/hb10src")" >> "$GITHUB_ENV"
+        "$(cygpath -u "$RUNNER_TEMP/hb10src/bin/win/mingw/hbmk2.exe")" --version | head -2
+    - name: Record toolchain identity
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
+        gcc -dumpversion
+        gcc -dumpmachine
+        echo 'int main(){return 0}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
+    - name: Download hash-pinned dependency sources
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p dl work && cd dl
+        dl() { curl -fL --retry 3 -o "$2" "$1"; echo "$3  $2" | sha256sum -c -; }
+        dl https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.xz zlib-1.4.tar.xz 4f11c512053d7bab8d9e9b89bde3575add3e4c50a383b42ef6cb837035fc5a7c
+        dl https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+        dl https://github.com/google/brotli/archive/refs/tags/v1.2.1.tar.gz brotli-1.2.1.tar.gz 98d35d11a78dc453aebb7d10c3748f3f73ff78c8267c0dc697b8631f67bf7e8f
+        dl https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz openssl-3.5.9.tar.gz 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+        dl https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1w/openssl-1.1.1w.tar.gz openssl-1.1.1w.tar.gz cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+        dl https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.xz libssh2-1.11.1.tar.xz 9954cb54c4f548198a7cbebad248bdc87dd64bd26185708a294b2b50771e3769
+        dl https://github.com/nghttp2/nghttp2/releases/download/v1.71.0/nghttp2-1.71.0.tar.xz nghttp2-1.71.0.tar.xz c0f55121d88650e4b9227aec28cebaf664d2417ca60fe70be0f8d38829f52116
+        dl https://github.com/curl/curl/releases/download/curl-8_23_0/curl-8.23.0.tar.xz curl-8.23.0.tar.xz 8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
+    - name: Build the static family with the pinned toolchain
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:/c/Strawberry/perl/bin:$PATH"
+        test "$(gcc -dumpversion)" = "$EXPECT_GCC"
+        P="$(cygpath -u "$PWD/out")"; mkdir -p "$P/lib" "$P/include"
+        MK="$(command -v mingw32-make)"
+        cd work
+        tar xf ../dl/zlib-1.4.tar.xz; cd zlib-1.4
+        mingw32-make -f win32/Makefile.gcc PREFIX= libz.a -j2
+        cp libz.a "$P/lib"; cp zlib.h zconf.h "$P/include"; cd ..
+        tar xf ../dl/zstd-1.5.7.tar.gz; cd zstd-1.5.7/lib
+        mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib -j2
+        cp libzstd.a "$P/lib"; cp zstd.h zdict.h zstd_errors.h "$P/include"; cd ../..
+        tar xf ../dl/brotli-1.2.1.tar.gz
+        cmake -S brotli-1.2.1 -B brotli-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DBROTLI_DISABLE_TESTS=ON -DBUILD_SHARED_LIBS=OFF
+        cmake --build brotli-b -j2; cmake --install brotli-b
+        for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
+        tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
+        perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
+        mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
+        tar xf ../dl/libssh2-1.11.1.tar.xz
+        cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
+        cmake --build ssh2-b -j2; cmake --install ssh2-b
+        tar xf ../dl/nghttp2-1.71.0.tar.xz
+        cmake -S nghttp2-1.71.0 -B ng-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DENABLE_STATIC_LIB=ON -DENABLE_SHARED_LIB=OFF -DBUILD_TESTING=OFF
+        cmake --build ng-b -j2; cmake --install ng-b
+        tar xf ../dl/curl-8.23.0.tar.xz
+        cmake -S curl-8.23.0 -B curl-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_COMPILER_WORKS=1 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" "-DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DNGHTTP2_STATICLIB" -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCURL_STATICLIB=ON -DBUILD_CURL_EXE=ON -DBUILD_TESTING=OFF -DCURL_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DCURL_USE_LIBSSH2=ON -DUSE_NGHTTP2=ON -DCURL_BROTLI=ON -DCURL_ZSTD=ON -DCURL_ZLIB=ON -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF -DCURL_USE_SCHANNEL=OFF -DENABLE_WEBSOCKETS=ON
+        cmake --build curl-b -j2; cmake --install curl-b
+        echo FAMILY_BUILD_DONE
+    - name: Generate and merge the legacy OpenSSL symbol shim
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:$PATH"
+        P="$(cygpath -u "$PWD/out")"
+        H="$P/include/openssl"
+        grep -hE '^[[:space:]]*#[[:space:]]*define[[:space:]]+[A-Za-z0-9_]+[[:space:]]+[A-Za-z0-9_]+[[:space:]]*(/\*.*)?$' $H/*.h | sed -E 's/^[[:space:]]*#[[:space:]]*define[[:space:]]+([A-Za-z0-9_]+)[[:space:]]+([A-Za-z0-9_]+).*/\1 \2/' | sort -u > pairs.txt
+        nm "$P/lib/libcrypto.a" "$P/lib/libssl.a" 2>/dev/null | awk '$2~/^[TDBRC]$/{print $3}' | sed 's/^_//' | sort -u > d.txt
+        awk 'NR==FNR{d[$1]=1;next} ($2 in d) && !($1 in d){print}' d.txt pairs.txt > legacy.txt
+        grep -E "^(EVP_|SSL|X509_|DES_)" legacy.txt | grep -vE "^(EVP_MD_CTX_size|EVP_PKEY_CTX_hkdf_mode) " > legacy2.txt
+        wc -l legacy.txt legacy2.txt
+        test "$(wc -l < legacy2.txt)" -ge 55
+        {
+        echo '/* OpenSSL 1.1.x -> 3.x legacy symbol shim: tail-jumps to the renamed 3.x functions. */'
+        while read old new; do
+         echo "__asm__(\".text\\n.globl _${old}\\n_${old}:\\n\\tjmp _${new}\\n\");"
+        done < legacy2.txt
+        cat <<'C'
+        #include <openssl/evp.h>
+        #include <openssl/ssl.h>
+        #undef EVP_PKEY_get1_tls_encodedpoint
+        #undef EVP_PKEY_set1_tls_encodedpoint
+        size_t EVP_PKEY_get1_tls_encodedpoint(EVP_PKEY *pkey, unsigned char **ppt)
+        { return EVP_PKEY_get1_encoded_public_key(pkey, ppt); }
+        int EVP_PKEY_set1_tls_encodedpoint(EVP_PKEY *pkey, const unsigned char *pt, size_t ptlen)
+        { return EVP_PKEY_set1_encoded_public_key(pkey, pt, ptlen); }
+        C
+        } > legacy.c
+        gcc -O2 -I"$P/include" -c legacy.c -o ossl_legacy.o
+        cp "$P/lib/libcrypto.a" libcrypto-noshim.a
+        ar q "$P/lib/libcrypto.a" ossl_legacy.o; ranlib "$P/lib/libcrypto.a"
+        nm "$P/lib/libcrypto.a" | grep " T _EVP_CIPHER_nid" | head -3
+        cp legacy2.txt "$P/LEGACY-SYMBOLS.txt"
+    - name: Build old-style hbssl and hbcurls against the family
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:$PATH"
+        P="$(cygpath -u "$PWD/out")"
+        HBMK="$(cygpath -u "$HBROOT/bin/win/mingw/hbmk2.exe")"
+        cd work
+        tar xf ../dl/openssl-1.1.1w.tar.gz
+        cd openssl-1.1.1w
+        perl Configure mingw no-asm >/dev/null
+        mingw32-make include/openssl/opensslconf.h >/dev/null
+        cd ..
+        git clone https://github.com/harbour/core.git hbsrc
+        git -C hbsrc checkout --detach $HARBOUR_PIN
+        export HB_INSTALL_PREFIX="$(cygpath -m "$HBROOT")"
+        export HB_WITH_OPENSSL="$(cygpath -m "$PWD/openssl-1.1.1w/include")"
+        mkdir -p ../hbssl-old
+        cd hbsrc/contrib/hbssl
+        "$HBMK" hbssl.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbssl-old/hbssl-x86" 2>&1 | tail -3
+        cd "$(cygpath -u "$OLDPWD")"
+        ls hbssl-old/
+        export HB_WITH_CURL="$(cygpath -m "$P/include")"
+        mkdir -p ../hbcurl-out
+        cd work/hbsrc/contrib/hbcurl
+        "$HBMK" hbcurls.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbcurl-out/hbcurls" 2>&1 | tail -3
+        cd "$(cygpath -u "$OLDPWD")"
+        ls hbcurl-out/
+    - name: Prove old hbssl symbol coverage and link plus run real HTTPS fixtures
+      shell: bash
+      run: |
+        set -euxo pipefail
+        WL="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32")"
+        export PATH="$WL/bin:$PATH"
+        P="$(cygpath -u "$PWD/out")"
+        HBMK="$(cygpath -u "$HBROOT/bin/win/mingw/hbmk2.exe")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$HBROOT")"
+        nm hbssl-old/libhbssl-x86.a 2>/dev/null | awk '$1=="U"{print $2}' | sed 's/^_//' | sort -u > u.txt
+        nm "$P/lib/libcrypto.a" "$P/lib/libssl.a" 2>/dev/null | awk '$2~/^[TDBRC]$/{print $3}' | sed 's/^_//' | sort -u > d2.txt
+        comm -23 u.txt d2.txt | grep -E "^(EVP|SSL|X509|BIO|ERR|RSA|PEM|OPENSSL|OBJ|ASN1|SSLeay|RAND|CRYPTO|d2i|i2d|ENGINE|OpenSSL|DH|DSA|EC|HMAC|MD|SHA|CONF|BN|sk_|OCSP|PKCS)" > missing.txt || true
+        cat missing.txt
+        test ! -s missing.txt
+        mkdir -p lt && cd lt
+        cat > t1.prg <<'PRG'
+        PROCEDURE Main()
+           ? SSL_INIT()
+           ? OpenSSL_version()
+           ? EVP_CIPHER_NID( EVP_get_cipherbyname( "aes-128-cbc" ) ), EVP_CIPHER_KEY_LENGTH( EVP_get_cipherbyname( "aes-128-cbc" ) ), EVP_CIPHER_BLOCK_SIZE( EVP_get_cipherbyname( "aes-128-cbc" ) )
+           ? EVP_MD_SIZE( EVP_get_digestbyname( "sha256" ) ), EVP_MD_BLOCK_SIZE( EVP_get_digestbyname( "sha256" ) )
+           RETURN
+        PRG
+        cat > t2.prg <<'PRG'
+        #include "hbcurl.ch"
+        PROCEDURE Main()
+           LOCAL h
+           curl_global_init()
+           h := curl_easy_init()
+           curl_easy_setopt( h, HB_CURLOPT_URL, "https://example.com/" )
+           curl_easy_setopt( h, HB_CURLOPT_DL_BUFF_SETUP )
+           ? curl_easy_perform( h )
+           ? SSL_INIT(), OpenSSL_version()
+           RETURN
+        PRG
+        WHOLE="$(cygpath -m "$PWD/../hbssl-old/libhbssl-x86.a")"
+        "$HBMK" t1.prg -plat=win -comp=mingw -ot1 -L../hbssl-old -L"$P/lib" -lhbssl-x86 -lssl -lcrypto -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32
+        ./t1.exe | tee t1-proof.txt
+        grep -q "OpenSSL 3.5.9" t1-proof.txt
+        grep -q 419 t1-proof.txt
+        "$HBMK" t2.prg -plat=win -comp=mingw -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
+        objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
+        if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
+        ./t2.exe | tee t2-proof.txt
+        head -1 t2-proof.txt | grep -q '^ *0'
+        grep -q "OpenSSL 3.5.9" t2-proof.txt
+    - name: Package the family kit
+      shell: bash
+      run: |
+        set -euxo pipefail
+        P="$(cygpath -u "$PWD/out")"
+        K="$(cygpath -u "$PWD/openssl-curl-mingw10-x86")"
+        mkdir -p "$K/lib" "$K/include" "$K/harbour-hbcurl" "$K/test" "$K/bin"
+        cp "$P/lib/"*.a "$K/lib/"
+        cp -r "$P/include/"* "$K/include/"
+        rm -rf "$K/include/nghttp2/"*.in 2>/dev/null || true
+        cp hbcurl-out/libhbcurls.a "$K/harbour-hbcurl/"
+        cp work/hbsrc/contrib/hbcurl/hbcurl.ch work/hbsrc/contrib/hbcurl/hbcurl.hbx "$K/harbour-hbcurl/"
+        cp "$P/LEGACY-SYMBOLS.txt" "$K/"
+        cp lt/t1.prg "$K/test/test_hbssl.prg"; cp lt/t2.prg "$K/test/test_https.prg"
+        cp lt/t1-proof.txt lt/t2-proof.txt lt/missing.txt "$K/test/" 2>/dev/null || true
+        cp "$P/bin/curl.exe" "$K/bin/" || true
+        cat > "$K/README.txt" <<'NOTES'
+        Static OpenSSL + CURL kit for MinGW-w64 x86 - modernized rebuild
+        Versions: OpenSSL 3.5.9 (current 3.x LTS patch, built WITH deprecated/1.1.x APIs),
+        curl 8.23.0, libssh2 1.11.1, nghttp2 1.71.0, brotli 1.2.1 (plain and -static names),
+        zstd 1.5.7, zlib 1.4. Built with GCC 10.2.0 i686 MSVCRT posix dwarf (winlibs 10.2.0, the mtfix88 CI pin).
+        Use this set with the existing world: HbQt static builds via MinGW 4.9.2,
+        Vouch on D:\mingw32 (GCC 10.2). These libraries are MSVCRT, the same CRT
+        family as the 2026-10-10 kit they replace, so they drop into the same
+        lib folder the same way (keep the backup of the old files).
+
+        The stock libhbssl.a keeps working: OpenSSL 3.x no longer exports the old function
+        names it calls (EVP_CIPHER_nid, EVP_MD_size, EVP_PKEY_size, ...), so libcrypto.a in
+        this kit carries a small merged compat object (ossl_legacy.o) that provides them as
+        tail-jump wrappers to the renamed 3.x functions. No hbssl recompile, no link-line
+        change. The exact symbol list is in LEGACY-SYMBOLS.txt.
+
+        Install: copy lib\*.a and include\* into the toolchain's lib/include folders (keep
+        a backup of the replaced files). Link line stays:
+          -lcrypto -lssl -lssh2 -lnghttp2 -lbrotlicommon-static -lbrotlidec-static -lbrotlienc-static -lzstd -lz
+        (order matters: curl, hbssl, ssh2, ssl, crypto, nghttp2, brotli x3, zstd, z).
+        Keep -lbcrypt in the .hbp (curl needs BCryptGenRandom); hbmk2 adds the other Windows
+        libs (ws2_32 crypt32 wldap32 ...). Define CURL_STATICLIB when compiling against
+        include\curl (harbour-hbcurl\libhbcurls.a is already built with it; hbcurl.ch and
+        hbcurl.hbx included). bin\curl.exe is the static curl tool. test\ holds the two
+        sample programs CI linked AND RAN against this exact kit: test_hbssl.prg prints the
+        OpenSSL version through the old-name shim; test_https.prg fetches https://example.com/
+        through hbcurl with the whole family linked in.
+
+        CI proof (this kit): old-style hbssl (compiled against OpenSSL 1.1.1w headers, the
+        same raw old-name references as the stock libhbssl.a) links with zero undefined
+        OpenSSL symbols; both sample programs ran on the GitHub Windows runner against this
+        exact build. First run inside a real Vouch/B_BIG build is still yours.
+
+        NOTES
+        (cd "$K" && find . -type f -exec sha256sum {} \;) > "$K/SHA256.txt"
+        7z a -tzip "openssl-curl-mingw10-x86-ossl35.zip" "./openssl-curl-mingw10-x86"
+        sha256sum "openssl-curl-mingw10-x86-ossl35.zip"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: part-deps-mingw10
+        path: openssl-curl-mingw10-x86-ossl35.zip
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        if-no-files-found: warn
+        name: deps-mingw10-proof
+        path: |
+          lt/
+          legacy2.txt
+          u.txt
+          d2.txt
+          missing.txt
+        retention-days: 14
+  publish:
+    name: Publish the prerelease with the three kits
+    runs-on: windows-2022
+    needs: [kitx86, depsucrt, depsmsvcrt]
+    if: ${{ inputs.publish }}
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: part-*
+        path: dist
+        merge-multiple: true
+    - name: Draft the release notes
+      shell: bash
+      run: |
+        set -euxo pipefail
+        cat > notes.md <<'NOTES'
+        Prerelease: mtfix88 x86 client kit rebuilt on MinGW GCC 15.1 UCRT, plus the
+        modernized static OpenSSL/CURL dependency family in both CRT worlds.
+
+        Assets:
+        - mtfix88-mingw1510-x86.zip: the mtfix88 x86 client kit (openace32.dll,
+          import library, librddads.a, headers, docs, fixtures, runtime notices)
+          built with winlibs GCC 15.1.0 UCRT + Antonio's harbour_mingw1510_32_20260404.
+          CI proofs: twenty threaded B_BIG integrity fixtures PASS, TCP
+          CopyFile/FCopyFile PASS, vf87 family + fs_args88 PASS, BeginAuth/
+          CompleteAuth smoke + auth static fixture PASS, auth-probe.hrb compiled,
+          Harbour peer refresh PASS, matched DLL export check + old-DLL guard PASS.
+          The full unit suite is NOT rerun under GCC 15.1; qt492 mtfix88 stays the
+          published verified runtime.
+        - openssl-curl-mingw1510-x86-ossl35.zip: static OpenSSL 3.5.9 + curl 8.23.0
+          family built with GCC 15.1 UCRT, for the C:\mingw32_15 + C:\harbour-bin
+          world. Includes the merged legacy-symbol shim so stock libhbssl.a keeps
+          linking (see README + LEGACY-SYMBOLS.txt inside). Do not mix into Qt 4.9.
+        - openssl-curl-mingw10-x86-ossl35.zip: the same family built with the mtfix88
+          CI toolchain (GCC 10.2 MSVCRT), drop-in modernized replacement for the
+          2026-10-10 kit in the HbQt static / Qt 4.9 / Vouch world.
+
+        Reproducibility: every dependency is a hash-pinned download; the workflow
+        file is the recipe.
+        NOTES
+        sed -i 's/^        //' notes.md
+        (cd dist && sha256sum *.zip) | tee dist/SHA256SUMS.txt
+    - name: Create the prerelease
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        gh release create v1.09.75-mtfix88-mingw1510 --prerelease --latest=false --target ${{ github.sha }} --title 'mtfix88 mingw1510 (GCC 15.1 UCRT) kit + modernized OpenSSL/CURL deps' --notes-file notes.md dist/*.zip dist/SHA256SUMS.txt
+        gh release view v1.09.75-mtfix88-mingw1510

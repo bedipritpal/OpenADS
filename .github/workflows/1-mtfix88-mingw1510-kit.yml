@@ -84,7 +84,7 @@ jobs:
     - name: Build engine, DLL, server and auth worker with pinned GCC 15.1
       run: |
         set -euxo pipefail
-        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        export PATH="/c/Program Files/CMake/bin:$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
         test "$(gcc -dumpversion)" = 15.1.0
         HB="$(cygpath -m "$RUNNER_TEMP/hb1510")"
         printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
@@ -583,7 +583,7 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
         gcc -dumpversion
         gcc -dumpmachine
-        echo 'int main(){return 0}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
+        echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
     - name: Download hash-pinned dependency sources
       shell: bash
       run: |
@@ -855,7 +855,7 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
         gcc -dumpversion
         gcc -dumpmachine
-        echo 'int main(){return 0}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
+        echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
     - name: Download hash-pinned dependency sources
       shell: bash
       run: |

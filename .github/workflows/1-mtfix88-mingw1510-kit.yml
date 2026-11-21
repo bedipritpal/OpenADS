@@ -1481,39 +1481,64 @@ jobs:
         pathlib.Path('unit-harness-changes.txt').write_text('\n'.join(changes))
 
         PYHARNESS
-        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.75-mtfix88-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-D_WIN32_WINNT=0x0600 -g" -DCMAKE_CXX_FLAGS="-D_WIN32_WINNT=0x0600 -g" -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.75-mtfix88-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
         cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker openads_unit_tests openads_case_lookup81_native openads_fs_lock85_probe openads_trace_gate_probe openads_trace_marker_probe -j2
     - name: FS byte-lock independent-process proof (GCC 15.1 binaries)
+      if: always()
       shell: bash
       run: |
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
         set -euo pipefail
         mkdir -p output
         build-legacy/tests/openads_fs_lock85_probe.exe | tee output/fs-lock85-process.txt
-    - name: Repeat the login gate stress case in isolation (diagnostic, records hangs)
+    - name: Login gate and remote prefetch diagnostics with debugger capture (stops at first crash or hang)
       shell: bash
       run: |
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
         set -euxo pipefail
         mkdir -p output unit-native-tmp
-        python - <<'PYREPEAT'
-        import os,pathlib,subprocess,time
-        tmp=pathlib.Path('unit-native-tmp').resolve()
+        python - <<'PYDIAG'
+        import os,pathlib,subprocess,time,sys
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)
         for k in ('TMPDIR','TMP','TEMP'):os.environ[k]=str(tmp)
         exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())
-        rows=[];hangs=0;fails=0
+        case='-tc=Login gate: holder blocks repeated challengers + churn'
+        out=pathlib.Path('output');out.mkdir(exist_ok=True)
+        rows=[];counts={'pass':0,'crash':0,'hang':0}
+        def gdb(*a,timeout=60):
+         try:return subprocess.run(['gdb','-batch']+list(a),stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout).stdout
+         except Exception as e:return 'gdb failed: '+repr(e)
+        have_gdb=subprocess.run('gdb --version',shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True).stdout.split('\n')[0]
+        rows.append('gdb: '+have_gdb)
         for i in range(40):
-         t=time.time()
+         t=time.time();p=subprocess.Popen([exe,case],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
          try:
-          r=subprocess.run([exe,'-tc=Login gate: holder blocks repeated challengers + churn'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90,text=True)
-          rows.append('run %d rc=%d %.1fs'%(i,r.returncode,time.time()-t))
-          if r.returncode:fails+=1
+          o,_=p.communicate(timeout=25);rc=p.returncode;d=time.time()-t
+          if rc==0:counts['pass']+=1;rows.append('run %d pass %.1fs'%(i,d));continue
+          counts['crash']+=1;rows.append('run %d rc=0x%08X %.1fs'%(i,rc&0xffffffff,d));rows.append('stdout tail: '+o[-600:].replace('\n',' | '))
+          for j in range(25):
+           g=gdb('-ex','run','-ex','bt 25','-ex','info registers eip','-ex','thread apply all bt 12','--args',exe,case)
+           if 'Program received signal' in g or 'EXCEPTION' in g or 'Access violation' in g:
+            (out/'login-gate-crash-gdb.txt').write_text(g,encoding='utf-8');rows.append('gdb crash captured after %d tries'%(j+1));break
+          else:rows.append('gdb did not reproduce a signal in 25 tries')
+          break
          except subprocess.TimeoutExpired:
-          hangs+=1;rows.append('run %d HANG >90s'%i)
-        rows.append('summary: runs=40 hangs=%d failures=%d'%(hangs,fails))
-        pathlib.Path('output/login-gate-repeat.txt').write_text('\n'.join(rows)+'\n')
+          counts['hang']+=1;rows.append('run %d HANG >25s'%i)
+          g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8')
+          p.kill();rows.append('hang stack captured');break
+        rows.append('summary until first crash or hang: %s runs_started=%d'%(counts,sum(counts.values())))
+        # separate finding: remote ordered prefetch, 20 isolated runs
+        res=[]
+        for i in range(20):
+         try:
+          r=subprocess.run([exe,'-tc=remote ordered prefetch: depth ramps instead of a flat block'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=60);res.append('pass' if r.returncode==0 else 'rc=0x%08X'%(r.returncode&0xffffffff))
+         except subprocess.TimeoutExpired:res.append('HANG')
+        rows.append('remote ordered prefetch isolated x20: '+', '.join(res))
+        (out/'login-gate-diagnostic.txt').write_text('\n'.join(rows)+'\n',encoding='utf-8')
         print('\n'.join(rows),flush=True)
-        PYREPEAT
+        for f in ('login-gate-crash-gdb.txt','login-gate-hang-gdb.txt'):
+         if (out/f).exists():print('----',f);print((out/f).read_text(encoding='utf-8')[:6000])
+        PYDIAG
     - name: Full repository default unit regression in bounded batches (GCC 15.1 binaries)
       shell: bash
       run: |
@@ -1592,6 +1617,7 @@ jobs:
 
         PYBATCH
     - name: Fresh-process diagnostics gate contract (GCC 15.1 binaries)
+      if: always()
       shell: bash
       run: |
         set -euo pipefail
@@ -1600,6 +1626,7 @@ jobs:
         build-legacy/tests/openads_case_lookup81_native.exe 300 | tee output/case81-native-proof.txt
         python tests/trace_gate_contract.py build-legacy/tests/openads_trace_gate_probe.exe build-legacy/tools/serverd/openads_serverd.exe | tee output/diagnostics-gate-contract.txt
     - name: Local marker full compact and zero-wire contract, C++ part (GCC 15.1 binaries)
+      if: always()
       shell: bash
       run: |
         export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
@@ -1634,6 +1661,145 @@ jobs:
           output/*.json
           output/unit-*.xml
           unit-harness-changes.txt
+        if-no-files-found: warn
+        retention-days: 14
+  unit102:
+    name: Same-source comparison, unit binary on GCC 10.2 MSVCRT
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: kit/mtfix88-mingw1510
+    - name: Verify cumulative candidate pin and workflow-only build recipe
+      shell: bash
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/kit/mtfix88-mingw1510
+        git merge-base --is-ancestor $PINNED_SOURCE HEAD
+        test -z "$(git diff --name-only $PINNED_SOURCE HEAD -- . ':!.github/workflows')"
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           source=url if attempt==0 else url+'?openads_mtfix88_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
+           if attempt==2:raise
+           time.sleep(3*(attempt+1))
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Download exact GCC 10.2 MSVCRT toolchain (same-source comparison)
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: pwsh
+      run: |
+        $headers=@{Accept='application/octet-stream';Authorization="Bearer $env:GH_TOKEN"}
+        Invoke-WebRequest -Headers $headers 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966370' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'){throw 'Winlibs 10.2 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+    - name: Build the unit test binary with GCC 10.2 MSVCRT and the pinned reference Harbour
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-server"
+        git -C "$RUNNER_TEMP/harbour-server" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        python - <<'PYHARNESS'
+        import pathlib,re,base64
+        root=pathlib.Path('.')
+        header=root/'tests/legacy-native-temp.h'
+        header.write_bytes(base64.b64decode('I3ByYWdtYSBvbmNlCiNpbmNsdWRlIDxmaWxlc3lzdGVtPgojaW5jbHVkZSA8c3lzdGVtX2Vycm9yPgojaW5jbHVkZSA8d2luZG93cy5oPgojaW5jbHVkZSA8dmVjdG9yPgpuYW1lc3BhY2Ugb3BlbmFkc190ZXN0IHsKaW5saW5lIHN0ZDo6ZmlsZXN5c3RlbTo6cGF0aCB0ZW1wX2RpcmVjdG9yeV9wYXRoKHN0ZDo6ZXJyb3JfY29kZSYgZWMpIHsKIHN0ZDo6dmVjdG9yPHdjaGFyX3Q+IGIoMzI3NjgpO0RXT1JEIG49R2V0VGVtcFBhdGhXKHN0YXRpY19jYXN0PERXT1JEPihiLnNpemUoKSksYi5kYXRhKCkpOwogaWYoIW4gfHwgbj49Yi5zaXplKCkpe2VjPXN0ZDo6ZXJyb3JfY29kZShHZXRMYXN0RXJyb3IoKSxzdGQ6OnN5c3RlbV9jYXRlZ29yeSgpKTtyZXR1cm4ge307fQogc3RkOjpmaWxlc3lzdGVtOjpwYXRoIHAoc3RkOjp3c3RyaW5nKGIuZGF0YSgpLG4pKTsKIC8vIFBpbm5lZCBNaW5HVzggc3RhdCByZWplY3RzIGRpcmVjdG9yeVxcIGJ1dCBhY2NlcHRzIGRpcmVjdG9yeS4gS2VlcCBkcml2ZSByb290Lgogd2hpbGUocCE9cC5yb290X3BhdGgoKSAmJiAhcC5oYXNfZmlsZW5hbWUoKSkgcD1wLnBhcmVudF9wYXRoKCk7CiBhdXRvIHN0PXN0ZDo6ZmlsZXN5c3RlbTo6c3RhdHVzKHAsZWMpOwogaWYoIWVjJiYhc3RkOjpmaWxlc3lzdGVtOjppc19kaXJlY3Rvcnkoc3QpKWVjPXN0ZDo6bWFrZV9lcnJvcl9jb2RlKHN0ZDo6ZXJyYzo6bm90X2FfZGlyZWN0b3J5KTsKIHJldHVybiBlYz9zdGQ6OmZpbGVzeXN0ZW06OnBhdGh7fTpwOwp9CmlubGluZSBzdGQ6OmZpbGVzeXN0ZW06OnBhdGggdGVtcF9kaXJlY3RvcnlfcGF0aCgpe3N0ZDo6ZXJyb3JfY29kZSBlYzthdXRvIHA9dGVtcF9kaXJlY3RvcnlfcGF0aChlYyk7CiBpZihlYyl0aHJvdyBzdGQ6OmZpbGVzeXN0ZW06OmZpbGVzeXN0ZW1fZXJyb3IoInRlc3QgbmF0aXZlIHRlbXBfZGlyZWN0b3J5X3BhdGgiLGVjKTtyZXR1cm4gcDt9Cn0K'))
+        changes=[]
+        for p in (root/'tests').rglob('*.cpp'):
+         s=p.read_text(encoding='utf-8',errors='strict')
+         n=re.sub(r'\b(?:std::filesystem|fs)::temp_directory_path\b','openads_test::temp_directory_path',s)
+         if n!=s:p.write_text(n,encoding='utf-8');changes.append(str(p))
+        with open(root/'tests/CMakeLists.txt','a') as f:f.write('\n# CI-only pinned MinGW test temp helper. Not linked into shipped targets.\ntarget_compile_options(openads_trace_gate_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_unit_tests PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_case_lookup81_native PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\ntarget_compile_options(openads_fs_lock85_probe PRIVATE -include "${CMAKE_CURRENT_SOURCE_DIR}/legacy-native-temp.h")\n')
+        print('Test-only native temp helper applied:',len(changes),'test files')
+        pathlib.Path('unit-harness-changes.txt').write_text('\n'.join(changes))
+
+        PYHARNESS
+
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=1.09.75-mtfix88-full-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-legacy --target openads_unit_tests -j2
+    - name: Login gate and remote prefetch diagnostics with debugger capture, GCC 10.2 MSVCRT (same source)
+      shell: bash
+      run: |
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+        set -euxo pipefail
+        mkdir -p output unit-native-tmp
+        python - <<'PYDIAG'
+        import os,pathlib,subprocess,time,sys
+        tmp=pathlib.Path('unit-native-tmp').resolve();tmp.mkdir(exist_ok=True)
+        for k in ('TMPDIR','TMP','TEMP'):os.environ[k]=str(tmp)
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())
+        case='-tc=Login gate: holder blocks repeated challengers + churn'
+        out=pathlib.Path('output');out.mkdir(exist_ok=True)
+        rows=[];counts={'pass':0,'crash':0,'hang':0}
+        def gdb(*a,timeout=60):
+         try:return subprocess.run(['gdb','-batch']+list(a),stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout).stdout
+         except Exception as e:return 'gdb failed: '+repr(e)
+        have_gdb=subprocess.run('gdb --version',shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True).stdout.split('\n')[0]
+        rows.append('gdb: '+have_gdb)
+        for i in range(40):
+         t=time.time();p=subprocess.Popen([exe,case],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+         try:
+          o,_=p.communicate(timeout=25);rc=p.returncode;d=time.time()-t
+          if rc==0:counts['pass']+=1;rows.append('run %d pass %.1fs'%(i,d));continue
+          counts['crash']+=1;rows.append('run %d rc=0x%08X %.1fs'%(i,rc&0xffffffff,d));rows.append('stdout tail: '+o[-600:].replace('\n',' | '))
+          for j in range(25):
+           g=gdb('-ex','run','-ex','bt 25','-ex','info registers eip','-ex','thread apply all bt 12','--args',exe,case)
+           if 'Program received signal' in g or 'EXCEPTION' in g or 'Access violation' in g:
+            (out/'login-gate-crash-gdb.txt').write_text(g,encoding='utf-8');rows.append('gdb crash captured after %d tries'%(j+1));break
+          else:rows.append('gdb did not reproduce a signal in 25 tries')
+          break
+         except subprocess.TimeoutExpired:
+          counts['hang']+=1;rows.append('run %d HANG >25s'%i)
+          g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8')
+          p.kill();rows.append('hang stack captured');break
+        rows.append('summary until first crash or hang: %s runs_started=%d'%(counts,sum(counts.values())))
+        # separate finding: remote ordered prefetch, 20 isolated runs
+        res=[]
+        for i in range(20):
+         try:
+          r=subprocess.run([exe,'-tc=remote ordered prefetch: depth ramps instead of a flat block'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=60);res.append('pass' if r.returncode==0 else 'rc=0x%08X'%(r.returncode&0xffffffff))
+         except subprocess.TimeoutExpired:res.append('HANG')
+        rows.append('remote ordered prefetch isolated x20: '+', '.join(res))
+        (out/'login-gate-diagnostic.txt').write_text('\n'.join(rows)+'\n',encoding='utf-8')
+        print('\n'.join(rows),flush=True)
+        for f in ('login-gate-crash-gdb.txt','login-gate-hang-gdb.txt'):
+         if (out/f).exists():print('----',f);print((out/f).read_text(encoding='utf-8')[:6000])
+        PYDIAG
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: unit102-diagnostic
+        path: |
+          output/*.txt
         if-no-files-found: warn
         retention-days: 14
   publish:

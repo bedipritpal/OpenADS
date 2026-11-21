@@ -802,11 +802,11 @@ jobs:
            RETURN
         PRG
         WHOLE="$(cygpath -m "$PWD/../hbssl-old/libhbssl-x86.a")"
-        "$HBMK" t1.prg -plat=win -comp=mingw -ot1 -L../hbssl-old -L"$P/lib" -lhbssl-x86 -lssl -lcrypto -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32
+        "$HBMK" t1.prg -plat=win -comp=mingw -gtstd -ot1 -L../hbssl-old -L"$P/lib" -lhbssl-x86 -lssl -lcrypto -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32
         ./t1.exe | tee t1-proof.txt
         grep -q "OpenSSL 3.5.9" t1-proof.txt
         grep -q 419 t1-proof.txt
-        "$HBMK" t2.prg -plat=win -comp=mingw -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
+        "$HBMK" t2.prg -plat=win -comp=mingw -gtstd -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
         objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
         if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
         ./t2.exe | tee t2-proof.txt
@@ -1090,11 +1090,11 @@ jobs:
            RETURN
         PRG
         WHOLE="$(cygpath -m "$PWD/../hbssl-old/libhbssl-x86.a")"
-        "$HBMK" t1.prg -plat=win -comp=mingw -ot1 -L../hbssl-old -L"$P/lib" -lhbssl-x86 -lssl -lcrypto -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32
+        "$HBMK" t1.prg -plat=win -comp=mingw -gtstd -ot1 -L../hbssl-old -L"$P/lib" -lhbssl-x86 -lssl -lcrypto -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32
         ./t1.exe | tee t1-proof.txt
         grep -q "OpenSSL 3.5.9" t1-proof.txt
         grep -q 419 t1-proof.txt
-        "$HBMK" t2.prg -plat=win -comp=mingw -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
+        "$HBMK" t2.prg -plat=win -comp=mingw -gtstd -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
         objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
         if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
         ./t2.exe | tee t2-proof.txt

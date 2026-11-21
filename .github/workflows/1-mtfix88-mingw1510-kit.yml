@@ -401,6 +401,8 @@ jobs:
         python tests/vf_socket87.py --server srv/openads_serverd.exe --probe output/vf87/fs_args88.exe | tee -a output/vf87-proof.txt || failed=1
         echo "frontend_diff=$frontend_diff" | tee -a output/vf87-proof.txt
         echo '--- diagnostic: same probe with different stdin states ---' | tee -a output/vf87-diag.txt
+        for i in 1 2 3; do echo "inherited-stdin run $i" | tee -a output/vf87-diag.txt; output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-diag.txt || true; done
+        echo "direct to file" | tee -a output/vf87-diag.txt; output/vf87/vf_frontend87.exe > output/vf87-direct.txt 2>&1 || true; cat output/vf87-direct.txt | tee -a output/vf87-diag.txt
         output/vf87/vf_frontend87.exe < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true
         echo | output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-diag.txt || true
         cat > output/ferr_diag.prg <<'DIAG'
@@ -417,6 +419,13 @@ jobs:
         echo | output/ferr_diag.exe 2>&1 | tee -a output/vf87-diag.txt
         output/ferr_diag.exe 2>&1 | tee -a output/vf87-diag.txt || true
         exit "$failed"
+    - name: Compile the auth probe module with the owner Harbour
+      run: |
+        set -euxo pipefail
+        HBC="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/harbour.exe")"
+        "$HBC" tests/hrb/auth-spike/test_only.prg -gh -oauth-probe.hrb
+        MSYS_NO_PATHCONV=1 icacls.exe auth-probe.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
+      shell: bash
     - name: DLL Harbour BeginAuth CompleteAuth native smoke
       run: |
         $env:OPENADS_WIRE_TRACE="1"
@@ -442,13 +451,6 @@ jobs:
         if(Select-String output/auth-wire-trace.txt -Pattern "wire  op[.]0x(3D|3F) "){throw "auth handshake leaked to wire trace"}
         Get-Content output/static-auth-stdout.txt
       shell: pwsh
-    - name: Compile the auth probe module with the owner Harbour
-      run: |
-        set -euxo pipefail
-        HBC="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/harbour.exe")"
-        "$HBC" tests/hrb/auth-spike/test_only.prg -gh -oauth-probe.hrb
-        MSYS_NO_PATHCONV=1 icacls.exe auth-probe.hrb /inheritance:r /grant "$USERNAME:R" /grant 'SYSTEM:R' /grant 'Administrators:R'
-      shell: bash
     - name: Actual GCC 15.1 Harbour peer refresh with staged matched DLL and daemon
       shell: pwsh
       run: |

@@ -1,4 +1,4 @@
-name: mtfix88 mingw1510 login gate hang wire-trace diagnostic
+name: mtfix88 mingw1510 login gate hang wire-trace diagnostic 2
 permissions:
   contents: read
   actions: read
@@ -91,8 +91,57 @@ jobs:
         for i in range(8):
          r=attempt('control',i,False);results['control'].append(r)
          if r!='pass':break
+        import re
+        def alive(pid):
+         r=subprocess.run('tasklist /FI "PID eq %d" /NH'%pid,shell=True,stdout=subprocess.PIPE,text=True).stdout
+         return str(pid) in r
+        def attempt_gdb(label,idx,traced):
+         d=out/('%s-%d'%(label,idx));d.mkdir(exist_ok=True)
+         tmp=(d/'tmp').resolve();tmp.mkdir(exist_ok=True)
+         env=os.environ.copy()
+         for k in list(env):
+          if k.startswith('OPENADS_'):env.pop(k)
+         for k in ('TMPDIR','TMP','TEMP'):env[k]=str(tmp)
+         (d/'openads.ini').write_text('')
+         env['OPENADS_INI']=str((d/'openads.ini').resolve())
+         if traced:
+          env['OPENADS_WIRE_TRACE']='1';env['OPENADS_WIRE_TRACE_FILE']=str((d/'wire.log').resolve())
+          env['OPENADS_LOG']='debug';env['OPENADS_LOG_FILE']=str((d/'audit.log').resolve())
+         cmds=['-ex','set pagination off','-ex','set confirm off','-ex','break main','-ex','run']
+         if traced:cmds+=['-ex','call (void)oads_set_logging(1)','-ex','call (int)oads_logging_enabled()']
+         cmds+=['-ex','detach','-ex','quit']
+         t=time.time()
+         with open(d/'stdout.txt','w') as so:
+          g=subprocess.run(['gdb','-batch']+cmds+['--args',exe,case],stdout=so,stderr=subprocess.STDOUT,env=env,timeout=120)
+         txt=(d/'stdout.txt').read_text(errors='replace')
+         m=re.search(r'process (\d+)\)? ?detached',txt) or re.search(r'process (\d+)',txt)
+         pid=int(m.group(1)) if m else 0
+         res=None
+         if pid:
+          end=time.time()+25
+          while time.time()<end and alive(pid):time.sleep(0.5)
+          if alive(pid):
+           res='HANG >25s'
+           (d/'netstat.txt').write_text(netstat(pid))
+           gg=subprocess.run(['gdb','-batch','-p',str(pid),'-ex','thread apply all bt 25'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=90).stdout
+           (d/'hang-gdb.txt').write_text(gg,encoding='utf-8')
+           subprocess.run('taskkill /F /PID %d'%pid,shell=True)
+          else:
+           txt=(d/'stdout.txt').read_text(errors='replace')
+           res='pass' if 'Status: SUCCESS' in txt else 'crash-or-fail (no success status)'
+         else:res='gdb start failed'
+         wl=(d/'wire.log');txt=(d/'stdout.txt').read_text(errors='replace')
+         info={'attempt':'%s-%d'%(label,idx),'result':res,'secs':round(time.time()-t,1),'wire_log_bytes':wl.stat().st_size if wl.exists() else 0,'stdout_wire_lines':txt.count('[wire]'),'stdout_session_end':txt.count('session end'),'logging_enabled_call_output':[l for l in txt.split('\n') if l.startswith('$')]}
+         rows.append(info);print(json.dumps(info),flush=True)
+         return res
+        for i in range(8):
+         r=attempt_gdb('gdbstart-traced',i,True);results.setdefault('gdbstart-traced',[]).append(r)
+         if r!='pass':break
+        for i in range(8):
+         r=attempt_gdb('gdbstart-control',i,False);results.setdefault('gdbstart-control',[]).append(r)
+         if r!='pass':break
         bad=[r for v in results.values() for r in v if r!='pass']
-        trace_active=any(x['wire_log_bytes']>0 or x['stderr_wire_lines']>0 for x in rows if x['attempt'].startswith('traced'))
+        trace_active=any(x.get('wire_log_bytes',0)>0 or x.get('stderr_wire_lines',0)>0 or x.get('stdout_wire_lines',0)>0 for x in rows if 'traced' in x['attempt'])
         summary={'ready':not bad and trace_active,'trace_active':trace_active,'attempts':rows}
         (out/'hang-diagnostic-summary.json').write_text(json.dumps(summary,indent=1))
         print('trace_active',trace_active,'non-pass',bad)

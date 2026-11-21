@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
         auto r = fs_lock_step(*f.value(), 0, 16, static_cast<std::uint16_t>(type), 0);
         if (!r) return 11;
         const bool want = std::string(argv[4]) == "free";
-        return r.value() == want ? 0 : 12;
+        return ( r.value() != 0 ) == want ? 0 : 12;
     }
     auto dir = fs::temp_directory_path() / ("openads-lock85-" + std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -35,8 +35,16 @@ int main(int argc, char** argv) {
     auto f = fs_open(path.string(), 2, true);
     if (!f) return 1;
     auto child = [&](const char* kind, const char* expected) {
-        std::string cmd = "\"" + fs::absolute(argv[0]).string() + "\" child \"" +
+        // ctest registers the binary with forward slashes; cmd.exe rejects
+        // that in the child command line, so use native separators.
+        std::string cmd = "\"" + fs::absolute(argv[0]).make_preferred().string() + "\" child \"" +
                           path.string() + "\" " + kind + " " + expected;
+#if defined(_WIN32)
+        // cmd.exe strips a leading quote plus the last quote on the line,
+        // mangling the inner paths; an outer quote pair keeps them intact
+        // (same pattern as the holder spawn in abi_oads_file_funcs_test).
+        cmd = "\"" + cmd + "\"";
+#endif
         return std::system(cmd.c_str()) == 0;
     };
     auto locked = fs_lock_step(*f.value(),0,16,0,0);

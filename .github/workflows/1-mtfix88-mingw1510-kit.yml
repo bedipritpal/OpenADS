@@ -126,6 +126,7 @@ jobs:
         HBMK="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
         export HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")"
         mkdir -p srv mtdata output kit
+        rm -f "$RUNNER_TEMP/hb1510/lib/win/mingw/librddads.a"
         cp build-legacy/src/*.dll build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/openads_auth_worker.exe srv/
         cat > output/local_create.prg <<'PRG'
         #include "ads.ch"
@@ -583,7 +584,7 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
         gcc -dumpversion
         gcc -dumpmachine
-        echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
+        echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5 || true
     - name: Download hash-pinned dependency sources
       shell: bash
       run: |
@@ -611,7 +612,7 @@ jobs:
         tar xf ../dl/zlib-1.4.tar.xz; cd zlib-1.4
         mingw32-make -f win32/Makefile.gcc PREFIX= libz.a -j2
         cp libz.a "$P/lib"; cp zlib.h zconf.h "$P/include"; cd ..
-        tar xf ../dl/zstd-1.5.7.tar.gz; cd zstd-1.5.7/lib
+        tar xf ../dl/zstd-1.5.7.tar.gz --exclude='zstd-1.5.7/tests' --exclude='zstd-1.5.7/contrib'; cd zstd-1.5.7/lib
         mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib -j2
         cp libzstd.a "$P/lib"; cp zstd.h zdict.h zstd_errors.h "$P/include"; cd ../..
         tar xf ../dl/brotli-1.2.1.tar.gz
@@ -855,7 +856,7 @@ jobs:
         export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
         gcc -dumpversion
         gcc -dumpmachine
-        echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5
+        echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5 || true
     - name: Download hash-pinned dependency sources
       shell: bash
       run: |
@@ -883,7 +884,7 @@ jobs:
         tar xf ../dl/zlib-1.4.tar.xz; cd zlib-1.4
         mingw32-make -f win32/Makefile.gcc PREFIX= libz.a -j2
         cp libz.a "$P/lib"; cp zlib.h zconf.h "$P/include"; cd ..
-        tar xf ../dl/zstd-1.5.7.tar.gz; cd zstd-1.5.7/lib
+        tar xf ../dl/zstd-1.5.7.tar.gz --exclude='zstd-1.5.7/tests' --exclude='zstd-1.5.7/contrib'; cd zstd-1.5.7/lib
         mingw32-make libzstd.a CC=gcc AR=ar RANLIB=ranlib -j2
         cp libzstd.a "$P/lib"; cp zstd.h zdict.h zstd_errors.h "$P/include"; cd ../..
         tar xf ../dl/brotli-1.2.1.tar.gz

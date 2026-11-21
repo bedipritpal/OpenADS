@@ -1624,3 +1624,4 @@ jobs:
         set -euxo pipefail
         gh release create v1.09.75-mtfix88-mingw1510 --prerelease --latest=false --target ${{ github.sha }} --title 'mtfix88 mingw1510 (GCC 15.1 UCRT) kit + modernized OpenSSL/CURL deps' --notes-file notes.md dist/*.zip dist/SHA256SUMS.txt
         gh release view v1.09.75-mtfix88-mingw1510
+# rerun: pin check restored after stray file removal

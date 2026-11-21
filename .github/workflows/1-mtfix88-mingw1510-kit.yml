@@ -1490,6 +1490,30 @@ jobs:
         set -euo pipefail
         mkdir -p output
         build-legacy/tests/openads_fs_lock85_probe.exe | tee output/fs-lock85-process.txt
+    - name: Repeat the login gate stress case in isolation (diagnostic, records hangs)
+      shell: bash
+      run: |
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        set -euxo pipefail
+        mkdir -p output unit-native-tmp
+        python - <<'PYREPEAT'
+        import os,pathlib,subprocess,time
+        tmp=pathlib.Path('unit-native-tmp').resolve()
+        for k in ('TMPDIR','TMP','TEMP'):os.environ[k]=str(tmp)
+        exe=str(pathlib.Path('build-legacy/tests/openads_unit_tests.exe').resolve())
+        rows=[];hangs=0;fails=0
+        for i in range(40):
+         t=time.time()
+         try:
+          r=subprocess.run([exe,'-tc=Login gate: holder blocks repeated challengers + churn'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90,text=True)
+          rows.append('run %d rc=%d %.1fs'%(i,r.returncode,time.time()-t))
+          if r.returncode:fails+=1
+         except subprocess.TimeoutExpired:
+          hangs+=1;rows.append('run %d HANG >90s'%i)
+        rows.append('summary: runs=40 hangs=%d failures=%d'%(hangs,fails))
+        pathlib.Path('output/login-gate-repeat.txt').write_text('\n'.join(rows)+'\n')
+        print('\n'.join(rows),flush=True)
+        PYREPEAT
     - name: Full repository default unit regression in bounded batches (GCC 15.1 binaries)
       shell: bash
       run: |

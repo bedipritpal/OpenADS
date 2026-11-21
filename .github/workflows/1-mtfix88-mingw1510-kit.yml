@@ -662,11 +662,22 @@ jobs:
         Verified in this CI run with this exact toolchain: twenty threaded
         B_BIG integrity fixtures (auto-open, 2000 ops, all PASS), actual TCP
         CopyFile/FCopyFile through the packaged MinGW glue, the vf87 family
-        and fs_args88, the BeginAuth/CompleteAuth native smoke, the auth
+        (its read-only front-end comparison is gated by a matched-initial-state
+        harness, see the note below) and fs_args88, the BeginAuth/CompleteAuth native smoke, the auth
         static fixture, the auth probe module compile, the Harbour peer
         refresh against the staged matched DLL and daemon, the matched
         DLL/import-library export check (AdsFlushPendingFields present, no
         C++ mangled exports) and the unsupported old-DLL guard.
+        Note on vf_frontend87: run unmodified with the CI runner's inherited stdin,
+        its 18-case native vs OAds_vf comparison reports 2 FError differences
+        (cases 1 and 2: native 109, wrapper 0); with NUL or pipe stdin it reports
+        0. A diagnostic showed a stale hb_fsError of 109 is already present at
+        process start under that stdin, and the first existence call reports it
+        whichever of native or wrapper is called first. The gate therefore uses a
+        matched-initial-state harness (same 18 cases, verified incoming error
+        state 0 and 2, both call orders, 0 differences). That is parity under
+        equal incoming state; why the runner's startup state is 109 was not
+        isolated. Records: docs\vf87-proof.txt and docs\vf87-diag.txt.
         The full 1832-case unit suite is NOT rerun under GCC 15.1 here; the
         qt492 mtfix88 kit remains the published verified runtime. The first
         Vouch/B_BIG link against this kit is yours. This kit does not deploy
@@ -939,8 +950,9 @@ jobs:
         2026-10-10 kit was built on; upstream release list checked 2026-11-21),
         curl 8.23.0, libssh2 1.11.1, nghttp2 1.71.0, brotli 1.2.1 (plain and -static names),
         zstd 1.5.7, zlib 1.4. Built with GCC 15.1.0 i686 UCRT posix dwarf (winlibs 15.1.0posix-12.0.0-ucrt-r1).
-        Use this set with the new toolchain world: C:\mingw32_15 + C:\harbour-bin
-        (harbour_mingw1510_32_20260404), the combination proven with B_BIG_1510.
+        Intended for the new toolchain world: C:\mingw32_15 + C:\harbour-bin
+        (harbour_mingw1510_32_20260404). It has not been tested with any real Qt, HbQt
+        or Vouch link.
         These libraries are UCRT. Do NOT mix them into the Qt 4.9 / HbQt static
         (MSVCRT) builds; keep the mingw10 set for that world.
 
@@ -973,6 +985,14 @@ jobs:
         same raw old-name references as the stock libhbssl.a) links with zero undefined
         OpenSSL symbols; both sample programs ran on the GitHub Windows runner against this
         exact build. First run inside a real Vouch/B_BIG build is still yours.
+
+        Not tested here: any real Qt, HbQt or Vouch link, and the runtime behavior of the
+        two small EVP_PKEY_*_tls_encodedpoint wrappers (link-verified only).
+        No CA certificate bundle is included. A program using these libraries must supply
+        its own trust source. test\test_https.prg reads the bundle path from the
+        OADS_CAFILE environment variable; without a CA file the HTTPS fetch fails
+        certificate checks (curl error 60). The CI run used the Git for Windows bundle.
+        bin\curl.exe was built but not run by CI.
 
         NOTES
         (cd "$K" && find . -type f -exec sha256sum {} \;) > "$K/SHA256.txt"
@@ -1235,9 +1255,10 @@ jobs:
         2026-10-10 kit was built on; upstream release list checked 2026-11-21),
         curl 8.23.0, libssh2 1.11.1, nghttp2 1.71.0, brotli 1.2.1 (plain and -static names),
         zstd 1.5.7, zlib 1.4. Built with GCC 10.2.0 i686 MSVCRT posix dwarf (winlibs 10.2.0, the mtfix88 CI pin).
-        Use this set with the existing world: HbQt static builds via MinGW 4.9.2,
+        Intended for the existing world: HbQt static builds via MinGW 4.9.2,
         Vouch on D:\mingw32 (GCC 10.2). These libraries are MSVCRT, the same CRT
-        family and the same recipe as the 2026-10-10 kit, with modernized versions.
+        family and, as far as it could be reconstructed, the same recipe as the
+        2026-10-10 kit, with modernized versions.
         Same CRT plus same recipe is necessary, not sufficient: CI proves old-hbssl
         symbol coverage and a live HTTPS fetch on a clean runner, but your actual
         Vouch/HbQt link is the final proof and is yours. Keep the backup of the
@@ -1272,6 +1293,14 @@ jobs:
         same raw old-name references as the stock libhbssl.a) links with zero undefined
         OpenSSL symbols; both sample programs ran on the GitHub Windows runner against this
         exact build. First run inside a real Vouch/B_BIG build is still yours.
+
+        Not tested here: any real Qt, HbQt or Vouch link, and the runtime behavior of the
+        two small EVP_PKEY_*_tls_encodedpoint wrappers (link-verified only).
+        No CA certificate bundle is included. A program using these libraries must supply
+        its own trust source. test\test_https.prg reads the bundle path from the
+        OADS_CAFILE environment variable; without a CA file the HTTPS fetch fails
+        certificate checks (curl error 60). The CI run used the Git for Windows bundle.
+        bin\curl.exe was built but not run by CI.
 
         NOTES
         (cd "$K" && find . -type f -exec sha256sum {} \;) > "$K/SHA256.txt"
@@ -1391,8 +1420,8 @@ jobs:
           world. Includes the merged legacy-symbol shim so stock libhbssl.a keeps
           linking (see README + LEGACY-SYMBOLS.txt inside). Do not mix into Qt 4.9.
         - openssl-curl-mingw10-x86-ossl35.zip: the same family built with the mtfix88
-          CI toolchain (GCC 10.2 MSVCRT): same CRT family and same recipe as the
-          2026-10-10 kit with modernized versions, for the HbQt static / Qt 4.9 /
+          CI toolchain (GCC 10.2 MSVCRT): same CRT family and, as far as it could be
+          reconstructed, the same recipe as the 2026-10-10 kit, with modernized versions, for the HbQt static / Qt 4.9 /
           Vouch world. CI proves old-hbssl symbol coverage and a live HTTPS fetch;
           the actual Vouch link is the final proof and stays with the owner.
 

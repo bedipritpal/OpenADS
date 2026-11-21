@@ -67,7 +67,6 @@ env:
         HBOWN="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
         HBSRC="$(cygpath -u "$RUNNER_TEMP/hbsrc/bin/win/mingw/hbmk2.exe")"
         HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")" "$HBOWN" probe.prg -plat=win -comp=mingw -gtstd -mt -oowner_hb | tail -1
-        cp owner_hb.exe owner_hb.exe.bak; mv owner_hb.exe owner_hb.exe
         "$HBSRC" probe.prg -plat=win -comp=mingw -gtstd -mt -osrc_hb | tail -1
         run_all owner_hb x
         run_all src_hb x

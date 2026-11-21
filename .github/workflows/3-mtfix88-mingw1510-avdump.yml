@@ -11,7 +11,7 @@ env:
     branches:
     - kit/mtfix88-mingw1510
     paths:
-    - .github/workflows/2-mtfix88-mingw1510-avdump.yml
+    - .github/workflows/3-mtfix88-mingw1510-avdump.yml
 jobs:
   avdump:
     name: Crash-dump capture of the login gate access violation on the saved GCC 15.1 binaries

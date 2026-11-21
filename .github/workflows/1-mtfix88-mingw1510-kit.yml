@@ -402,6 +402,9 @@ jobs:
         echo "frontend_diff=$frontend_diff" | tee -a output/vf87-proof.txt
         echo '--- diagnostic: same probe with different stdin states ---' | tee -a output/vf87-diag.txt
         for i in 1 2 3; do echo "inherited-stdin run $i" | tee -a output/vf87-diag.txt; output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-diag.txt || true; done
+        awk '/LOCAL a := NativeProbe\(\), b := OadsProbe\(\), nBad := 0, n/ {print "   LOCAL a, b, nBad := 0, n"; print "   OutStd(\"MAIN-ENTRY FError=\"+hb_ntos(FError())+hb_eol())"; print "   a := NativeProbe(); OutStd(\"AFTER-NATIVE FError=\"+hb_ntos(FError())+hb_eol()); b := OadsProbe()"; next} /LOCAL cName := "include\/openads\/ace.h", cDest/ && !d {print; print "   OutStd(\"NATIVE-ENTRY FError=\"+hb_ntos(FError())+hb_eol())"; d=1; next} {print}' tests/smoke/harbour/vf_frontend87.prg > output/vf_frontend87_diag.prg
+        "$HBMK" output/vf_frontend87_diag.prg tests/smoke/harbour/vf_transport87.c -plat=win -comp=mingw -Lkit -lrddads -Loutput -lopenace32 -iinclude/openads -mt -gtstd -ooutput/vf87/vf_frontend87_diag 2>&1 | tail -2
+        for mode in inherited nul; do echo "== frontend87 diag copy stdin=$mode" | tee -a output/vf87-diag.txt; if [ $mode = nul ]; then output/vf87/vf_frontend87_diag.exe < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true; else output/vf87/vf_frontend87_diag.exe 2>&1 | tee -a output/vf87-diag.txt || true; fi; done
         cat > output/ferr_trace.prg <<'TRACE'
         PROCEDURE Main( cOrder )
            LOCAL c := "include/openads/ace.h", d, x
@@ -755,11 +758,12 @@ jobs:
         cd hbsrc/contrib/hbssl
         "$HBMK" hbssl.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbssl-old/hbssl-x86" 2>&1 | tail -3
         cd "$(cygpath -u "$OLDPWD")"
+        cd ..
         ls hbssl-old/
         export HB_WITH_CURL="$(cygpath -m "$P/include")"
-        mkdir -p ../hbcurl-out
+        mkdir -p hbcurl-out
         cd work/hbsrc/contrib/hbcurl
-        "$HBMK" hbcurls.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbcurl-out/hbcurls" 2>&1 | tail -3
+        "$HBMK" hbcurls.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/hbcurl-out/hbcurls" 2>&1 | tail -3
         cd "$(cygpath -u "$OLDPWD")"
         ls hbcurl-out/
     - name: Prove old hbssl symbol coverage and link plus run real HTTPS fixtures
@@ -1042,11 +1046,12 @@ jobs:
         cd hbsrc/contrib/hbssl
         "$HBMK" hbssl.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbssl-old/hbssl-x86" 2>&1 | tail -3
         cd "$(cygpath -u "$OLDPWD")"
+        cd ..
         ls hbssl-old/
         export HB_WITH_CURL="$(cygpath -m "$P/include")"
-        mkdir -p ../hbcurl-out
+        mkdir -p hbcurl-out
         cd work/hbsrc/contrib/hbcurl
-        "$HBMK" hbcurls.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/../hbcurl-out/hbcurls" 2>&1 | tail -3
+        "$HBMK" hbcurls.hbp -plat=win -comp=mingw -workdir="$(cygpath -u "$PWD")/w" -o"$(cygpath -u "$OLDPWD")/hbcurl-out/hbcurls" 2>&1 | tail -3
         cd "$(cygpath -u "$OLDPWD")"
         ls hbcurl-out/
     - name: Prove old hbssl symbol coverage and link plus run real HTTPS fixtures

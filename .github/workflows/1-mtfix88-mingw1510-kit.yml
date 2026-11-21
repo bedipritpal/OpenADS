@@ -400,6 +400,22 @@ jobs:
         python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
         python tests/vf_socket87.py --server srv/openads_serverd.exe --probe output/vf87/fs_args88.exe | tee -a output/vf87-proof.txt || failed=1
         echo "frontend_diff=$frontend_diff" | tee -a output/vf87-proof.txt
+        echo '--- diagnostic: same probe with different stdin states ---' | tee -a output/vf87-diag.txt
+        output/vf87/vf_frontend87.exe < /dev/null 2>&1 | tee -a output/vf87-diag.txt || true
+        echo | output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-diag.txt || true
+        cat > output/ferr_diag.prg <<'DIAG'
+        PROCEDURE Main()
+           OutStd( "FERROR-AT-START " + hb_ntos( FError() ) + hb_eol() )
+           hb_vfExists( "include/openads/ace.h" )
+           OutStd( "FERROR-AFTER-1ST-hb_vfExists " + hb_ntos( FError() ) + hb_eol() )
+           hb_vfExists( "include/openads/ace.h" )
+           OutStd( "FERROR-AFTER-2ND-hb_vfExists " + hb_ntos( FError() ) + hb_eol() )
+           RETURN
+        DIAG
+        "$HBMK" output/ferr_diag.prg -plat=win -comp=mingw -gtstd -mt -ooutput/ferr_diag.exe | tail -1
+        output/ferr_diag.exe < /dev/null 2>&1 | tee -a output/vf87-diag.txt
+        echo | output/ferr_diag.exe 2>&1 | tee -a output/vf87-diag.txt
+        output/ferr_diag.exe 2>&1 | tee -a output/vf87-diag.txt || true
         exit "$failed"
     - name: DLL Harbour BeginAuth CompleteAuth native smoke
       run: |

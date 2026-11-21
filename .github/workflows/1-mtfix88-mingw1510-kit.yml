@@ -796,6 +796,7 @@ jobs:
            curl_global_init()
            h := curl_easy_init()
            curl_easy_setopt( h, HB_CURLOPT_URL, "https://example.com/" )
+           curl_easy_setopt( h, HB_CURLOPT_CAINFO, GetEnv( "OADS_CAFILE" ) )
            curl_easy_setopt( h, HB_CURLOPT_DL_BUFF_SETUP )
            ? curl_easy_perform( h )
            ? SSL_INIT(), OpenSSL_version()
@@ -809,6 +810,9 @@ jobs:
         "$HBMK" t2.prg -plat=win -comp=mingw -gtstd -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
         objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
         if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
+        CA="/c/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
+        test -f "$CA"
+        export OADS_CAFILE="$(cygpath -m "$CA")"
         ./t2.exe | tee t2-proof.txt
         head -1 t2-proof.txt | grep -q '^ *0'
         grep -q "OpenSSL 3.5.9" t2-proof.txt
@@ -1084,6 +1088,7 @@ jobs:
            curl_global_init()
            h := curl_easy_init()
            curl_easy_setopt( h, HB_CURLOPT_URL, "https://example.com/" )
+           curl_easy_setopt( h, HB_CURLOPT_CAINFO, GetEnv( "OADS_CAFILE" ) )
            curl_easy_setopt( h, HB_CURLOPT_DL_BUFF_SETUP )
            ? curl_easy_perform( h )
            ? SSL_INIT(), OpenSSL_version()
@@ -1097,6 +1102,9 @@ jobs:
         "$HBMK" t2.prg -plat=win -comp=mingw -gtstd -ot2 -I../work/hbsrc/contrib/hbcurl -L../hbcurl-out -L../hbssl-old -L"$P/lib" -lhbcurls -lhbssl-x86 -lcurl -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static -lbrotlicommon-static -lzstd -lz "-ldflag=-Wl,--whole-archive,$WHOLE,--no-whole-archive" -lws2_32 -lcrypt32 -lwldap32 -lbcrypt
         objdump -p t2.exe | grep -i 'DLL Name' | tee t2-pe.txt
         if grep -Ei 'DLL Name:.*(libssl|libcrypto|libcurl|nghttp2|ssh2|brotli|zstd|libstdc|libgcc|libwinpthread).*\.dll' t2-pe.txt;then exit 1;fi
+        CA="/c/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
+        test -f "$CA"
+        export OADS_CAFILE="$(cygpath -m "$CA")"
         ./t2.exe | tee t2-proof.txt
         head -1 t2-proof.txt | grep -q '^ *0'
         grep -q "OpenSSL 3.5.9" t2-proof.txt

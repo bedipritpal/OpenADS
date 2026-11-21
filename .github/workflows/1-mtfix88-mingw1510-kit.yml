@@ -500,7 +500,7 @@ jobs:
         cp contrib/oads_hb/FILE_LOCKS_MTFIX85.txt contrib/oads_hb/COPY_SOCKET_MTFIX86.txt contrib/oads_hb/VF_PARITY_MTFIX87.txt "$K/docs/"
         cp output/local_create.prg output/probe_mt.prg output/check_rows.prg output/auth_static.prg "$K/fixtures/"
         cp output/import-proof.txt output/old-dll-guard.txt output/rdd-symbol.txt output/dll-exports.txt output/source-commit.txt "$K/docs/"
-        cp output/refresh-peer-gcc-proof.txt output/vf87-proof.txt "$K/docs/" || true
+        cp output/refresh-peer-gcc-proof.txt output/vf87-proof.txt output/vf87-diag.txt "$K/docs/" || true
         cp kit/runtime-notices/* "$K/runtime-notices/"
         cat > "$K/docs/README.txt" <<'NOTES'
         OpenADS mtfix88 x86 client kit - MinGW GCC 15.1 UCRT build

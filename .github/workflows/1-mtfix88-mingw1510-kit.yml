@@ -394,7 +394,7 @@ jobs:
         failed=0
         frontend_diff=0
         : > output/vf87-proof.txt
-        output/vf87/vf_frontend87.exe | tee -a output/vf87-proof.txt || { echo 'VF87-READONLY-KNOWN-DIFF: nonzero from vf_frontend87 under GCC 15.1 + owner Harbour r2602281433; recorded, not hidden' | tee -a output/vf87-proof.txt; frontend_diff=1; }
+        output/vf87/vf_frontend87.exe | tee -a output/vf87-proof.txt || { echo 'VF87-READONLY-UNEXPLAINED-DIFF: nonzero from vf_frontend87 under GCC 15.1 + owner Harbour r2602281433; diagnostics continue, readiness gate at job end fails' | tee -a output/vf87-proof.txt; frontend_diff=1; echo 'unexplained VF87-READONLY FError differences' > output/READINESS-BLOCKED-vf-frontend.txt; }
         output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
         output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
         python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
@@ -550,6 +550,17 @@ jobs:
         name: part-kit-x86
         path: mtfix88-mingw1510-x86.zip
         retention-days: 14
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        if-no-files-found: warn
+        name: kit-x86-proof
+        path: output/*.txt
+        retention-days: 14
+    - name: Readiness gate (fail closed on any unexplained proof difference)
+      shell: bash
+      run: |
+        if ls output/READINESS-BLOCKED-* >/dev/null 2>&1; then cat output/READINESS-BLOCKED-*; echo 'Candidate is NOT ready; publish is blocked.'; exit 1; fi
   depsucrt:
     name: Modernized static OpenSSL/CURL family x86 (mingw1510)
     runs-on: windows-2022

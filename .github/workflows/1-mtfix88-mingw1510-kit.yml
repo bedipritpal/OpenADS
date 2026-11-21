@@ -745,7 +745,7 @@ jobs:
         tar xf ../dl/openssl-1.1.1w.tar.gz
         cd openssl-1.1.1w
         "$PERLX" Configure mingw no-asm >/dev/null
-        mingw32-make include/openssl/opensslconf.h >/dev/null
+        mingw32-make PERL="$PERLX" include/openssl/opensslconf.h >/dev/null
         cd ..
         git clone https://github.com/harbour/core.git hbsrc
         git -C hbsrc checkout --detach $HARBOUR_PIN
@@ -1032,7 +1032,7 @@ jobs:
         tar xf ../dl/openssl-1.1.1w.tar.gz
         cd openssl-1.1.1w
         "$PERLX" Configure mingw no-asm >/dev/null
-        mingw32-make include/openssl/opensslconf.h >/dev/null
+        mingw32-make PERL="$PERLX" include/openssl/opensslconf.h >/dev/null
         cd ..
         git clone https://github.com/harbour/core.git hbsrc
         git -C hbsrc checkout --detach $HARBOUR_PIN

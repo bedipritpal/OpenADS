@@ -626,6 +626,19 @@ jobs:
         pathlib.Path('output/old-dll-guard.txt').write_text('Unsupported oldDLL/newimport missing-export failure: '+str(r.returncode)+'\n')
         print('OLD-DLL-MISSING-EXPORT-PASS',r.returncode)
         PYLOAD
+    - name: Local marker Harbour contract through the packaged MinGW archive (GCC 15.1)
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PWD/output:$PWD/srv:$PATH"
+        mkdir -p output
+        HBMK="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        "$HBMK" tests/trace_marker_harbour.prg tests/trace_marker_numeric_test.c -Lkit -lrddads -lopenace32 -iinclude/openads -mt -gtstd -ooutput/trace-marker-harbour.exe
+        python tests/trace_marker_harbour.py output/trace-marker-harbour.exe | tee output/trace-marker-harbour.txt
+        nm kit/librddads.a | grep ' T _HB_FUN_OADS_TRACEMARK' | tee output/marker-wrapper-symbol.txt
+        nm kit/libopenace32.dll.a | grep ' T _OAdsTraceMarkEx' | tee output/marker-import-symbol.txt
+        objdump -p output/openace32.dll | grep OAdsTraceMarkEx | tee output/marker-export-symbol.txt
     - name: Package the x86 kit delivery folder
       run: |
         set -euxo pipefail
@@ -1519,8 +1532,14 @@ jobs:
         import base64,zlib
         expected=json.loads(zlib.decompress(base64.b64decode('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')))
         assert not summary['errors'],summary['errors']
-        assert set(summary['failed'])==set(expected),'Baseline failure names changed'
-        assert all(summary['cases'][n]==v for n,v in expected.items()),'Baseline failure assertion signatures changed'
+        # Gate: zero failing cases and zero harness errors on the GCC 15.1 binaries.
+        # The old mtfix62 197-name failure set is kept only as a non-gating historical diagnostic.
+        assert not summary['failed'],summary['failed']
+        hist=['historical mtfix62 baseline failures: '+str(len(expected)),'baseline names present in this run: '+str(sum(1 for n in expected if n in summary['cases']))]
+        hist.append('baseline names passing now: '+str(sum(1 for n in expected if n in summary['cases'] and summary['cases'][n]['passed'])))
+        hist.append('baseline names with fewer than 2 assertion successes now: '+str([n for n in expected if n in summary['cases'] and int(summary['cases'][n]['assertions'].get('successes','0'))<2]))
+        hist.append('cases with zero assertions: '+str(sorted(n for n,v in summary['cases'].items() if int(v['assertions'].get('successes','0'))==0)))
+        (out/'baseline-historical-diagnostic.txt').write_text('\n'.join(hist),encoding='utf-8')
         assert summary['cases']['Tim 2e deleted-only scope never substitutes a preceding live row']['passed'],'2e regression failed'
         assert summary['cases']['indexed explicit refresh sees peer writes without losing position']['passed'],'explicit refresh regression failed'
         assert summary['cases']['indexed explicit refresh sees peer writes without losing position']['assertions']['successes']=='113','explicit refresh assertion count changed'
@@ -1544,7 +1563,7 @@ jobs:
         assert len(phase_cases)==3,phase_cases
         assert all(summary['cases'][n]['passed'] for n in phase_cases),'open phase regression failed'
         assert summary['count']==1832 and summary['executed']==1832,'Coverage mismatch'
-        (out/'baseline-comparison.txt').write_text('mtfix62 baseline197failures; same197names and recorded assertion signatures; no additional failing cases;1832/1832executed;commitFusion4PASS;replacementBatch7PASS;bottomCount4PASS;callerScope5PASS;dirtyKeySkip12PASS;2ePASS;explicitRefresh113PASS;appendMeta181PASS6cases;0harnesserrors\n')
+        (out/'baseline-comparison.txt').write_text('gate: 1832/1832 executed; zero failed; zero harness errors; commitFusion4PASS;replacementBatch7PASS;bottomCount4PASS;callerScope5PASS;dirtyKeySkip12PASS;openPhase3PASS;2e304;refresh113; historical 197 baseline is non-gating, see baseline-historical-diagnostic.txt\n',encoding='utf-8')
 
 
         PYBATCH
@@ -1563,6 +1582,25 @@ jobs:
         set -euxo pipefail
         mkdir -p output
         python tests/trace_marker_contract.py build-legacy/tests/openads_trace_marker_probe.exe build-legacy/tests/openads_trace_gate_probe.exe | tee output/trace-marker-contract.txt
+    - name: Record built test binary hashes
+      if: always()
+      shell: bash
+      run: |
+        mkdir -p output
+        (cd build-legacy && find tests tools -name '*.exe' -o -name '*.hrb' | sort | xargs -r sha256sum) > output/binary-sha256.txt || true
+        cat output/binary-sha256.txt
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: unit1510-binaries
+        path: |
+          build-legacy/tests/*.exe
+          build-legacy/tools/serverd/openads_serverd.exe
+          build-legacy/tools/**/openads_auth_worker.exe
+          build-legacy/tests/**/*.hrb
+          output/binary-sha256.txt
+        if-no-files-found: warn
+        retention-days: 7
     - uses: actions/upload-artifact@v4
       if: always()
       with:

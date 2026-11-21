@@ -1,0 +1,29 @@
+name: Stage 5c Harbour vf front end review on current parent
+on:
+  push:
+    branches: [stage5c/harbour-vf-frontend]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Configure
+        run: cmake --preset ninja-clang -DOPENADS_WITH_TLS=ON -DOPENADS_WARNINGS_AS_ERRORS=OFF
+      - name: Build
+        run: cmake --build build/ninja-clang --parallel 2
+      - name: List tests
+        run: ctest --test-dir build/ninja-clang -N
+      - name: Unit suite and integration tests, soak excluded
+        run: ctest --test-dir build/ninja-clang --output-on-failure -E soak
+      - name: Explicit remote file transport and byte-lock tests
+        shell: bash
+        run: |
+          set -o pipefail
+          build/ninja-clang/tests/openads_unit_tests -tc='vf*,oads_* local:*,oads_* remote embedded:*' -tce='*[slow]*,*flaky*' | tee stage5c-vf-frontend.txt

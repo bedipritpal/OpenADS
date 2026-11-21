@@ -16,7 +16,71 @@ env:
     - .github/workflows/1-mtfix88-mingw1510-kit.yml
   workflow_dispatch:
     inputs:
-      publish:
+      diagfwerror:
+    name: Diagnose vf FError initial state (Harbour 4ec2e154 built with GCC 15.1 vs owner Harbour archive)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+    - name: Download exact GCC 15.1 toolchain and owner Harbour archive
+      shell: pwsh
+      run: |
+        function Download-Exact($url,$out) { for($i=0;$i -lt 4;$i++){ try{Invoke-WebRequest $url -OutFile $out;return}catch{if($i -eq 3){throw};Start-Sleep -Seconds (5*($i+1))} } }
+        Download-Exact 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.1.0posix-12.0.0-ucrt-r1/winlibs-i686-posix-dwarf-gcc-15.1.0-mingw-w64ucrt-12.0.0-r1.zip' "$env:RUNNER_TEMP/winlibs15.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs15.zip" -Algorithm SHA256).Hash.ToLower() -ne '869fa6c0e17ef9581a9b796bd8a965a34d1ec1e2746528bc1067caadf2aa04c2'){throw 'hash'}
+        & 7z x "$env:RUNNER_TEMP/winlibs15.zip" "-o$env:RUNNER_TEMP/toolchain" -y | Out-Null
+        Download-Exact 'https://github.com/FiveTechSoft/harbour_and_xharbour_builds/raw/master/harbour_mingw1510_32_20260404.zip' "$env:RUNNER_TEMP/harbour1510.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/harbour1510.zip" -Algorithm SHA256).Hash.ToLower() -ne 'e90b249a48c553b967b452f0edd6b31e7a705a7df7cc8423b5bd163bdc330998'){throw 'hash'}
+        & 7z x "$env:RUNNER_TEMP/harbour1510.zip" "-o$env:RUNNER_TEMP/hb1510" -y | Out-Null
+    - name: Build Harbour 4ec2e154 with GCC 15.1 and compare vf native probe under stdin states
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/toolchain/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 15.1.0
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/hbsrc"
+        git -C "$RUNNER_TEMP/hbsrc" checkout --detach 4ec2e154ed92757418bc30af571ab90240ab3209
+        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/hbsrc" -j2 > build.log 2>&1 || { tail -30 build.log; exit 1; }
+        mkdir -p d && cd d
+        cat > probe.prg <<'PRG'
+        #include "fileio.ch"
+        PROCEDURE Main()
+           LOCAL cName := "probe.prg", cDest, a := {}
+           OutStd( "START FError=" + hb_ntos( FError() ) + hb_eol() )
+           AAdd( a, { hb_vfIsLocal( cName ), hb_vfExists( cName, @cDest ), cDest, FError() } )
+           OutStd( "CASE1 " + hb_ValToExp( a[ 1 ] ) + hb_eol() )
+           AAdd( a, { hb_vfNameExists( cName ), hb_vfDirExists( "." ), FError() } )
+           OutStd( "CASE2 " + hb_ValToExp( a[ 2 ] ) + hb_eol() )
+           RETURN
+        PRG
+        run_all() {
+          label=$1; hbmk=$2
+          for mode in inherited nul pipe; do
+            echo "== $label stdin=$mode" | tee -a ../diag.txt
+            case $mode in
+              inherited) ./$label.exe 2>&1 | tee -a ../diag.txt || true ;;
+              nul) ./$label.exe < /dev/null 2>&1 | tee -a ../diag.txt || true ;;
+              pipe) echo | ./$label.exe 2>&1 | tee -a ../diag.txt || true ;;
+            esac
+          done
+        }
+        HBOWN="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
+        HBSRC="$(cygpath -u "$RUNNER_TEMP/hbsrc/bin/win/mingw/hbmk2.exe")"
+        HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")" "$HBOWN" probe.prg -plat=win -comp=mingw -gtstd -mt -oowner_hb | tail -1
+        cp owner_hb.exe owner_hb.exe.bak; mv owner_hb.exe owner_hb.exe
+        "$HBSRC" probe.prg -plat=win -comp=mingw -gtstd -mt -osrc_hb | tail -1
+        run_all owner_hb x
+        run_all src_hb x
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: fwerror-diag
+        path: |
+          diag.txt
+          d/*.exe
+        if-no-files-found: warn
+        retention-days: 14
+  publish:
         description: Create the prerelease after the candidate has been inspected
         required: false
         default: false
@@ -616,6 +680,21 @@ jobs:
         gcc -dumpversion
         gcc -dumpmachine
         echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5 || true
+    - name: Set up a complete MSYS2 perl for OpenSSL Configure
+      id: msys
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MSYS
+        update: false
+        install: perl
+    - name: Locate and verify the complete perl (modules Configure needs)
+      shell: bash
+      run: |
+        set -euxo pipefail
+        PERLX="$(cygpath -u "${{ steps.msys.outputs.msys2-location }}")/usr/bin/perl.exe"
+        echo "PERLX=$PERLX" >> "$GITHUB_ENV"
+        "$PERLX" -v | head -2
+        "$PERLX" -MIPC::Cmd -MExtUtils::MakeMaker -MLocale::Maketext::Simple -MFile::Spec -e 'print "perl modules OK\n"'
     - name: Download hash-pinned dependency sources
       shell: bash
       run: |
@@ -651,8 +730,7 @@ jobs:
         cmake --build brotli-b -j2; cmake --install brotli-b
         for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
         tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
-        mkdir -p "$PWD/../perlshim/IPC" && printf '%s\n' 'package IPC::Cmd;' 'use strict;' 'sub can_run { my $c = shift; return $c if $c =~ m{/} && -x $c; for my $d (split /:/, $ENV{PATH}) { for my $e ("", ".exe") { return "$d/$c$e" if -f "$d/$c$e" && -x "$d/$c$e"; } } return; }' '1;' > "$PWD/../perlshim/IPC/Cmd.pm" && export PERL5LIB="$(cygpath -u "$PWD/../perlshim")"
-        /usr/bin/perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
+        "$PERLX" ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
         mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
         tar xf ../dl/libssh2-1.11.1.tar.xz
         cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
@@ -710,7 +788,7 @@ jobs:
         cd work
         tar xf ../dl/openssl-1.1.1w.tar.gz
         cd openssl-1.1.1w
-        /usr/bin/perl Configure mingw no-asm >/dev/null
+        "$PERLX" Configure mingw no-asm >/dev/null
         mingw32-make include/openssl/opensslconf.h >/dev/null
         cd ..
         git clone https://github.com/harbour/core.git hbsrc
@@ -889,6 +967,21 @@ jobs:
         gcc -dumpversion
         gcc -dumpmachine
         echo 'int main(){return 0;}' > t.c && gcc t.c -o t.exe && objdump -p t.exe | grep -i 'msvcrt\|ucrt' | head -5 || true
+    - name: Set up a complete MSYS2 perl for OpenSSL Configure
+      id: msys
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MSYS
+        update: false
+        install: perl
+    - name: Locate and verify the complete perl (modules Configure needs)
+      shell: bash
+      run: |
+        set -euxo pipefail
+        PERLX="$(cygpath -u "${{ steps.msys.outputs.msys2-location }}")/usr/bin/perl.exe"
+        echo "PERLX=$PERLX" >> "$GITHUB_ENV"
+        "$PERLX" -v | head -2
+        "$PERLX" -MIPC::Cmd -MExtUtils::MakeMaker -MLocale::Maketext::Simple -MFile::Spec -e 'print "perl modules OK\n"'
     - name: Download hash-pinned dependency sources
       shell: bash
       run: |
@@ -924,8 +1017,7 @@ jobs:
         cmake --build brotli-b -j2; cmake --install brotli-b
         for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
         tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
-        mkdir -p "$PWD/../perlshim/IPC" && printf '%s\n' 'package IPC::Cmd;' 'use strict;' 'sub can_run { my $c = shift; return $c if $c =~ m{/} && -x $c; for my $d (split /:/, $ENV{PATH}) { for my $e ("", ".exe") { return "$d/$c$e" if -f "$d/$c$e" && -x "$d/$c$e"; } } return; }' '1;' > "$PWD/../perlshim/IPC/Cmd.pm" && export PERL5LIB="$(cygpath -u "$PWD/../perlshim")"
-        /usr/bin/perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
+        "$PERLX" ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
         mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
         tar xf ../dl/libssh2-1.11.1.tar.xz
         cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
@@ -983,7 +1075,7 @@ jobs:
         cd work
         tar xf ../dl/openssl-1.1.1w.tar.gz
         cd openssl-1.1.1w
-        /usr/bin/perl Configure mingw no-asm >/dev/null
+        "$PERLX" Configure mingw no-asm >/dev/null
         mingw32-make include/openssl/opensslconf.h >/dev/null
         cd ..
         git clone https://github.com/harbour/core.git hbsrc

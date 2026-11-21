@@ -1,0 +1,109 @@
+name: mtfix88 mingw1510 login gate hang wire-trace diagnostic
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_RUN: 44919253502
+  BINARIES_ARTIFACT: 14714629367
+  UNIT_EXE_SHA256: 008804d949c209b995a6a85ae15783c8eb7211928dbc3b62589712632d97cbf9
+'on':
+  push:
+    branches:
+    - kit/mtfix88-mingw1510
+    paths:
+    - .github/workflows/2-mtfix88-mingw1510-hangdiag.yml
+jobs:
+  hangdiag:
+    name: Wire-trace capture of the login gate hang on the saved GCC 15.1 binaries
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+    - name: Fetch the saved exact binaries and verify their hash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p bin output
+        gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${BINARIES_ARTIFACT}/zip" > bin/artifact.zip
+        (cd bin && 7z x artifact.zip -y > /dev/null && rm artifact.zip)
+        find bin -type f | sort
+        exe="$(find bin -name openads_unit_tests.exe | head -1)"
+        test -n "$exe"
+        echo "$UNIT_EXE_SHA256 *$exe" | sha256sum -c -
+        echo "EXE=$exe" >> "$GITHUB_ENV"
+    - name: Download exact GCC 15.1 UCRT toolchain (runtime DLLs and gdb only)
+      shell: pwsh
+      run: |
+        function Download-Exact($url,$out) {
+         for($i=0;$i -lt 4;$i++) {
+          try { Invoke-WebRequest $url -OutFile $out; return }
+          catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+         }
+        }
+        Download-Exact 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.1.0posix-12.0.0-ucrt-r1/winlibs-i686-posix-dwarf-gcc-15.1.0-mingw-w64ucrt-12.0.0-r1.zip' "$env:RUNNER_TEMP/winlibs15.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs15.zip" -Algorithm SHA256).Hash.ToLower() -ne '869fa6c0e17ef9581a9b796bd8a965a34d1ec1e2746528bc1067caadf2aa04c2'){throw 'Winlibs 15.1 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs15.zip" "-o$env:RUNNER_TEMP/winlibs15" -y
+    - name: Isolated login gate runs with the existing wire trace enabled, then untraced controls
+      shell: bash
+      run: |
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        set -euxo pipefail
+        python - <<'PYTRACE'
+        import os,pathlib,subprocess,time,sys,json
+        exe=str(pathlib.Path(os.environ['EXE']).resolve())
+        out=pathlib.Path('output');out.mkdir(exist_ok=True)
+        case='-tc=Login gate: holder blocks repeated challengers + churn'
+        rows=[];results={'traced':[],'control':[]}
+        def netstat(pid):
+         r=subprocess.run('netstat -ano',shell=True,stdout=subprocess.PIPE,text=True).stdout
+         return '\n'.join(l for l in r.split('\n') if str(pid) in l.split()[-1:] or 'PID' in l)
+        def attempt(label,idx,traced):
+         d=out/('%s-%d'%(label,idx));d.mkdir(exist_ok=True)
+         tmp=(d/'tmp').resolve();tmp.mkdir(exist_ok=True)
+         env=os.environ.copy()
+         for k in list(env):
+          if k.startswith('OPENADS_'):env.pop(k)
+         for k in ('TMPDIR','TMP','TEMP'):env[k]=str(tmp)
+         (d/'openads.ini').write_text('')
+         env['OPENADS_INI']=str((d/'openads.ini').resolve())
+         if traced:
+          env['OPENADS_WIRE_TRACE']='1';env['OPENADS_WIRE_TRACE_FILE']=str((d/'wire.log').resolve())
+          env['OPENADS_LOG']='debug';env['OPENADS_LOG_FILE']=str((d/'audit.log').resolve())
+         so=open(d/'stdout.txt','w');se=open(d/'stderr.txt','w')
+         t=time.time();p=subprocess.Popen([exe,case],stdout=so,stderr=se,env=env)
+         try:
+          rc=p.wait(timeout=25);res='pass' if rc==0 else 'crash rc=0x%08X'%(rc&0xffffffff)
+         except subprocess.TimeoutExpired:
+          res='HANG >25s'
+          (d/'netstat.txt').write_text(netstat(p.pid))
+          g=subprocess.run(['gdb','-batch','-p',str(p.pid),'-ex','thread apply all bt 25'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=90).stdout
+          (d/'hang-gdb.txt').write_text(g,encoding='utf-8')
+          p.kill();p.wait()
+         so.close();se.close()
+         wl=(d/'wire.log');se_t=(d/'stderr.txt').read_text(errors='replace')
+         info={'attempt':'%s-%d'%(label,idx),'result':res,'secs':round(time.time()-t,1),'wire_log_bytes':wl.stat().st_size if wl.exists() else 0,'stderr_wire_lines':se_t.count('[wire]'),'stderr_session_end':se_t.count('session end')}
+         rows.append(info);print(json.dumps(info),flush=True)
+         return res
+        for i in range(8):
+         r=attempt('traced',i,True);results['traced'].append(r)
+         if r!='pass':break
+        for i in range(8):
+         r=attempt('control',i,False);results['control'].append(r)
+         if r!='pass':break
+        bad=[r for v in results.values() for r in v if r!='pass']
+        trace_active=any(x['wire_log_bytes']>0 or x['stderr_wire_lines']>0 for x in rows if x['attempt'].startswith('traced'))
+        summary={'ready':not bad and trace_active,'trace_active':trace_active,'attempts':rows}
+        (out/'hang-diagnostic-summary.json').write_text(json.dumps(summary,indent=1))
+        print('trace_active',trace_active,'non-pass',bad)
+        sys.exit(1 if bad or not trace_active else 0)
+        PYTRACE
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: hangdiag-trace
+        path: |
+          output/**
+          !output/**/tmp/**
+        if-no-files-found: warn
+        retention-days: 14

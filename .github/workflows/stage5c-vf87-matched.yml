@@ -1,0 +1,199 @@
+name: Stage 5c vf87 Harbour matched-state harness on the exact port (GCC 15.1 x86)
+permissions:
+  contents: read
+env:
+  KIT_VERSION: stage5c-review
+  HARBOUR_PIN: 4ec2e154ed92757418bc30af571ab90240ab3209
+'on':
+  push:
+    branches:
+    - stage5c/harbour-vf-frontend
+  workflow_dispatch: {}
+jobs:
+  vf87:
+    name: Build the 5c port and run the vf87 matched-state Harbour harness
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           source=url if attempt==0 else url+'?openads_mtfix88_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
+           if attempt==2:raise
+           time.sleep(3*(attempt+1))
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Download exact GCC 15.1 UCRT toolchain and owner-tested Harbour archive
+      run: |
+        function Download-Exact($url,$out) {
+         for($i=0;$i -lt 4;$i++) {
+          try { Invoke-WebRequest $url -OutFile $out; return }
+          catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+         }
+        }
+        Download-Exact 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.1.0posix-12.0.0-ucrt-r1/winlibs-i686-posix-dwarf-gcc-15.1.0-mingw-w64ucrt-12.0.0-r1.zip' "$env:RUNNER_TEMP/winlibs15.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs15.zip" -Algorithm SHA256).Hash.ToLower() -ne '869fa6c0e17ef9581a9b796bd8a965a34d1ec1e2746528bc1067caadf2aa04c2'){throw 'Winlibs 15.1 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs15.zip" "-o$env:RUNNER_TEMP/winlibs15" -y
+        Download-Exact 'https://github.com/FiveTechSoft/harbour_and_xharbour_builds/raw/master/harbour_mingw1510_32_20260404.zip' "$env:RUNNER_TEMP/harbour1510.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/harbour1510.zip" -Algorithm SHA256).Hash.ToLower() -ne 'e90b249a48c553b967b452f0edd6b31e7a705a7df7cc8423b5bd163bdc330998'){throw 'Harbour 1510 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/harbour1510.zip" "-o$env:RUNNER_TEMP/hb1510" -y
+      shell: pwsh
+    - name: Build engine, DLL, server and auth worker with pinned GCC 15.1
+      run: |
+        set -euxo pipefail
+        export PATH="/c/Program Files/CMake/bin:$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 15.1.0
+        HB="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        printf '\nif(WIN32 AND MINGW)\n set_target_properties(openads_ace PROPERTIES PREFIX "")\nendif()\n' >> src/CMakeLists.txt
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-legacy -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" -DOPENADS_BUILD_TESTS=OFF -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON -DOPENADS_VERSION_FORCE=$KIT_VERSION -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-legacy --target openads_ace_static openads_ace openads_serverd openads_auth_worker -j2
+      shell: bash
+    - name: Provision pinned Harbour source for rddads units and fixtures
+      run: |
+        set -euxo pipefail
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/hbsrc"
+        git -C "$RUNNER_TEMP/hbsrc" checkout --detach $HARBOUR_PIN
+        git -C "$RUNNER_TEMP/hbsrc" apply "$PWD/patches/harbour/rddads-pending-fields.patch"
+      shell: bash
+    - name: Build DLL import library and rddads archive with owner toolchain
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 15.1.0
+        HB="$(cygpath -u "$RUNNER_TEMP/hbsrc")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        mkdir -p srv output kit
+        rm -f "$RUNNER_TEMP/hb1510/lib/win/mingw/librddads.a"
+        cp build-legacy/src/*.dll build-legacy/tools/serverd/openads_serverd.exe build-legacy/tools/serverd/openads_auth_worker.exe srv/
+        cp build-legacy/src/libopenace32.dll.a kit/libopenace32.dll.a
+        cp build-legacy/src/openace32.dll output/openace32.dll
+        objdump -p output/openace32.dll > output/dll-pe.txt
+        if grep -Ei 'DLL Name:.*(libstdc|libgcc|libwinpthread|libssl|libcrypto|mbedtls|zlib).*\.dll' output/dll-pe.txt;then exit 1;fi
+        for unit in ads1 adsfunc adsmgmnt adsx;do
+         gcc -std=gnu99 -c "$HB/contrib/rddads/$unit.c" -I"$HB/include" -I"$HB/contrib/rddads" -Iinclude/openads -o "output/$unit.o"
+        done
+        gcc -std=gnu99 -c contrib/oads_hb/oads_hb.c -I"$HB/include" -Iinclude/openads -o output/oads_hb.o
+        for member in oads_vf oads_vf_driver oads_vf_socket; do
+         gcc -std=gnu99 -c "contrib/oads_hb/$member.c" -I"$HB/include" -Iinclude/openads -o "output/$member.o"
+        done
+        ar rcs kit/librddads.a output/ads1.o output/adsfunc.o output/adsmgmnt.o output/adsx.o output/oads_hb.o output/oads_vf.o output/oads_vf_driver.o output/oads_vf_socket.o
+      shell: bash
+    - name: Exact Harbour vf family through the packaged MinGW archive
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PWD/output:$PWD/srv:$PATH"
+        HB="$(cygpath -u "$RUNNER_TEMP/hbsrc")"
+        HBMK="$(cygpath -u "$RUNNER_TEMP/hb1510/bin/win/mingw/hbmk2.exe")"
+        export HB_INSTALL_PREFIX="$(cygpath -m "$RUNNER_TEMP/hb1510")"
+        bash tests/build_vf87.sh "$HBMK" "$HB" "output" openace32 output/vf87 kit
+        bash tests/build_fsargs88.sh "$HBMK" "$HB" "output" openace32 output/vf87 kit
+        failed=0
+        frontend_diff=0
+        : > output/vf87-proof.txt
+        # Original unmodified reproducer: kept and recorded. Under inherited stdin it shows the
+        # startup hb_fsError=109 state (see ferr_order diagnostic); that run is recorded, not gated.
+        echo '--- original vf_frontend87, inherited stdin (recorded, see matched harness below) ---' | tee -a output/vf87-proof.txt
+        output/vf87/vf_frontend87.exe 2>&1 | tee output/vf87-original-inherited.txt | tee -a output/vf87-proof.txt || true
+        echo '--- original vf_frontend87, NUL stdin (gated) ---' | tee -a output/vf87-proof.txt
+        set +e; output/vf87/vf_frontend87.exe < /dev/null 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[0]}; set -e; test "$rc" = 0 || { frontend_diff=1; echo 'VF87-READONLY difference under NUL stdin' > output/READINESS-BLOCKED-vf-frontend.txt; }
+        echo '--- original vf_frontend87, pipe stdin (gated) ---' | tee -a output/vf87-proof.txt
+        set +e; echo | output/vf87/vf_frontend87.exe 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[1]}; set -e; test "$rc" = 0 || { frontend_diff=1; echo 'VF87-READONLY difference under pipe stdin' > output/READINESS-BLOCKED-vf-frontend.txt; }
+        # Matched-initial-state harness: same 18 cases (probe functions extracted unchanged from the
+        # original file), each probe preceded by an established and verified hb_fsError state (0 and
+        # a nonzero 2), in both call orders. Differences or an unestablished state fail the gate.
+        {
+        cat <<'MATCHED'
+        #include "fileio.ch"
+        PROCEDURE Main()
+           LOCAL nBad := 0, nState := 0, nRuns := 0, nS, cOrd, a, b, n
+           FOR EACH nS IN { 0, 2 }
+              FOR EACH cOrd IN { "native-first", "wrapper-first" }
+                 IF cOrd == "native-first"
+                    IF ! Prime( nS ); nState++; ENDIF
+                    a := NativeProbe()
+                    IF ! Prime( nS ); nState++; ENDIF
+                    b := OadsProbe()
+                 ELSE
+                    IF ! Prime( nS ); nState++; ENDIF
+                    b := OadsProbe()
+                    IF ! Prime( nS ); nState++; ENDIF
+                    a := NativeProbe()
+                 ENDIF
+                 nRuns++
+                 FOR n := 1 TO Len( a )
+                    IF hb_ValToExp( a[ n ] ) != hb_ValToExp( b[ n ] )
+                       OutStd( "DIFF state=" + hb_ntos( nS ) + " order=" + cOrd + " case=" + hb_ntos( n ) + " " + hb_ValToExp( a[ n ] ) + " / " + hb_ValToExp( b[ n ] ) + hb_eol() )
+                       nBad++
+                    ENDIF
+                 NEXT
+              NEXT
+           NEXT
+           OutStd( "VF87-MATCHED runs=" + hb_ntos( nRuns ) + " cases=" + hb_ntos( Len( a ) ) + " differences=" + hb_ntos( nBad ) + " state_not_established=" + hb_ntos( nState ) + hb_eol() )
+           ErrorLevel( nBad + nState )
+           RETURN
+        STATIC FUNCTION Prime( nWant )
+           IF nWant == 0
+              hb_vfLoad( "include/openads/ace.h", 17 )
+           ELSE
+              hb_vfLoad( "include/openads/no-such-file-87.h", 17 )
+           ENDIF
+           RETURN DIAG_FSERROR() == nWant
+        #pragma BEGINDUMP
+        #include "hbapi.h"
+        #include "hbapifs.h"
+        HB_FUNC( DIAG_FSERROR ) { hb_retni( ( int ) hb_fsError() ); }
+        #pragma ENDDUMP
+        MATCHED
+        sed -n '/^FUNCTION NativeProbe/,$p' tests/smoke/harbour/vf_frontend87.prg
+        } > output/vf_frontend87_matched.prg
+        "$HBMK" output/vf_frontend87_matched.prg tests/smoke/harbour/vf_transport87.c -plat=win -comp=mingw -Lkit -lrddads -Loutput -lopenace32 -iinclude/openads -mt -gtstd -ooutput/vf87/vf_frontend87_matched 2>&1 | tail -3
+        for mode in inherited nul pipe; do
+          echo "--- matched harness, $mode stdin (gated) ---" | tee -a output/vf87-proof.txt
+          set +e
+          case $mode in
+            nul) output/vf87/vf_frontend87_matched.exe < /dev/null 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[0]};;
+            pipe) echo | output/vf87/vf_frontend87_matched.exe 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[1]};;
+            *) output/vf87/vf_frontend87_matched.exe 2>&1 | tee -a output/vf87-proof.txt; rc=${PIPESTATUS[0]};;
+          esac
+          set -e
+          if [ "$rc" != 0 ]; then frontend_diff=1; echo "VF87 matched-state harness failed under $mode stdin" > output/READINESS-BLOCKED-vf-frontend.txt; fi
+        done
+        output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
+        output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
+        python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
+        python tests/vf_socket87.py --server srv/openads_serverd.exe --probe output/vf87/fs_args88.exe | tee -a output/vf87-proof.txt || failed=1
+        echo "frontend_diff=$frontend_diff" | tee -a output/vf87-proof.txt
+        if [ "$failed" != 0 ] || [ "$frontend_diff" != 0 ]; then exit 1; fi
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: stage5c-vf87-proof
+        path: |
+          output/vf87-proof.txt
+          output/vf87-original-inherited.txt
+          output/READINESS-BLOCKED-vf-frontend.txt
+        if-no-files-found: ignore

@@ -848,7 +848,7 @@ jobs:
         grep -c 'BEGIN CERTIFICATE' "$CA"
         export OADS_CAFILE="$(cygpath -m "$CA")"
         ./t2.exe | tee t2-proof.txt
-        head -1 t2-proof.txt | grep -q '^ *0'
+        grep -m1 -v '^[[:space:]]*$' t2-proof.txt | grep -q '^ *0$'
         grep -q "OpenSSL 3.5.9" t2-proof.txt
     - name: Package the family kit
       shell: bash
@@ -1144,7 +1144,7 @@ jobs:
         grep -c 'BEGIN CERTIFICATE' "$CA"
         export OADS_CAFILE="$(cygpath -m "$CA")"
         ./t2.exe | tee t2-proof.txt
-        head -1 t2-proof.txt | grep -q '^ *0'
+        grep -m1 -v '^[[:space:]]*$' t2-proof.txt | grep -q '^ *0$'
         grep -q "OpenSSL 3.5.9" t2-proof.txt
     - name: Package the family kit
       shell: bash

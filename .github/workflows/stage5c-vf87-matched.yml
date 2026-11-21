@@ -185,7 +185,51 @@ jobs:
         output/vf87/vf_local87.exe | tee -a output/vf87-proof.txt || failed=1
         output/vf87/vf_socket_member87.exe | tee -a output/vf87-proof.txt || failed=1
         python tests/vf_socket87.py --server srv/openads_serverd.exe --large-directory --probe output/vf87/vf_compare87.exe --probe output/vf87/vf_locks87.exe --probe output/vf87/vf_extra87.exe --probe output/vf87/vf_bulk87.exe --probe output/vf87/vf_flags87.exe --probe output/vf87/vf_pairs87.exe --probe output/vf87/vf_boundary87.exe | tee -a output/vf87-proof.txt || failed=1
-        python tests/vf_socket87.py --server srv/openads_serverd.exe --probe output/vf87/fs_args88.exe | tee -a output/vf87-proof.txt || failed=1
+        # fs_args88 on the exact 5c port predates the mtfix88 PASS-marker change and reports its own
+        # contract (exit code = failure count, 'FSARGS88 failures=0' on success), which the generic
+        # vf_socket87.py PASS/differences=0 heuristic does not recognise. Gate on its own contract.
+        echo '--- fs_args88 argument-shape conformance over TCP (gated on the exact-5c contract: exit 0 and FSARGS88 failures=0) ---' | tee -a output/vf87-proof.txt
+        python - <<'PYFS88' | tee -a output/vf87-proof.txt || failed=1
+        import pathlib, socket, subprocess, sys, tempfile, time
+        with tempfile.TemporaryDirectory(prefix='openads-fs88-') as tmp:
+            root = pathlib.Path(tmp).resolve()
+            data = root / 'data'
+            data.mkdir()
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1', 0))
+                port = sock.getsockname()[1]
+            with (root / 'server.txt').open('wb') as log:
+                server = subprocess.Popen([str(pathlib.Path('srv/openads_serverd.exe').resolve()), '--host', '127.0.0.1',
+                                           '--port', str(port), '--data', str(data), '--enable_file_func'],
+                                          cwd=root, stdout=log, stderr=subprocess.STDOUT)
+                try:
+                    limit = time.monotonic() + 25
+                    while True:
+                        if server.poll() is not None:
+                            print('FSARGS88-SERVER-EXITED: ' + (root / 'server.txt').read_text(errors='replace'))
+                            sys.exit(1)
+                        try:
+                            with socket.create_connection(('127.0.0.1', port), timeout=.2):
+                                break
+                        except OSError:
+                            if time.monotonic() >= limit:
+                                raise
+                            time.sleep(.1)
+                    uri = 'tcp://127.0.0.1:%d/' % port + data.as_posix()
+                    result = subprocess.run([str(pathlib.Path('output/vf87/fs_args88.exe').resolve()), uri, str(data)],
+                                            cwd=root, capture_output=True, text=True, timeout=90)
+                    print(result.stdout, end='')
+                    if result.returncode or 'FSARGS88 failures=0' not in result.stdout:
+                        print('FSARGS88-PROBE-FAILED rc=%d: ' % result.returncode + result.stderr)
+                        sys.exit(1)
+                finally:
+                    server.terminate()
+                    try:
+                        server.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+                        server.wait(timeout=10)
+        PYFS88
         echo "frontend_diff=$frontend_diff" | tee -a output/vf87-proof.txt
         if [ "$failed" != 0 ] || [ "$frontend_diff" != 0 ]; then exit 1; fi
     - uses: actions/upload-artifact@v4

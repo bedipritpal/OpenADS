@@ -1,0 +1,162 @@
+name: mtfix88 mingw1510 login gate access violation crash-dump diagnostic 3
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_RUN: 44919253502
+  BINARIES_ARTIFACT: 14714629367
+  UNIT_EXE_SHA256: 008804d949c209b995a6a85ae15783c8eb7211928dbc3b62589712632d97cbf9
+'on':
+  push:
+    branches:
+    - kit/mtfix88-mingw1510
+    paths:
+    - .github/workflows/2-mtfix88-mingw1510-avdump.yml
+jobs:
+  avdump:
+    name: Crash-dump capture of the login gate access violation on the saved GCC 15.1 binaries
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+    - name: Fetch the saved exact binaries and verify their hash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p bin output
+        gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${BINARIES_ARTIFACT}/zip" > bin/artifact.zip
+        (cd bin && 7z x artifact.zip -y > /dev/null && rm artifact.zip)
+        find bin -type f | sort
+        exe="$(find bin -name openads_unit_tests.exe | head -1)"
+        test -n "$exe"
+        echo "$UNIT_EXE_SHA256 *$exe" | sha256sum -c -
+        echo "EXE=$exe" >> "$GITHUB_ENV"
+    - name: Download exact GCC 15.1 UCRT toolchain (runtime DLLs and gdb only)
+      shell: pwsh
+      run: |
+        function Download-Exact($url,$out) {
+         for($i=0;$i -lt 4;$i++) {
+          try { Invoke-WebRequest $url -OutFile $out; return }
+          catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+         }
+        }
+        Download-Exact 'https://github.com/brechtsanders/winlibs_mingw/releases/download/15.1.0posix-12.0.0-ucrt-r1/winlibs-i686-posix-dwarf-gcc-15.1.0-mingw-w64ucrt-12.0.0-r1.zip' "$env:RUNNER_TEMP/winlibs15.zip"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs15.zip" -Algorithm SHA256).Hash.ToLower() -ne '869fa6c0e17ef9581a9b796bd8a965a34d1ec1e2746528bc1067caadf2aa04c2'){throw 'Winlibs 15.1 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs15.zip" "-o$env:RUNNER_TEMP/winlibs15" -y
+    - name: Enable job-local WER LocalDumps on this ephemeral runner
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force "$PWD/output/dumps" | Out-Null
+        $k='HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+        $existed=Test-Path $k
+        "LOCALDUMPS_PREEXISTED=$existed" | Out-File -Append $env:GITHUB_ENV
+        New-Item -Path $k -Force | Out-Null
+        New-ItemProperty $k -Name DumpFolder -Value "$PWD\output\dumps" -PropertyType ExpandString -Force | Out-Null
+        New-ItemProperty $k -Name DumpType -Value 2 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty $k -Name DumpCount -Value 3 -PropertyType DWord -Force | Out-Null
+        Get-ItemProperty $k | Out-String
+    - name: Up to 10 fresh isolated attempts or 10 minutes, stop at the first access violation dump
+      shell: bash
+      run: |
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs15/mingw32/bin"):$PATH"
+        set -euxo pipefail
+        python - <<'PYAV'
+        import os,pathlib,subprocess,time,json,hashlib,struct,glob,shutil
+        exe=str(pathlib.Path(os.environ['EXE']).resolve())
+        exehash=hashlib.sha256(open(exe,'rb').read()).hexdigest()
+        out=pathlib.Path('output');dumps=out/'dumps'
+        case='-tc=Login gate: holder blocks repeated challengers + churn'
+        rows=[];t_all=time.time();found=None
+        def analyze(dump):
+         b=open(dump,'rb').read()
+         nstreams,srva=struct.unpack_from('<II',b,8)
+         st={}
+         for i in range(nstreams):
+          t,sz,rva=struct.unpack_from('<III',b,srva+12*i);st.setdefault(t,[]).append((sz,rva))
+         rep=[]
+         mods=[]
+         sz,rva=st[4][0];n=struct.unpack_from('<I',b,rva)[0]
+         for i in range(n):
+          o=rva+4+108*i;base,size=struct.unpack_from('<QI',b,o);nr=struct.unpack_from('<I',b,o+20)[0]
+          l=struct.unpack_from('<I',b,nr)[0];mods.append((base,size,b[nr+4:nr+4+l].decode('utf-16le')))
+         sz,rva=st[6][0];tid,_=struct.unpack_from('<II',b,rva)
+         code,flags,rec,addr,npar=struct.unpack_from('<IIQQI',b,rva+8)
+         params=struct.unpack_from('<15Q',b,rva+8+4+4+8+8+8)
+         csz,crva=struct.unpack_from('<II',b,rva+8+152)
+         rep.append('exception code=0x%08x addr=0x%x tid=%d params=%s ctxsize=%d'%(code,addr,tid,[hex(x) for x in params[:npar]],csz))
+         if csz==716: eip,esp,ebp=struct.unpack_from('<III',b,crva+0xb8)[0],struct.unpack_from('<I',b,crva+0xc4)[0],struct.unpack_from('<I',b,crva+0xb4)[0]
+         else: esp=struct.unpack_from('<Q',b,crva+0x98)[0];eip=struct.unpack_from('<Q',b,crva+0xf8)[0];ebp=struct.unpack_from('<Q',b,crva+0xa0)[0]
+         rep.append('eip=0x%x esp=0x%x ebp=0x%x'%(eip,esp,ebp))
+         # memory64
+         sz,rva=st[9][0];nr,dataoff=struct.unpack_from('<QQ',b,rva);ranges=[];cur=dataoff
+         for i in range(nr):
+          s,l=struct.unpack_from('<QQ',b,rva+16+16*i);ranges.append((s,l,cur));cur+=l
+         def rd(a,n):
+          for s,l,o in ranges:
+           if s<=a and a+n<=s+l:return b[o+a-s:o+a-s+n]
+          return None
+         exm=[m for m in mods if m[2].lower().endswith('openads_unit_tests.exe')][0]
+         pe=open(exe,'rb').read();peo=struct.unpack_from('<I',pe,0x3c)[0];imgbase=struct.unpack_from('<I',pe,peo+24+28)[0]
+         def sym(a):
+          vma=a-exm[0]+imgbase
+          r=subprocess.run(['addr2line','-f','-C','-i','-e',exe,'0x%x'%vma],stdout=subprocess.PIPE,text=True).stdout.replace('\n',' | ')
+          return r
+         if exm[0]<=eip<exm[0]+exm[1]: rep.append('fault pc: '+sym(eip))
+         else:
+          mm=[m for m in mods if m[0]<=eip<m[0]+m[1]];rep.append('fault pc in module %s'%(mm[0][2] if mm else 'none/unmapped'))
+         rep.append('stack words resolving into the test exe (heuristic scan, not unwound):')
+         d=rd(esp,0x4000) or b''
+         seen=0
+         for i in range(0,len(d)-3,4):
+          w=struct.unpack_from('<I',d,i)[0]
+          if exm[0]<=w<exm[0]+exm[1]:
+           rep.append(' esp+0x%x %s'%(i,sym(w)));seen+=1
+           if seen>=40:break
+         return '\n'.join(rep)
+        for idx in range(10):
+         if time.time()-t_all>600:break
+         d=out/('attempt-%d'%idx);d.mkdir(exist_ok=True)
+         tmp=(d/'tmp').resolve();tmp.mkdir(exist_ok=True)
+         env=os.environ.copy()
+         for k in list(env):
+          if k.startswith('OPENADS_'):env.pop(k)
+         for k in ('TMPDIR','TMP','TEMP'):env[k]=str(tmp)
+         (d/'openads.ini').write_text('');env['OPENADS_INI']=str((d/'openads.ini').resolve())
+         before=set(os.listdir(dumps));t=time.time()
+         p=subprocess.Popen([exe,case],stdout=open(d/'stdout.txt','w'),stderr=open(d/'stderr.txt','w'),env=env,cwd=str(d))
+         try: rc=p.wait(timeout=40);res='exit %s'%hex(rc&0xffffffff)
+         except subprocess.TimeoutExpired:
+          p.kill();res='HANG (killed at 40 s)';rc=None
+         time.sleep(15 if rc not in (0,None) else 0)
+         new=sorted(set(os.listdir(dumps))-before)
+         info={'attempt':idx,'exe_sha256':exehash,'result':res,'secs':round(time.time()-t,1),'new_dumps':new,'success_in_stdout':'test cases: 1 | 1 passed' in open(d/'stdout.txt',errors='replace').read()}
+         rows.append(info);print(json.dumps(info),flush=True)
+         if new and rc is not None and (rc&0xffffffff)==0xC0000005:
+          found=new[0];break
+        (out/'attempts.json').write_text(json.dumps(rows,indent=1))
+        summary={'attempts':rows,'av_dump':found,'elapsed_s':round(time.time()-t_all)}
+        if found:
+         try: summary['analysis']=analyze(str(dumps/found))
+         except Exception as e: summary['analysis_error']=repr(e)
+        (out/'av-summary.json').write_text(json.dumps(summary,indent=1))
+        print(json.dumps(summary,indent=1))
+        PYAV
+    - name: Remove job-local WER LocalDumps setting
+      if: always()
+      shell: pwsh
+      run: |
+        $k='HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+        if($env:LOCALDUMPS_PREEXISTED -ne 'True'){ Remove-Item $k -Recurse -Force -ErrorAction SilentlyContinue }
+        "LocalDumps key present after cleanup: $(Test-Path $k)"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: avdump-diagnostic
+        path: |
+          output/av-summary.json
+          output/attempts.json
+          output/dumps/*.dmp
+          output/attempt-*/stdout.txt
+          output/attempt-*/stderr.txt
+        retention-days: 3

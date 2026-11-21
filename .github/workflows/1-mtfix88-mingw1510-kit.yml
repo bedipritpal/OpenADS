@@ -1524,8 +1524,9 @@ jobs:
           break
          except subprocess.TimeoutExpired:
           counts['hang']+=1;rows.append('run %d HANG >25s'%i)
-          g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8')
-          p.kill();rows.append('hang stack captured');break
+          if counts['hang']==1:
+           g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8');rows.append('first hang stack captured')
+          p.kill();p.communicate()
         rows.append('summary until first crash (hangs are counted and the first hang stack kept): %s runs_started=%d'%(counts,sum(counts.values())))
         # separate finding: remote ordered prefetch, 20 isolated runs
         res=[]
@@ -1779,8 +1780,9 @@ jobs:
           break
          except subprocess.TimeoutExpired:
           counts['hang']+=1;rows.append('run %d HANG >25s'%i)
-          g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8')
-          p.kill();rows.append('hang stack captured');break
+          if counts['hang']==1:
+           g=gdb('-p',str(p.pid),'-ex','thread apply all bt 25');(out/'login-gate-hang-gdb.txt').write_text(g,encoding='utf-8');rows.append('first hang stack captured')
+          p.kill();p.communicate()
         rows.append('summary until first crash (hangs are counted and the first hang stack kept): %s runs_started=%d'%(counts,sum(counts.values())))
         # separate finding: remote ordered prefetch, 20 isolated runs
         res=[]

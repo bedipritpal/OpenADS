@@ -652,7 +652,7 @@ jobs:
         for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
         tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
         mkdir -p "$PWD/../perlshim/Locale/Maketext" && cp /c/Strawberry/perl/lib/Locale/Maketext/Simple.pm "$PWD/../perlshim/Locale/Maketext/" && export PERL5LIB="$(cygpath -u "$PWD/../perlshim")"
-        /usr/bin/perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
+        /c/msys64/usr/bin/perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
         mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
         tar xf ../dl/libssh2-1.11.1.tar.xz
         cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
@@ -710,7 +710,7 @@ jobs:
         cd work
         tar xf ../dl/openssl-1.1.1w.tar.gz
         cd openssl-1.1.1w
-        /usr/bin/perl Configure mingw no-asm >/dev/null
+        /c/msys64/usr/bin/perl Configure mingw no-asm >/dev/null
         mingw32-make include/openssl/opensslconf.h >/dev/null
         cd ..
         git clone https://github.com/harbour/core.git hbsrc
@@ -925,7 +925,7 @@ jobs:
         for b in common dec enc; do cp "$P/lib/libbrotli$b.a" "$P/lib/libbrotli$b-static.a"; done
         tar xf ../dl/openssl-3.5.9.tar.gz; cd openssl-3.5.9
         mkdir -p "$PWD/../perlshim/Locale/Maketext" && cp /c/Strawberry/perl/lib/Locale/Maketext/Simple.pm "$PWD/../perlshim/Locale/Maketext/" && export PERL5LIB="$(cygpath -u "$PWD/../perlshim")"
-        /usr/bin/perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
+        /c/msys64/usr/bin/perl ./Configure mingw --prefix="$(cygpath -m "$P")" --openssldir="$(cygpath -m "$P")/ssl" --libdir=lib no-shared no-tests no-docs
         mingw32-make -j2 build_libs; mingw32-make install_dev; cd ..
         tar xf ../dl/libssh2-1.11.1.tar.xz
         cmake -S libssh2-1.11.1 -B ssh2-b -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM="$MK" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" -DCMAKE_PREFIX_PATH="$P" -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601 -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DCRYPTO_BACKEND=OpenSSL -DOPENSSL_ROOT_DIR="$P" -DOPENSSL_USE_STATIC_LIBS=ON -DENABLE_ZLIB_COMPRESSION=ON
@@ -983,7 +983,7 @@ jobs:
         cd work
         tar xf ../dl/openssl-1.1.1w.tar.gz
         cd openssl-1.1.1w
-        /usr/bin/perl Configure mingw no-asm >/dev/null
+        /c/msys64/usr/bin/perl Configure mingw no-asm >/dev/null
         mingw32-make include/openssl/opensslconf.h >/dev/null
         cd ..
         git clone https://github.com/harbour/core.git hbsrc

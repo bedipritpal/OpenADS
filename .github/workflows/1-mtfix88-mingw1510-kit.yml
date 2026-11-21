@@ -759,7 +759,8 @@ jobs:
         cp "$P/bin/curl.exe" "$K/bin/" || true
         cat > "$K/README.txt" <<'NOTES'
         Static OpenSSL + CURL kit for MinGW-w64 x86 - modernized rebuild
-        Versions: OpenSSL 3.5.9 (current 3.x LTS patch, built WITH deprecated/1.1.x APIs),
+        Versions: OpenSSL 3.5.9 (latest release of the 3.5 LTS line, the same line the
+        2026-10-10 kit was built on; upstream release list checked 2026-11-21),
         curl 8.23.0, libssh2 1.11.1, nghttp2 1.71.0, brotli 1.2.1 (plain and -static names),
         zstd 1.5.7, zlib 1.4. Built with GCC 15.1.0 i686 UCRT posix dwarf (winlibs 15.1.0posix-12.0.0-ucrt-r1).
         Use this set with the new toolchain world: C:\mingw32_15 + C:\harbour-bin
@@ -771,14 +772,21 @@ jobs:
         names it calls (EVP_CIPHER_nid, EVP_MD_size, EVP_PKEY_size, ...), so libcrypto.a in
         this kit carries a small merged compat object (ossl_legacy.o) that provides them as
         tail-jump wrappers to the renamed 3.x functions. No hbssl recompile, no link-line
-        change. The exact symbol list is in LEGACY-SYMBOLS.txt.
+        change. The exact symbol list is in LEGACY-SYMBOLS.txt. The old->new pairs are
+        not invented: they are copied from OpenSSL 3.5.9's own headers (its
+        include/openssl/evp.h itself defines EVP_CIPHER_nid as EVP_CIPHER_get_nid,
+        EVP_MD_size as EVP_MD_get_size, EVP_PKEY_size as EVP_PKEY_get_size, and so
+        on); the merged object only materializes those header aliases as linkable
+        symbols, filtered to pairs whose new name exists in the built libraries.
+        The semantics are OpenSSL's own.
 
         Install: copy lib\*.a and include\* into the toolchain's lib/include folders (keep
-        a backup of the replaced files). Link line stays:
-          -lcrypto -lssl -lssh2 -lnghttp2 -lbrotlicommon-static -lbrotlidec-static -lbrotlienc-static -lzstd -lz
-        (order matters: curl, hbssl, ssh2, ssl, crypto, nghttp2, brotli x3, zstd, z).
-        Keep -lbcrypt in the .hbp (curl needs BCryptGenRandom); hbmk2 adds the other Windows
-        libs (ws2_32 crypt32 wldap32 ...). Define CURL_STATICLIB when compiling against
+        a backup of the replaced files). Link exactly as your current working build links.
+        For reference, the CI proof invoked hbmk2 with: -lhbcurls -lhbssl-x86 -lcurl
+        -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static
+        -lbrotlicommon-static -lzstd -lz -lws2_32 -lcrypt32 -lwldap32 -lbcrypt (that
+        tested invocation needed -lbcrypt for curl's BCryptGenRandom; hbmk2 adds the
+        other Windows libs itself). Define CURL_STATICLIB when compiling against
         include\curl (harbour-hbcurl\libhbcurls.a is already built with it; hbcurl.ch and
         hbcurl.hbx included). bin\curl.exe is the static curl tool. test\ holds the two
         sample programs CI linked AND RAN against this exact kit: test_hbssl.prg prints the
@@ -1023,26 +1031,37 @@ jobs:
         cp "$P/bin/curl.exe" "$K/bin/" || true
         cat > "$K/README.txt" <<'NOTES'
         Static OpenSSL + CURL kit for MinGW-w64 x86 - modernized rebuild
-        Versions: OpenSSL 3.5.9 (current 3.x LTS patch, built WITH deprecated/1.1.x APIs),
+        Versions: OpenSSL 3.5.9 (latest release of the 3.5 LTS line, the same line the
+        2026-10-10 kit was built on; upstream release list checked 2026-11-21),
         curl 8.23.0, libssh2 1.11.1, nghttp2 1.71.0, brotli 1.2.1 (plain and -static names),
         zstd 1.5.7, zlib 1.4. Built with GCC 10.2.0 i686 MSVCRT posix dwarf (winlibs 10.2.0, the mtfix88 CI pin).
         Use this set with the existing world: HbQt static builds via MinGW 4.9.2,
         Vouch on D:\mingw32 (GCC 10.2). These libraries are MSVCRT, the same CRT
-        family as the 2026-10-10 kit they replace, so they drop into the same
-        lib folder the same way (keep the backup of the old files).
+        family and the same recipe as the 2026-10-10 kit, with modernized versions.
+        Same CRT plus same recipe is necessary, not sufficient: CI proves old-hbssl
+        symbol coverage and a live HTTPS fetch on a clean runner, but your actual
+        Vouch/HbQt link is the final proof and is yours. Keep the backup of the
+        replaced files.
 
         The stock libhbssl.a keeps working: OpenSSL 3.x no longer exports the old function
         names it calls (EVP_CIPHER_nid, EVP_MD_size, EVP_PKEY_size, ...), so libcrypto.a in
         this kit carries a small merged compat object (ossl_legacy.o) that provides them as
         tail-jump wrappers to the renamed 3.x functions. No hbssl recompile, no link-line
-        change. The exact symbol list is in LEGACY-SYMBOLS.txt.
+        change. The exact symbol list is in LEGACY-SYMBOLS.txt. The old->new pairs are
+        not invented: they are copied from OpenSSL 3.5.9's own headers (its
+        include/openssl/evp.h itself defines EVP_CIPHER_nid as EVP_CIPHER_get_nid,
+        EVP_MD_size as EVP_MD_get_size, EVP_PKEY_size as EVP_PKEY_get_size, and so
+        on); the merged object only materializes those header aliases as linkable
+        symbols, filtered to pairs whose new name exists in the built libraries.
+        The semantics are OpenSSL's own.
 
         Install: copy lib\*.a and include\* into the toolchain's lib/include folders (keep
-        a backup of the replaced files). Link line stays:
-          -lcrypto -lssl -lssh2 -lnghttp2 -lbrotlicommon-static -lbrotlidec-static -lbrotlienc-static -lzstd -lz
-        (order matters: curl, hbssl, ssh2, ssl, crypto, nghttp2, brotli x3, zstd, z).
-        Keep -lbcrypt in the .hbp (curl needs BCryptGenRandom); hbmk2 adds the other Windows
-        libs (ws2_32 crypt32 wldap32 ...). Define CURL_STATICLIB when compiling against
+        a backup of the replaced files). Link exactly as your current working build links.
+        For reference, the CI proof invoked hbmk2 with: -lhbcurls -lhbssl-x86 -lcurl
+        -lssh2 -lssl -lcrypto -lnghttp2 -lbrotlidec-static -lbrotlienc-static
+        -lbrotlicommon-static -lzstd -lz -lws2_32 -lcrypt32 -lwldap32 -lbcrypt (that
+        tested invocation needed -lbcrypt for curl's BCryptGenRandom; hbmk2 adds the
+        other Windows libs itself). Define CURL_STATICLIB when compiling against
         include\curl (harbour-hbcurl\libhbcurls.a is already built with it; hbcurl.ch and
         hbcurl.hbx included). bin\curl.exe is the static curl tool. test\ holds the two
         sample programs CI linked AND RAN against this exact kit: test_hbssl.prg prints the
@@ -1109,8 +1128,10 @@ jobs:
           world. Includes the merged legacy-symbol shim so stock libhbssl.a keeps
           linking (see README + LEGACY-SYMBOLS.txt inside). Do not mix into Qt 4.9.
         - openssl-curl-mingw10-x86-ossl35.zip: the same family built with the mtfix88
-          CI toolchain (GCC 10.2 MSVCRT), drop-in modernized replacement for the
-          2026-10-10 kit in the HbQt static / Qt 4.9 / Vouch world.
+          CI toolchain (GCC 10.2 MSVCRT): same CRT family and same recipe as the
+          2026-10-10 kit with modernized versions, for the HbQt static / Qt 4.9 /
+          Vouch world. CI proves old-hbssl symbol coverage and a live HTTPS fetch;
+          the actual Vouch link is the final proof and stays with the owner.
 
         Reproducibility: every dependency is a hash-pinned download; the workflow
         file is the recipe.

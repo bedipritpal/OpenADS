@@ -19,13 +19,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Build release-route MSVC DLL for import-library probe
-        shell: pwsh
+        shell: bash
         run: |
-          $preset = '${{ matrix.bits == 64 && 'msvc-x64' || 'msvc-x86' }}'
-          cmake --preset $preset -DOPENADS_WITH_TLS=ON -DOPENADS_WITH_HTTP=ON -DOPENADS_VERSION_FORCE=1.09.75-stage6-review
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          set -euo pipefail
+          preset='${{ matrix.bits == 64 && 'msvc-x64' || 'msvc-x86' }}'
+          cmake --preset "$preset" -DOPENADS_WITH_TLS=ON -DOPENADS_WITH_HTTP=ON \
+            -DOPENADS_VERSION_FORCE="1.09.75-stage6-review"
           cmake --build "build/$preset" --config Release --target openads_ace -j2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.bits == 64 && 'MINGW64' || 'MINGW32' }}

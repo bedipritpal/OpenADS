@@ -18,6 +18,14 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: Build release-route MSVC DLL for import-library probe
+        shell: pwsh
+        run: |
+          $preset = '${{ matrix.bits == 64 && 'msvc-x64' || 'msvc-x86' }}'
+          cmake --preset $preset -DOPENADS_WITH_TLS=ON -DOPENADS_WITH_HTTP=ON -DOPENADS_VERSION_FORCE=1.09.75-stage6-review
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build "build/$preset" --config Release --target openads_ace -j2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.bits == 64 && 'MINGW64' || 'MINGW32' }}
@@ -61,7 +69,7 @@ jobs:
           bits=${{ matrix.bits }}
           arch=x86; if [ "$bits" = 64 ]; then arch=x64; fi
           python tools/scripts/regenerate_mingw_imports.py \
-            build/packaging-review/src/libopenace$bits.dll \
+            build/${{ matrix.bits == 64 && 'msvc-x64' || 'msvc-x86' }}/src/Release/openace$bits.dll \
             dist/import-libs/$arch/mingw/libace$bits.a \
             build/fresh-imports/libace$bits.a $bits 2>&1 | tee fresh-imports.txt
       - name: Verify manifest and notices from produced candidate
@@ -90,3 +98,5 @@ jobs:
             build/packaging-review/Testing/Temporary/
             build/static-kit-${{ matrix.bits }}/
             build/fresh-imports/
+            build/packaging-review/src/libopenace${{ matrix.bits }}.a
+            build/${{ matrix.bits == 64 && 'msvc-x64' || 'msvc-x86' }}/src/Release/openace${{ matrix.bits }}.dll

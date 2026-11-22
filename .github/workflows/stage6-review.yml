@@ -24,7 +24,7 @@ jobs:
           release: false
           update: false
           install: >-
-            ${{ matrix.bits == 64 && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-make' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake mingw-w64-i686-make' }} python git make
+            ${{ matrix.bits == 64 && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake' }} python git make
       - name: Packaging synthetic failure gates and import parser
         shell: msys2 {0}
         run: |
@@ -34,7 +34,7 @@ jobs:
       - name: Configure static sub-build with parent test selection
         shell: msys2 {0}
         run: |
-          cmake -S . -B build/packaging-review -G 'MinGW Makefiles' \
+          cmake -S . -B build/packaging-review -G 'MSYS Makefiles' \
             -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON \
             -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF \
             -DOPENADS_VERSION_FORCE=1.09.75-stage6-review \

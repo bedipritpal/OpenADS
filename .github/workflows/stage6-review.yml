@@ -1,0 +1,92 @@
+name: Stage 6 packaging review TEST ONLY
+on:
+  push:
+    branches: [stage6/packaging-review]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-packaging:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        bits: [32, 64]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.bits == 64 && 'MINGW64' || 'MINGW32' }}
+          release: false
+          update: false
+          install: >-
+            ${{ matrix.bits == 64 && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake' || 'mingw-w64-i686-toolchain mingw-w64-i686-cmake' }} python git make
+      - name: Packaging synthetic failure gates and import parser
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          python tests/static_client_packaging_test.py
+          python tests/mingw_import_parser_test.py
+      - name: Configure static sub-build with parent test selection
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build/packaging-review -G 'MinGW Makefiles' \
+            -DCMAKE_BUILD_TYPE=Release -DOPENADS_BUILD_TESTS=ON \
+            -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=OFF \
+            -DOPENADS_VERSION_FORCE=1.09.75-stage6-review \
+            -DOPENADS_WARNINGS_AS_ERRORS=OFF
+      - name: Build static and shared targets plus test dependencies
+        shell: msys2 {0}
+        run: cmake --build build/packaging-review --target openads_ace_static openads_ace openads_unit_tests -j2
+      - name: Existing static CTest gate without added exclusions
+        timeout-minutes: 35
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          ctest --test-dir build/packaging-review --output-on-failure -C Release 2>&1 | tee static-ctest.txt
+      - name: Package matching archive and execute native Harbour smoke
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          bits=${{ matrix.bits }}
+          bash tools/scripts/test_harbour_static_mingw.sh build/packaging-review/src/libopenace$bits.a $bits 2>&1 | tee static-harbour-smoke.txt
+      - name: Regenerate actual DLL imports and link health probe
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          bits=${{ matrix.bits }}
+          arch=x86; if [ "$bits" = 64 ]; then arch=x64; fi
+          python tools/scripts/regenerate_mingw_imports.py \
+            build/packaging-review/src/libopenace$bits.dll \
+            dist/import-libs/$arch/mingw/libace$bits.a \
+            build/fresh-imports/libace$bits.a $bits 2>&1 | tee fresh-imports.txt
+      - name: Verify manifest and notices from produced candidate
+        shell: msys2 {0}
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib
+          kit=pathlib.Path('build/static-kit-${{ matrix.bits }}')
+          archive=kit/'libopenace${{ matrix.bits }}.a'
+          manifest=json.loads(archive.with_suffix('.manifest.json').read_text())
+          assert manifest['profile']=='matching'
+          assert manifest['archive_sha256']==hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert len(manifest['runtime_notice_sha256'])==4
+          for name,digest in manifest['runtime_notice_sha256'].items():
+              assert hashlib.sha256((kit/'runtime-notices'/name).read_bytes()).hexdigest()==digest
+          print(json.dumps(manifest,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packaging-review-${{ matrix.bits }}
+          path: |
+            static-ctest.txt
+            static-harbour-smoke.txt
+            fresh-imports.txt
+            build/packaging-review/Testing/Temporary/
+            build/static-kit-${{ matrix.bits }}/
+            build/fresh-imports/

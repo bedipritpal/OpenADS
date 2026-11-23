@@ -26,6 +26,11 @@ jobs:
           cmake --preset "$preset" -DOPENADS_WITH_TLS=ON -DOPENADS_WITH_HTTP=ON \
             -DOPENADS_VERSION_FORCE="1.09.75-stage6-review"
           cmake --build "build/$preset" --config Release --target openads_ace -j2
+      - name: Native Windows Python packaging failure gates
+        shell: pwsh
+        run: |
+          python tests/static_client_packaging_test.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.bits == 64 && 'MINGW64' || 'MINGW32' }}

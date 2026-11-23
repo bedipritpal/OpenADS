@@ -1,4 +1,8 @@
+#include "engine/vf_path.h"
+#include "network/checked_record_flush.h"
 #include "network/session.h"
+#include "util/log.h"
+#include "util/client_config.h"
 #include "network/mutual_auth.h"
 #include "network/auth_result.h"
 #include "engine/pbkdf2.h"
@@ -55,6 +59,8 @@ void share_connection_resolve_log(ADSHANDLE                  hConnect,
 // fail a contended lock FAST — AdsLockRecord's retry loop would block the
 // session thread ~1s, starving the peer op that releases the lock.
 UNSIGNED32 try_lock_record_once(ADSHANDLE hTable, UNSIGNED32 ulRecord);
+// Virtual FLock mirror for the parallel ABI twin (ace_exports.cpp).
+void adopt_virtual_table_lock(ADSHANDLE hTable);
 // Raw (unformatted) date/timestamp field reads for the wire: the server
 // packs "YYYYMMDD"/"YYYYMMDDhhmmss" into row payloads regardless of the
 // process-wide date format; clients format for display themselves.
@@ -65,8 +71,8 @@ void field_read_raw_end();
 namespace openads::network {
 
 static bool wire_trace_on() {
-    static const bool on = std::getenv("OPENADS_WIRE_TRACE") != nullptr;
-    return on;
+    static const bool on = openads::util::client_setting_truthy("OPENADS_WIRE_TRACE", "wire_trace");
+    return on && openads::util::logging_enabled();
 }
 #define WTRACE(...) do { if (wire_trace_on()) std::fprintf(stderr, __VA_ARGS__); } while (0)
 
@@ -413,7 +419,7 @@ bool Session::process_frame(const Frame& f) {
         // Iterator-based ctor: payload.data() may be nullptr when empty,
         // and std::string(nullptr, 0) is UB.
         // SQL may contain passwords or other secrets. Do not retain raw text.
-        srv_->set_session_sql(sid_, srv_->daemon_hardening() ? "[SQL text hidden]" : std::string(f.payload.begin(), f.payload.end()));
+        srv_->set_session_sql(sid_, "[SQL text hidden]");
     }
     srv_->set_session_executing(sid_, true);
     // Stamp the text error log context for this frame so any err() the
@@ -487,9 +493,7 @@ bool Session::process_frame(const Frame& f) {
     }
     srv_->set_session_executing(sid_, false);
     if (res.reply) {
-        if (srv_->daemon_hardening()) {
-            if (!queue_reply(*res.reply)) return false;
-        } else if (auto wr = write_frame(s_, *res.reply); !wr) return false;
+        if (!queue_reply(*res.reply)) return false;
         auto& mgst = openads::mgmt::process_mg_stats();
         mgst.packets_out.fetch_add(1, std::memory_order_relaxed);
         // RCB 07/14/2026: bytes_out was declared alongside packets_out but
@@ -501,7 +505,6 @@ bool Session::process_frame(const Frame& f) {
                                  std::memory_order_relaxed);
         srv_->touch_session(sid_, false, true);
     }
-    if (!srv_->daemon_hardening()) return !res.close_session;
     close_after_reply_ = res.close_session;
     return !close_after_reply_ || !reply_bytes_.empty();
 }
@@ -518,7 +521,6 @@ bool Session::expired() const noexcept {
 }
 
 bool Session::expired_at(std::chrono::steady_clock::time_point now) const noexcept {
-    if (!srv_->daemon_hardening()) return false;
     // DBF users can read a screen or leave a module open while holding login
     // locks. Application silence is not evidence of transport death. Keep
     // their established session until EOF/reset, Disconnect or shutdown;
@@ -534,30 +536,6 @@ bool Session::expired_at(std::chrono::steady_clock::time_point now) const noexce
 }
 
 bool Session::handle_readable() {
-    if (!srv_->daemon_hardening()) {
-    // Read whatever a single recv yields — a partial frame, one frame, or
-    // several — then reassemble and dispatch every complete frame. On a
-    // non-blocking socket (reactor pool) an idle or stalled peer returns
-    // would-block and we hand the worker straight back to its other
-    // connections, so one slow client can't cause head-of-line blocking. On a
-    // blocking socket (legacy thread-per-connection loop) recv just waits for
-    // the next bytes, preserving the previous one-frame-at-a-time behavior.
-    std::uint8_t buf[16384];
-    auto r = sock_recv(s_, buf, sizeof(buf));
-    if (!r) {
-        if (socket_recv_would_block(r.error())) return true;  // nothing right now
-        return false;                                         // peer reset / error
-    }
-    if (r.value() == 0) return false;                         // peer closed cleanly
-    auto frames = reader_.feed(buf, r.value());
-    if (!frames) return false;                                // malformed framing
-    for (const auto& f : frames.value()) {
-        if (!process_frame(f)) return false;
-    }
-    return true;
-
-    }
-    reader_.set_validate_opcodes(true);
     if (expired() || transport_failed_) return false;
 #if defined(OPENADS_WITH_TLS)
     if (!tls_transport_ && srv_->tls_config()) {
@@ -607,7 +585,7 @@ void Session::cleanup() {
     // through right after this line, the holder's session died first
     // (restart, WAN drop, app close) — not an exclusion failure.
     WTRACE("[wire] session end user=%s conn=%u tables=%u\n",
-           session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
+           "[hidden]",
            (unsigned)(srv_ ? srv_->conn_no_for_session(sid_) : 0),
            (unsigned)tbls_.size());
     // 0) Distributed mutexes first: free locks held by this session and
@@ -684,6 +662,7 @@ void Session::cleanup() {
 
     // 5) oads_FOpen / AdsFOpen files for this session.
     files_.clear();
+    vf_service_.reset();
 
     // 6) ABI SQL statement + connection (AdsDisconnect closes any leftover
     //    tables that somehow escaped the loops above).
@@ -799,8 +778,8 @@ ADSHANDLE Session::ensure_abi_handle(std::uint32_t id) {
     }
     ADSHANDLE h = 0;
     WTRACE("[wire] ensure_abi_handle id=%u open_name='%s' mode=%u eng_path='%s' eng_recs=%u\n",
-           id, open_name.c_str(), (unsigned)us_mode,
-           tbl->path().c_str(), (unsigned)tbl->record_count());
+           id, "[hidden]", (unsigned)us_mode,
+           "[hidden]", (unsigned)tbl->record_count());
     auto& oi_st = openads::mgmt::process_mg_stats();
     auto oi_us = [](auto a, auto b) {
         return static_cast<std::uint64_t>(
@@ -904,6 +883,9 @@ ADSHANDLE Session::ensure_abi_handle(std::uint32_t id) {
         std::memcpy(ab.data(), aof.data(), aof.size());
         (void)AdsSetAOF(h, ab.data(), 0);
     }
+    // A FLock taken before the twin existed must cover the twin too
+    // (same virtual mirror as the LockTable handler).
+    if (tbl->is_table_locked()) openads::abi::adopt_virtual_table_lock(h);
     tbls_h_[id] = h;
     return h;
 }
@@ -1064,9 +1046,8 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         h_abi = cit->second;
     } else if (ordered_tables_.count(id) != 0) {
         h_abi = ensure_abi_handle(id);
-        // Also resolve the engine table — we need it for fallback reads
-        // when the ABI twin is in Limbo (ACE's CDX may disagree with the
-        // engine's CDX on index state, leaving the twin at bof=eof=1).
+        // Also resolve the engine table for natural-path bookkeeping.
+        // Ordered packing below never substitutes its cursor for the ABI twin.
         if (auto eit = tbls_.find(id); eit != tbls_.end() && sess_conn_) {
             eng_tbl = sess_conn_->lookup_table(eit->second);
         }
@@ -1079,54 +1060,12 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         reply.payload.push_back(0);
         return;
     }
-    if (h_abi != 0) {
-        UNSIGNED16 _b = 9, _e = 9; AdsAtBOF(h_abi, &_b); AdsAtEOF(h_abi, &_e);
-        // Rescue: if the twin landed in Limbo (bof=1 eof=1) — e.g. from a
-        // cached handle opened when the table was empty — reposition it now.
-        if (_b && _e) {
-            AdsGotoTop(h_abi);
-            AdsAtBOF(h_abi, &_b); AdsAtEOF(h_abi, &_e);
-            if (_b && _e) AdsGotoBottom(h_abi);
-            AdsAtBOF(h_abi, &_b); AdsAtEOF(h_abi, &_e);
-            WTRACE("[wire] pack enter id=%u Limbo rescue bof=%u eof=%u\n",
-                   id, (unsigned)_b, (unsigned)_e);
-        }
-        WTRACE("[wire] pack enter id=%u twin bof=%u eof=%u\n", id, (unsigned)_b, (unsigned)_e);
-    }
-    // f2436d8 regression: for ORDERED tables it made this pack read from the
-    // engine mirror. That mirror lags the twin one op (handlers sync AFTER
-    // packing) and its lookahead walks NATURAL order, so every ordered op
-    // shipped the previous position's row and ordered read-ahead walked
-    // recno order instead of the index. The twin is the authority for an
-    // ordered table: pack from it. The engine stays the source for
-    // natural-order tables and the fallback when the twin is genuinely in
-    // Limbo (empty order/table) — the case f2436d8 meant to cover.
-    bool twin_limbo = false;
-    if (h_abi != 0) {
-        UNSIGNED16 lb = 9, le = 9;
-        AdsAtBOF(h_abi, &lb); AdsAtEOF(h_abi, &le);
-        twin_limbo = (lb != 0 && le != 0);
-    }
-    const bool use_engine = (eng_tbl != nullptr) && (h_abi == 0 || twin_limbo);
+    // An ordered ABI cursor is authoritative even when no visible key
+    // exists. Packing must never navigate it or substitute an unscoped row.
+    const bool use_engine = (eng_tbl != nullptr) && (h_abi == 0);
     // Pack the current row.
     bool current_packed = false;
     if (use_engine) {
-        // If the ABI twin is in Limbo (bof=eof=1) but we have the engine
-        // table, sync the engine to the ABI twin's recno and read from engine.
-        // ACE's CDX may disagree with the engine's CDX on index state.
-        if (h_abi != 0) {
-            UNSIGNED32 rn = 0;
-            AdsGetRecordNum(h_abi, 0, &rn);
-            if (rn > 0 && eng_tbl->record_count() >= rn) {
-                eng_tbl->goto_record(rn);
-                WTRACE("[wire] pack enter id=%u Limbo fallback engine recno=%u\n",
-                       id, (unsigned)rn);
-            } else {
-                // Twin recno unavailable (Limbo); use engine's current pos.
-                WTRACE("[wire] pack enter id=%u Limbo, engine recno=%u\n",
-                       id, (unsigned)eng_tbl->recno());
-            }
-        }
         if (eng_tbl->eof() || eng_tbl->bof() || eng_tbl->recno() == 0) {
             reply.payload.push_back(0);
         } else {
@@ -1144,7 +1083,7 @@ void Session::pack_row_trailer(Frame& reply, std::uint32_t id,
         // and its boundary detection (which relies on a pristine
         // row_valid_before) then reports Bof()=.F. on the first backward
         // skip at the top — xBrowse counts one extra row above and paints
-        // a phantom duplicate (Tim Stone, 1-record scope). It also lets
+        // a phantom duplicate (the reporting user, 1-record scope). It also lets
         // the lookahead walk run at BOF, whose restore step clears the
         // twin's BOF flag. Field reads at BOF still work: they miss the
         // cache and cost one round trip, exactly like EOF.
@@ -1563,7 +1502,7 @@ UNSIGNED32 Session::install_table_order(std::uint32_t tid,
             if (AdsGetIndexHandle(ht, tb.data(), &h_fresh) == 0 &&
                 h_fresh != 0 && h_fresh != iit->second) {
                 WTRACE("[wire] SetOrder iid=%u stale handle, healed via tag '%s'\n",
-                       iid, tag.c_str());
+                       iid, "[hidden]");
                 rrc = AdsSetIndexOrderByHandle(ht, h_fresh);
                 if (rrc == 0) iit->second = h_fresh;
             }
@@ -1573,6 +1512,18 @@ UNSIGNED32 Session::install_table_order(std::uint32_t tid,
     ordered_tables_.insert(tid);
     sync_engine_cursor(tid);
     return openads::AE_SUCCESS;
+}
+
+util::Result<void> Session::flush_table_record(std::uint32_t id,
+        openads::engine::Table* tbl) {
+    return checked_record_flush([&]() -> UNSIGNED32 {
+        if (auto hit = tbls_h_.find(id); hit != tbls_h_.end())
+            return AdsFlushFileBuffers(hit->second);
+        return 0;
+    }, [&]() -> util::Result<void> {
+        tbl->set_pending_append(false);
+        return tbl->flush();
+    });
 }
 
 Session::FieldWriteResult Session::write_fields(std::uint32_t id,
@@ -1711,10 +1662,11 @@ void Session::append_open_warm_sections(std::vector<std::uint8_t>& out,
 }
 
 DispatchResult Session::dispatch(const Frame& f) {
+    // Distinct remote connections behave as distinct Harbour processes.
+    openads::engine::FsOwnerScope fs_owner(reinterpret_cast<std::uintptr_t>(this));
     Frame reply;
     if (srv_->auth_required() && (f.opcode == Opcode::Connect || f.opcode == Opcode::MgConnect))
         return {err("Challenge authentication required", openads::AE_LOGIN_FAILED), true};
-    if (srv_->daemon_hardening()) {
     if (!sess_conn_ && !mg_connected_ && f.opcode != Opcode::BeginAuth && f.opcode != Opcode::CompleteAuth && f.opcode != Opcode::Hello && f.opcode != Opcode::Connect &&
         f.opcode != Opcode::Disconnect && f.opcode != Opcode::MgConnect)
         return {err("Connect required", openads::AE_NO_CONNECTION), true};
@@ -1725,7 +1677,6 @@ DispatchResult Session::dispatch(const Frame& f) {
         return {err("Already connected", openads::AE_ACCESS_DENIED), true};
     if ((f.opcode == Opcode::OpenTable || f.opcode == Opcode::ExecuteSQL) && tbls_.size() + cursor_tbls_.size() >= 256)
         return {err("Session table limit", openads::AE_ACCESS_DENIED), false};
-    }
     // Wire table handlers can operate directly on engine handles, without
     // ABI ACL checks. Enforce authenticated dictionary authority centrally.
     if (sess_conn_ && sess_conn_->has_dd() && !sess_conn_->username().empty()) {
@@ -1757,10 +1708,18 @@ DispatchResult Session::dispatch(const Frame& f) {
             case Opcode::CreateIndex: case Opcode::Reindex:
             case Opcode::PackTable: case Opcode::ZapTable:
             case Opcode::FileExists: case Opcode::FileErase: case Opcode::FileRename:
+            case Opcode::FileCopy:
+            case Opcode::FileLoad: case Opcode::FileSave:
+            case Opcode::FileSetAttr: case Opcode::FileSetTime:
+            case Opcode::FileTemp: case Opcode::DirSpace:
             case Opcode::FileSize: case Opcode::FileMTime: case Opcode::Directory:
             case Opcode::DirExist: case Opcode::DirMake: case Opcode::DirRemove:
             case Opcode::FOpen: case Opcode::FCreate: case Opcode::FClose:
             case Opcode::FRead: case Opcode::FWrite: case Opcode::FSeek:
+            case Opcode::FileReadAt: case Opcode::FileWriteAt:
+            case Opcode::FileFlush: case Opcode::FileEof:
+            case Opcode::FileLockOp:
+            case Opcode::FileTrunc:
             case Opcode::ZipArchive: case Opcode::UnzipArchive: case Opcode::ZipList:
                 if (!admin) return denied();
                 break;
@@ -1931,7 +1890,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 };
                 pack(auth_dir_);pack(hrb_result.user);pack(hrb_result.password);
                 const std::uint32_t caps=kCapPrefetchConsume|kCapPrefetchBackward|kCapOpenTableMode|
-                    kCapSetFieldsBatch|kCapFlushInCloseAll|kCapNavOrderFuse|kCapNavBoundaryPair|kCapOpenSetupMetadata|kCapLockedRow;
+                    kCapSetFieldsBatch|kCapFlushInCloseAll|kCapNavOrderFuse|kCapNavBoundaryPair|kCapOpenSetupMetadata|kCapLockedRow|kCapAppendMetadata;
                 for(unsigned i=0;i<4;++i)auth_connect.payload.push_back(static_cast<std::uint8_t>(caps>>(8*i)));
             }
             // M12.9 — Connect payload format:
@@ -1959,9 +1918,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!readlen(dl) || !readstr(dir, dl) ||
                 !readlen(ul) || !readstr(user, ul) ||
                 !readlen(pwl) || !readstr(pw, pwl) ||
-                (srv_->daemon_hardening() && ((pl.size() - p != 0 && pl.size() - p != 4) ||
+                (pl.size() - p != 0 && pl.size() - p != 4) ||
                 dir.find('\0') != std::string::npos || user.find('\0') != std::string::npos ||
-                pw.find('\0') != std::string::npos))) {
+                pw.find('\0') != std::string::npos) {
                 reply = err("Connect: bad payload");
                 break;
             }
@@ -1984,10 +1943,13 @@ DispatchResult Session::dispatch(const Frame& f) {
                 client_open_setup_metadata_ok_ = (caps & kCapOpenSetupMetadata) != 0;
                 client_locked_row_ok_ = (caps & kCapLockedRow) != 0 &&
                     std::getenv("OPENADS_NO_LOCKED_ROW_CAP") == nullptr;
+                // mtfix68 - AppendBlankAck trailer (kCapAppendMetadata).
+                client_append_meta_ok_ = (caps & kCapAppendMetadata) != 0 &&
+                    std::getenv("OPENADS_NO_APPEND_META_CAP") == nullptr;
                 client_open_table_mode_ok_ =
                     (caps & openads::network::kCapOpenTableMode) != 0;
             }
-            if (srv_->daemon_hardening() && (user.size() > 256 || pw.size() > 4096)) {
+            if (user.size() > 256 || pw.size() > 4096) {
                 reply = err("Connect: credential length limit", openads::AE_LOGIN_FAILED);
                 break;
             }
@@ -1998,7 +1960,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (srv_->require_auth()) {
                 std::lock_guard<std::mutex> clk(srv_->creds_mu_);
                 auto cit = srv_->creds_.find(user);
-                if (cit == srv_->creds_.end() || (srv_->daemon_hardening() ? !openads::engine::verify_password(cit->second, pw, false) : cit->second != pw)) {
+                if (cit == srv_->creds_.end() || !openads::engine::verify_password(cit->second, pw, false)) {
                     srv_->login_failed(peer_ip_, user);
                     reply = err("Connect: authentication failed",
                                 openads::AE_LOGIN_FAILED);
@@ -2100,13 +2062,13 @@ DispatchResult Session::dispatch(const Frame& f) {
                 if (require_login || !user.empty()) {
                     if (user.empty()) {
                         srv_->login_failed(peer_ip_, user, max_attempts);
-                        reply = err(srv_->daemon_hardening() ? "Connect: authentication failed" : "Connect: login required but no username supplied",
+                        reply = err("Connect: authentication failed",
                                     openads::AE_LOGIN_FAILED);
                         break;
                     }
                     if (!dd->has_user(user)) {
                         srv_->login_failed(peer_ip_, user, max_attempts);
-                        reply = err(srv_->daemon_hardening() ? "Connect: authentication failed" : "Connect: unknown user",
+                        reply = err("Connect: authentication failed",
                                     openads::AE_LOGIN_FAILED);
                         break;
                     }
@@ -2154,6 +2116,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             {
                 std::uint32_t scaps =
                     openads::network::kCapSetFieldsBatch |
+                    openads::network::kCapSetFieldsCommit |
+                    openads::network::kCapBottomKeyCount |
                     openads::network::kCapFlushInCloseAll |
                     openads::network::kCapNavOrderFuse |
                     openads::network::kCapFlushTableDurable |
@@ -2163,6 +2127,12 @@ DispatchResult Session::dispatch(const Frame& f) {
                 // that neither echoes kCapLockedRow nor answers the
                 // current-record flag with a row trailer, so the client
                 // negotiates down to the refresh-after-lock fallback.
+                // Compatibility test: emulate a server predating this
+                // commit extension without changing ordinary SetFields.
+                if (std::getenv("OPENADS_NO_BOTTOM_KEYCOUNT_CAP") != nullptr)
+                    scaps &= ~openads::network::kCapBottomKeyCount;
+                if (std::getenv("OPENADS_NO_SETFIELDS_COMMIT_CAP") != nullptr)
+                    scaps &= ~openads::network::kCapSetFieldsCommit;
                 if (std::getenv("OPENADS_NO_LOCKED_ROW_CAP") != nullptr)
                     scaps &= ~openads::network::kCapLockedRow;
                 reply.payload.push_back(
@@ -2350,9 +2320,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!th) {
                 openads::abi::create_diag::log("server-open-fail", th.error().code,
                                               "table-open", th.error().sub_code);
-                std::fprintf(stderr, "[srv] OpenTable FAILED rel='%s' code=%d msg='%s'\n",
-                             rel.c_str(), th.error().code,
-                             th.error().message.c_str());
+                if (openads::util::logging_enabled()) std::fprintf(stderr, "[srv] OpenTable FAILED code=%d\n", th.error().code);
                 reply = err("OpenTable: open failed",
                             static_cast<UNSIGNED32>(th.error().code));
                 break;
@@ -2704,7 +2672,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             const std::uint16_t lookahead =
                 want_lookahead ? next_lookahead(id, depth_hint, dir) : 0;
             if (auto cit = cursor_tbls_.find(id); cit != cursor_tbls_.end()) {
-                (void)AdsSkip(cit->second, step);
+                const auto rc = AdsSkip(cit->second, step);
+                if (rc != 0) { reply = err("Skip: cursor failed", rc); break; }
                 reply.opcode = Opcode::SkipAck;
                 pack_row_trailer(reply, id, lookahead, dir);
                 break;
@@ -2725,7 +2694,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             ADSHANDLE hord =
                 ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
             if (hord != 0) {
-                (void)AdsSkip(hord, step);
+                const auto rc = AdsSkip(hord, step);
+                if (rc != 0) { reply = err("Skip: ordered failed", rc); break; }
                 { UNSIGNED16 _b = 9, _e = 9; AdsAtBOF(hord, &_b); AdsAtEOF(hord, &_e);
                   WTRACE("[wire] Skip twin hord bof=%u eof=%u\n", (unsigned)_b, (unsigned)_e); }
                 reply.opcode = Opcode::SkipAck;
@@ -2742,7 +2712,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                   WTRACE("[wire] Skip end id=%u twin bof=%u eof=%u\n", id, (unsigned)_b, (unsigned)_e); }
                 break;
             }
-            (void)tbl->skip(step);
+            auto skipped = tbl->skip(step);
+            if (!skipped) {
+                reply = err("Skip: failed", static_cast<UNSIGNED32>(skipped.error().code));
+                break;
+            }
             reply.opcode = Opcode::SkipAck;
             pack_row_trailer(reply, id, lookahead, dir);
             pack_bound_trailer(reply, id);
@@ -3044,7 +3018,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             // from the twin, like the GotoTop/Skip handlers do. Fixes the
             // BOF+EOF-both-true answer that made rddads' DBOI_POSITION
             // (OrdKeyGoto past the scoped key count) report Bof()=.T. and
-            // xBrowse paint a phantom duplicate row (Tim Stone, 1-record
+            // xBrowse paint a phantom duplicate row (the reporting user, 1-record
             // scope).
             ADSHANDLE hord_bof =
                 ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
@@ -3133,9 +3107,12 @@ DispatchResult Session::dispatch(const Frame& f) {
             // boundary-pair request.
             bool fused_order = false;
             bool want_pair = false;
+            bool want_count = false;
             if (f.payload.size() >= 5) {
                 const std::uint8_t fl = f.payload[4];
                 want_pair = (fl & 0x02) != 0;
+                want_count = (fl & 0x04) != 0 &&
+                    std::getenv("OPENADS_NO_BOTTOM_KEYCOUNT_CAP") == nullptr;
                 if ((fl & 0x01) != 0 && f.payload.size() >= 9) {
                     std::uint32_t oiid = read_u32_le(f.payload.data() + 5);
                     UNSIGNED32 oorc = install_table_order(id, oiid);
@@ -3151,8 +3128,9 @@ DispatchResult Session::dispatch(const Frame& f) {
             if (!tbl) { reply = err("GotoBottom: lookup failed"); break; }
             ADSHANDLE hord =
                 ordered_tables_.count(id) ? ensure_abi_handle(id) : 0;
+            UNSIGNED32 bottom_rc = 0;
             if (hord != 0) {
-                (void)AdsGotoBottom(hord);
+                bottom_rc = AdsGotoBottom(hord);
                 sync_engine_cursor(id);
             } else {
                 auto rb = tbl->goto_bottom();
@@ -3191,6 +3169,26 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             if (want_pair) {
                 pack_boundary_pair(reply, id, 2, hord, tbl);
+            }
+            if (want_count) {
+                // Same ordered ABI count as the legacy B0 dependency. Never
+                // certify physical count after a failed ordered count. Preserve
+                // legacy nav/error disposition: a failed optional certification
+                // sends status only and the client retains its ordinary B0 path.
+                UNSIGNED32 kc = 0;
+                UNSIGNED32 krc = bottom_rc;
+                if (krc == 0) {
+                    krc = hord != 0 ? AdsGetKeyCount(hord, 0, &kc)
+                                    : openads::AE_INTERNAL_ERROR;
+                }
+                Frame wrapped;
+                write_u32_le(kBottomKeyCountMagic, wrapped.payload);
+                write_u32_le(krc, wrapped.payload);
+                write_u32_le(kc, wrapped.payload);
+                write_u32_le(id, wrapped.payload);
+                wrapped.payload.insert(wrapped.payload.end(), reply.payload.begin(),
+                                       reply.payload.end());
+                reply.payload.swap(wrapped.payload);
             }
             break;
         }
@@ -3242,6 +3240,18 @@ DispatchResult Session::dispatch(const Frame& f) {
             // current recno.
             auto rb = tbl->goto_record(tbl->recno());
             if (!rb) { reply = err("RefreshRecord: " + rb.error().message); break; }
+            // Ordered refresh acknowledgements are packed from the ABI
+            // twin for ordered tables, but the re-read above only touched
+            // the session engine table - the twin's private read-ahead
+            // block stayed stale. Refresh the twin as well: its local
+            // AdsRefreshRecord invalidates its driver read-ahead and
+            // re-reads and re-seats the current record in its active order.
+            if (ordered_tables_.count(id) != 0) {
+                if (ADSHANDLE h = ensure_abi_handle(id); h != 0) {
+                    const auto rc = AdsRefreshRecord(h);
+                    if (rc != 0) { reply = err("RefreshRecord: twin refresh failed rc=" + std::to_string(rc)); break; }
+                } else { reply = err("RefreshRecord: no twin handle"); break; }
+            }
             reply.opcode = Opcode::RefreshRecordAck;
             // The re-read row rides back with the ack (row trailer),
             // plus position truth (bound tail), so the caller's
@@ -3398,7 +3408,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 client_locked_row_ok_ && f.payload.size() == 9 &&
                 f.payload[8] == 1 && rn == tbl->recno();
             const auto lock_key = (static_cast<std::uint64_t>(id) << 32) | rn;
-            if (srv_->daemon_hardening() && f.opcode == Opcode::LockRecord && explicit_record_locks_.count(lock_key) == 0 &&
+            if (f.opcode == Opcode::LockRecord && explicit_record_locks_.count(lock_key) == 0 &&
                 explicit_record_locks_.size() >= 4096) {
                 reply = err("Session record-lock limit", openads::AE_ACCESS_DENIED); break;
             }
@@ -3434,8 +3444,8 @@ DispatchResult Session::dispatch(const Frame& f) {
                                 WTRACE("[wire] %s id=%u recno=%u FAILED rrc=%u; held by user=%s conn=%u table=%s\n",
                                        f.opcode == Opcode::LockRecord ? "LockRecord" : "UnlockRecord",
                                        id, (unsigned)rn, (unsigned)rrc,
-                                       lk.user.c_str(), (unsigned)lk.conn_no,
-                                       lk.table.c_str());
+                                       "[hidden]", (unsigned)lk.conn_no,
+                                       "[hidden]");
                             }
                         }
                         WTRACE("[wire] %s id=%u recno=%u FAILED rrc=%u (no registered holder)\n",
@@ -3447,9 +3457,9 @@ DispatchResult Session::dispatch(const Frame& f) {
                 WTRACE("[wire] %s id=%u recno=%u ok user=%s conn=%u table=%s\n",
                        f.opcode == Opcode::LockRecord ? "LockRecord" : "UnlockRecord",
                        id, (unsigned)rn,
-                       session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
+                       "[hidden]",
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       "[hidden]");
             } else if (f.opcode == Opcode::LockRecord) {
                 // Fail FAST on contention — a single attempt. Retrying
                 // here blocked the session thread for the whole lock
@@ -3466,20 +3476,20 @@ DispatchResult Session::dispatch(const Frame& f) {
                 }
                 WTRACE("[wire] LockRecord id=%u recno=%u ok (engine) user=%s conn=%u table=%s\n",
                        id, (unsigned)rn,
-                       session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
+                       "[hidden]",
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       "[hidden]");
             } else {
                 auto r = tbl->unlock_record(rn);
                 if (!r) { reply = err("UnlockRecord: failed",
                     static_cast<UNSIGNED32>(r.error().code)); break; }
                 WTRACE("[wire] UnlockRecord id=%u recno=%u ok (engine) user=%s conn=%u table=%s\n",
                        id, (unsigned)rn,
-                       session_user_.empty() ? "(anonymous)" : session_user_.c_str(),
+                       "[hidden]",
                        (unsigned)srv_->conn_no_for_session(sid_),
-                       tbl_open_paths_.count(id) ? tbl_open_paths_[id].c_str() : "?");
+                       "[hidden]");
             }
-            if (srv_->daemon_hardening() && f.opcode == Opcode::LockRecord) explicit_record_locks_.insert(lock_key);
+            if (f.opcode == Opcode::LockRecord) explicit_record_locks_.insert(lock_key);
             else explicit_record_locks_.erase(lock_key);
             reply.opcode = (f.opcode == Opcode::LockRecord)
                 ? Opcode::LockRecordAck
@@ -3584,6 +3594,11 @@ DispatchResult Session::dispatch(const Frame& f) {
                         openads::AE_LOCKED);
                     break;
                 }
+                // M12.16 twin: mirror the FLock so the twin's write guard
+                // and append auto-lock see the whole-file cover. Virtual
+                // only - the engine Table above owns the real OS byte.
+                if (auto hit = tbls_h_.find(id); hit != tbls_h_.end())
+                    openads::abi::adopt_virtual_table_lock(hit->second);
             } else {
                 // M12.16 dual-handle: route through the ABI shadow handle
                 // when it exists (same as LockRecord/UnlockRecord) so the
@@ -4226,6 +4241,13 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FileExists:
         case Opcode::FileErase:
         case Opcode::FileRename:
+        case Opcode::FileCopy:
+        case Opcode::FileLoad:
+        case Opcode::FileSave:
+        case Opcode::FileSetAttr:
+        case Opcode::FileSetTime:
+        case Opcode::FileTemp:
+        case Opcode::DirSpace:
         case Opcode::FileSize:
         case Opcode::FileMTime:
         case Opcode::Directory:
@@ -4237,7 +4259,13 @@ DispatchResult Session::dispatch(const Frame& f) {
         case Opcode::FClose:
         case Opcode::FRead:
         case Opcode::FWrite:
-        case Opcode::FSeek: {
+        case Opcode::FSeek:
+        case Opcode::FileReadAt:
+        case Opcode::FileWriteAt:
+        case Opcode::FileFlush:
+        case Opcode::FileEof:
+        case Opcode::FileLockOp:
+        case Opcode::FileTrunc: {
             if (!srv_->enable_file_func()) {
                 reply = err("file functions disabled",
                             openads::AE_ACCESS_DENIED);
@@ -4299,6 +4327,146 @@ DispatchResult Session::dispatch(const Frame& f) {
                     break;
                 }
                 reply.opcode = Opcode::FileRenameAck;
+            } else if (f.opcode == Opcode::FileCopy) {
+                std::size_t pos = 0;
+                std::string src_p, dst_p;
+                if (!read_lstr16(f.payload, pos, src_p) ||
+                    !read_lstr16(f.payload, pos, dst_p)) {
+                    reply = err("FileCopy: short payload"); break;
+                }
+                auto a = resolve_fs_client_path(src_p);
+                auto b = resolve_fs_client_path(dst_p);
+                if (!a || !b) { deny_path(src_p); break; }
+                auto r = openads::engine::fs_copy(*a, *b);
+                if (!r) {
+                    reply = err("FileCopy",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileCopyAck;
+            } else if (f.opcode == Opcode::FileLoad) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path)) {
+                    reply = err("FileLoad: short payload"); break;
+                }
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto data = openads::engine::fs_load(*abs);
+                if (!data) {
+                    reply = err("FileLoad",
+                                static_cast<UNSIGNED32>(data.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileLoadAck;
+                write_u32_le(static_cast<std::uint32_t>(data.value().size()),
+                             reply.payload);
+                reply.payload.insert(reply.payload.end(),
+                                     data.value().begin(), data.value().end());
+            } else if (f.opcode == Opcode::FileSave) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path) ||
+                    pos + 4 > f.payload.size()) {
+                    reply = err("FileSave: short payload"); break;
+                }
+                std::uint32_t n = read_u32_le(f.payload.data() + pos);
+                pos += 4;
+                if (pos + n > f.payload.size()) {
+                    reply = err("FileSave: short data"); break;
+                }
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto r = openads::engine::fs_save(
+                    *abs, f.payload.data() + pos, n);
+                if (!r) {
+                    reply = err("FileSave",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileSaveAck;
+            } else if (f.opcode == Opcode::FileSetAttr) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path) ||
+                    pos + 4 > f.payload.size()) {
+                    reply = err("FileSetAttr: short payload"); break;
+                }
+                std::uint32_t attr = read_u32_le(f.payload.data() + pos);
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto r = openads::engine::fs_set_attr(*abs, attr);
+                if (!r) {
+                    reply = err("FileSetAttr",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileSetAttrAck;
+            } else if (f.opcode == Opcode::FileSetTime) {
+                std::size_t pos = 0;
+                std::string path;
+                if (!read_lstr16(f.payload, pos, path) ||
+                    pos + 7 > f.payload.size()) {
+                    reply = err("FileSetTime: short payload"); break;
+                }
+                std::uint16_t year = static_cast<std::uint16_t>(
+                    f.payload[pos] |
+                    (static_cast<std::uint16_t>(f.payload[pos + 1]) << 8));
+                auto abs = resolve_fs_client_path(path);
+                if (!abs) { deny_path(path); break; }
+                auto r = openads::engine::fs_set_time(
+                    *abs, year, f.payload[pos + 2], f.payload[pos + 3],
+                    f.payload[pos + 4], f.payload[pos + 5],
+                    f.payload[pos + 6]);
+                if (!r) {
+                    reply = err("FileSetTime",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileSetTimeAck;
+            } else if (f.opcode == Opcode::FileTemp) {
+                std::size_t pos = 0;
+                std::string dir, prefix;
+                if (!read_lstr16(f.payload, pos, dir) ||
+                    !read_lstr16(f.payload, pos, prefix)) {
+                    reply = err("FileTemp: short payload"); break;
+                }
+                if (dir.empty()) dir = ".";
+                auto abs = resolve_fs_client_path(dir);
+                if (!abs) { deny_path(dir); break; }
+                auto name = openads::engine::fs_tempfile(*abs, prefix);
+                if (!name) {
+                    reply = err("FileTemp",
+                                static_cast<UNSIGNED32>(name.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::FileTempAck;
+                auto client_name = (std::filesystem::path(
+                    openads::platform::fold_absolute_to_relative(dir)) /
+                    std::filesystem::path(name.value()).filename()).generic_string();
+                write_lstr16(client_name, reply.payload);
+            } else if (f.opcode == Opcode::DirSpace) {
+                std::size_t pos = 0;
+                std::string dir;
+                if (!read_lstr16(f.payload, pos, dir) ||
+                    pos + 1 > f.payload.size()) {
+                    reply = err("DirSpace: short payload"); break;
+                }
+                std::uint8_t type = f.payload[pos];
+                if (dir.empty()) dir = ".";
+                auto abs = resolve_fs_client_path(dir);
+                if (!abs) { deny_path(dir); break; }
+                auto bytes = openads::engine::fs_dir_space(*abs, type);
+                if (!bytes) {
+                    reply = err("DirSpace",
+                                static_cast<UNSIGNED32>(bytes.error().code));
+                    break;
+                }
+                reply.opcode = Opcode::DirSpaceAck;
+                std::uint64_t v = bytes.value();
+                for (int i = 0; i < 8; ++i)
+                    reply.payload.push_back(
+                        static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF));
             } else if (f.opcode == Opcode::FileSize) {
                 std::size_t pos = 0;
                 std::string path;
@@ -4538,6 +4706,199 @@ DispatchResult Session::dispatch(const Frame& f) {
                     it->second->stream.tellg());
                 reply.opcode = Opcode::FSeekAck;
                 write_u32_le(pos, reply.payload);
+            } else if (f.opcode == Opcode::FileReadAt ||
+                       f.opcode == Opcode::FileWriteAt) {
+                if (f.payload.size() < 16) {
+                    reply = err("FileReadAt: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint64_t off = 0;
+                for (int i = 0; i < 8; ++i)
+                    off |= static_cast<std::uint64_t>(
+                               f.payload[static_cast<std::size_t>(4 + i)])
+                           << (8 * i);
+                std::uint32_t n = read_u32_le(f.payload.data() + 12);
+                if (n > openads::engine::kMaxFsIoChunk)
+                    n = openads::engine::kMaxFsIoChunk;
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileReadAt: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                // ONE shared fstream position, same rule as FSeek.
+                it->second->stream.clear();
+                it->second->stream.seekg(static_cast<std::streamoff>(off),
+                                         std::ios::beg);
+                if (f.opcode == Opcode::FileReadAt) {
+                    std::vector<char> buf(n);
+                    it->second->stream.read(
+                        buf.data(), static_cast<std::streamsize>(n));
+                    auto got = static_cast<std::uint32_t>(
+                        it->second->stream.gcount());
+                    reply.opcode = Opcode::FileReadAtAck;
+                    write_u32_le(got, reply.payload);
+                    reply.payload.insert(
+                        reply.payload.end(), buf.begin(),
+                        buf.begin() + static_cast<std::ptrdiff_t>(got));
+                } else {
+                    if (16u + n > f.payload.size()) {
+                        reply = err("FileWriteAt: short data"); break;
+                    }
+                    it->second->stream.write(
+                        reinterpret_cast<const char*>(f.payload.data() + 16),
+                        static_cast<std::streamsize>(n));
+                    it->second->stream.flush();
+                    if (!it->second->stream) {
+                        reply = err("FileWriteAt: io error",
+                                    openads::AE_INTERNAL_ERROR);
+                        break;
+                    }
+                    reply.opcode = Opcode::FileWriteAtAck;
+                    write_u32_le(n, reply.payload);
+                }
+            } else if (f.opcode == Opcode::FileFlush) {
+                if (f.payload.size() < 4) {
+                    reply = err("FileFlush: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileFlush: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                it->second->stream.flush();
+                if (!it->second->stream) {
+                    reply = err("FileFlush: io error",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                reply.opcode = Opcode::FileFlushAck;
+            } else if (f.opcode == Opcode::FileEof) {
+                if (f.payload.size() < 4) {
+                    reply = err("FileEof: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileEof: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                it->second->stream.clear();
+                auto cur = it->second->stream.tellg();
+                it->second->stream.seekg(0, std::ios::end);
+                auto end = it->second->stream.tellg();
+                it->second->stream.clear();
+                if (cur >= 0) it->second->stream.seekg(cur);
+                reply.opcode = Opcode::FileEofAck;
+                reply.payload.push_back(
+                    (cur < 0 || (end >= 0 && cur >= end)) ? 1 : 0);
+            } else if (f.opcode == Opcode::FileLockOp) {
+                if (vf::is_extension(f.payload)) {
+                    vf::Request q;vf::Reply result;
+                    if(!vf::decode(f.payload,q)) { reply=err("vf: bad request");break; }
+                    q.client_path1=q.path1;
+                    const auto vf_root=resolve_fs_client_path(".");
+                    const auto resolve_vf=[&](const std::string& name)->std::optional<std::string> {
+                        return vf_root?openads::engine::vf::resolve_path(*vf_root,openads::platform::fold_absolute_to_relative(name)):std::nullopt;
+                    };
+                    bool allowed=true;
+                    if(q.op>=OADS_VF_EXISTS && q.op!=OADS_VF_BLOBREAD) {
+                        auto abs=resolve_vf(q.path1.empty()?".":q.path1);
+                        if(!abs)allowed=false;else q.path1=*abs;
+                        if(q.op==OADS_VF_RENAME || q.op==OADS_VF_LINK || q.op==OADS_VF_LINKSYM) {
+                            auto second=resolve_vf(q.path2);
+                            if(!second)allowed=false;else q.path2=*second;
+                        }
+                        if(q.op==OADS_VF_DIRREMOVE) {
+                            std::error_code ec;
+                            auto root=resolve_vf(".");
+                            if(!root || openads::engine::vf::canonical_path(q.path1,ec)==openads::engine::vf::canonical_path(*root,ec))allowed=false;
+                        }
+                    } else if(q.op==OADS_VF_OPEN) {
+                        auto abs=resolve_vf(q.path1);
+                        if(!abs)allowed=false;
+                        else {
+                            // Resolve only after the jail membership check. The
+                            // native opener still refuses any changed symlink
+                            // component, so in-jail links work without a follow
+                            // race into another root.
+                            std::error_code ec;
+                            auto canonical=openads::engine::vf::canonical_path(*abs,ec);
+                            if(ec)allowed=false;else q.path1=canonical.string();
+                        }
+                    }
+                    if(auto root=resolve_vf("."))q.root=*root;else allowed=false;
+                    if(!allowed)result.error=5;
+                    else {
+                        if(!vf_service_)vf_service_=openads::engine::vf::make_service();
+                        if(!vf_service_)result.error=50;else result=vf_service_->execute(q);
+                    }
+                    // Never disclose an absolute server-native link target.
+                    if(q.op==OADS_VF_LINKREAD && !result.data.empty()) {
+                        std::string target(result.data.begin(),result.data.end());
+                        auto target_path=openads::engine::vf::normalized_path(std::filesystem::path(target));
+                        auto root=resolve_vf(".");
+                        std::error_code ec;
+                        auto check=openads::engine::vf::canonical_path(target_path.is_absolute()?target_path:std::filesystem::path(q.path1).parent_path()/target_path,ec);
+                        auto base=root?openads::engine::vf::canonical_path(*root,ec):std::filesystem::path();
+                        if(ec || !root || !openads::platform::path_has_prefix(check.generic_string(),base.generic_string(),
+#ifdef _WIN32
+                            true
+#else
+                            false
+#endif
+                        )) { result.data.clear();result.error=5; }
+                        else if(target_path.is_absolute()) {
+                            auto relative=check.lexically_relative(base).generic_string();
+                            result.data.assign(relative.begin(),relative.end());
+                        }
+                    }
+                    reply.opcode=Opcode::FileLockOp;
+                    if(!vf::encode(result,reply.payload))reply=err("vf: reply size");
+                    break;
+                }
+                if (f.payload.size() != 23) { reply = err("FileLockOp: bad payload"); break; }
+                auto id = read_u32_le(f.payload.data());
+                auto it = files_.find(id);
+                if (it == files_.end()) { reply = err("FileLockOp: bad handle"); break; }
+                std::uint64_t start = 0, len = 0;
+                for (std::size_t i = 0; i < 8; ++i) {
+                    start |= static_cast<std::uint64_t>(f.payload[4+i]) << (8*i);
+                    len |= static_cast<std::uint64_t>(f.payload[12+i]) << (8*i);
+                }
+                auto type = static_cast<std::uint16_t>(f.payload[20] |
+                             (static_cast<std::uint16_t>(f.payload[21]) << 8));
+                auto v = openads::engine::fs_lock_step(*it->second, start, len, type, f.payload[22]);
+                if (!v) { reply = err("FileLockOp", static_cast<UNSIGNED32>(v.error().code)); break; }
+                reply.opcode = Opcode::FileLockOp;
+                write_u32_le(static_cast<std::uint32_t>(v.value()), reply.payload);
+            } else if (f.opcode == Opcode::FileTrunc) {
+                if (f.payload.size() < 12) {
+                    reply = err("FileTrunc: short payload"); break;
+                }
+                std::uint32_t id = read_u32_le(f.payload.data());
+                std::uint64_t size = 0;
+                for (int i = 0; i < 8; ++i)
+                    size |= static_cast<std::uint64_t>(
+                                f.payload[static_cast<std::size_t>(4 + i)])
+                            << (8 * i);
+                auto it = files_.find(id);
+                if (it == files_.end()) {
+                    reply = err("FileTrunc: bad handle",
+                                openads::AE_INTERNAL_ERROR);
+                    break;
+                }
+                auto r = openads::engine::fs_truncate(*it->second, size);
+                if (!r) {
+                    reply = err("FileTrunc",
+                                static_cast<UNSIGNED32>(r.error().code));
+                    break;
+                }
+                it->second->stream.clear();
+                reply.opcode = Opcode::FileTruncAck;
             }
             break;
         }
@@ -4863,7 +5224,14 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("AppendBlank: lookup failed"); break; }
-            if (srv_->daemon_hardening() && explicit_record_locks_.size() >= 4096) {
+            // Exclusive open or a held FLock gives whole-file cover: no
+            // append auto-lock is taken in those modes (Table::append_blank
+            // skips it), so the ledger must neither count nor cap them
+            // (SAP-parity fix: bulk APPEND FROM over REMOTE died at 4,096).
+            const bool whole_file_cover =
+                tbl->open_mode() == openads::engine::OpenMode::Exclusive ||
+                tbl->is_table_locked();
+            if (!whole_file_cover && explicit_record_locks_.size() >= 4096) {
                 reply = err("Session record-lock limit", openads::AE_ACCESS_DENIED); break;
             }
             auto diag_name = tbl_open_paths_.find(id);
@@ -4905,7 +5273,20 @@ DispatchResult Session::dispatch(const Frame& f) {
                 diag_first_append_.insert(id).second)
                 openads::abi::create_diag::log("server-first-append-ok");
             // Include automatic append locks in the session ledger, not only explicit LockRecord.
-            if (srv_->daemon_hardening()) explicit_record_locks_.insert((static_cast<std::uint64_t>(id) << 32) | tbl->recno());
+            if (!whole_file_cover) explicit_record_locks_.insert((static_cast<std::uint64_t>(id) << 32) | tbl->recno());
+            // mtfix68 - the append already happened and the auto-lock is
+            // already held; report the facts so a kCapAppendMetadata client
+            // books position + lock without GetRecordNum/LockRecord trips.
+            // Old clients get the empty ack exactly as before. Position after
+            // a successful append is the new record: bof=0, eof=0 (xBase
+            // APPEND BLANK lands on the row, never at a boundary).
+            if (client_append_meta_ok_) {
+                write_u32_le(tbl->recno(), reply.payload);
+                reply.payload.push_back(whole_file_cover
+                    ? std::uint8_t{0} : std::uint8_t{1});
+                reply.payload.push_back(std::uint8_t{0});
+                reply.payload.push_back(std::uint8_t{0});
+            }
             reply.opcode = Opcode::AppendBlankAck;
             break;
         }
@@ -4958,7 +5339,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 (static_cast<std::uint16_t>(f.payload[pos + 1]) << 8));
             pos += 2;
             std::vector<std::pair<std::string, std::string>> pairs;
-            if (srv_->daemon_hardening() && (n > 2048 || static_cast<std::size_t>(n) > (f.payload.size() - pos) / 6)) {
+            if (n > 2048 || static_cast<std::size_t>(n) > (f.payload.size() - pos) / 6) {
                 reply = err("SetFields: invalid field count"); break;
             }
             pairs.reserve(n);
@@ -4997,12 +5378,23 @@ DispatchResult Session::dispatch(const Frame& f) {
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("SetFields: lookup failed"); break; }
 
+            const bool commit = f.payload.size() == pos + 1 &&
+                f.payload[pos] == 1;
             auto wr = write_fields(id, tbl, pairs);
-            if (wr.code != 0) {
+            if (wr.code != 0 || wr.column_missing) {
                 reply = wr.column_missing
-                    ? err("SetFields: column not found")
+                    ? err("SetFields: column not found", openads::AE_COLUMN_NOT_FOUND)
                     : err("SetFields: write failed", wr.code);
                 break;
+            }
+            if (commit) {
+                // No flush after any failed field. This is not a transaction:
+                // the applied prefix/error behavior remains ordered writes.
+                auto flushed = flush_table_record(id, tbl);
+                if (!flushed) {
+                    reply = err("FlushTable: flush failed", static_cast<UNSIGNED32>(flushed.error().code)); break;
+                }
+                reply.payload.push_back(1);
             }
             reply.opcode = Opcode::SetFieldsAck;
             break;
@@ -5108,17 +5500,8 @@ DispatchResult Session::dispatch(const Frame& f) {
             }
             auto* tbl = sess_conn_->lookup_table(it->second);
             if (!tbl) { reply = err("FlushTable: lookup failed"); break; }
-            // Flush the ABI twin first (holds open index bags), then engine.
-            if (auto hit = tbls_h_.find(id); hit != tbls_h_.end()) {
-                (void)AdsFlushFileBuffers(hit->second);
-            }
-            // Remote AdsWriteRecord lands here: the append is now committed,
-            // so drop the pending-append marker (mirrors the local
-            // AdsWriteRecord which clears it). Without this the flag stayed
-            // set for the life of the server-side table.
-            tbl->set_pending_append(false);
-            auto r = tbl->flush();
-            if (!r) { reply = err("FlushTable: flush failed"); break; }
+            auto r = flush_table_record(id, tbl);
+            if (!r) { reply = err("FlushTable: flush failed", static_cast<UNSIGNED32>(r.error().code)); break; }
             reply.opcode = Opcode::FlushTableAck;
             break;
         }
@@ -5167,7 +5550,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 UNSIGNED16 atend = 0;
                 AdsAtEOF(hCur, &atend);
                 while (atend == 0 && nrows_out < maxrows) {
-                    if (srv_->daemon_hardening() && nrows_out >= 100000) { reply = err("Fetch scan limit exceeded"); parse_ok = false; break; }
+                    if (nrows_out >= 100000) { reply = err("Fetch scan limit exceeded"); parse_ok = false; break; }
                     for (auto& cn : cols) {
                         UNSIGNED8  fbuf[64]  = {0};
                         static thread_local std::vector<UNSIGNED8> out_v(65536 + 1);
@@ -5203,7 +5586,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 auto* tbl = sess_conn_->lookup_table(it->second);
                 if (!tbl) { reply = err("Fetch: lookup failed"); break; }
                 while (!tbl->eof() && nrows_out < maxrows) {
-                    if (srv_->daemon_hardening() && nrows_out >= 100000) { reply = err("Fetch scan limit exceeded"); parse_ok = false; break; }
+                    if (nrows_out >= 100000) { reply = err("Fetch scan limit exceeded"); parse_ok = false; break; }
                     for (auto& cn : cols) {
                         std::int32_t fi = tbl->field_index(cn);
                         std::string val;
@@ -5329,7 +5712,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 std::uint32_t nrows_out = 0;
                 std::uint32_t examined = 0;
                 while (!tbl->eof() && nrows_out < maxrows) {
-                    if (srv_->daemon_hardening() && ++examined > 100000) {
+                    if (++examined > 100000) {
                         reply = err("FetchWhere scan limit exceeded; use a selective SQL query or smaller pages"); parse_ok = false; break;
                     }
                     if (openads::engine::evaluate_index_expr_truthy(
@@ -5722,31 +6105,6 @@ DispatchResult Session::dispatch(const Frame& f) {
             break;
         }
         case Opcode::MgConnect: {
-            if (!srv_->daemon_hardening()) {
-            // Management handshake. Optional [u16 ulen][user] payload —
-            // when a caller (e.g. DA-Web's Server Info tab) knows which DD
-            // user it's asking on behalf of, register this mgmt session
-            // under that name so it shows up as (say) "adssys" instead of
-            // "(anonymous)" in AdsMgGetUserNames / the Connected Users grid.
-            // Every accepted socket already gets a session (register_session
-            // in Session::run(), before any opcode is dispatched), so this
-            // mgmt-only connection is already tracked — it just never had a
-            // user name attached to it until now.
-            if (f.payload.size() >= 2) {
-                std::uint16_t ulen = static_cast<std::uint16_t>(
-                    static_cast<unsigned>(f.payload[0]) |
-                    (static_cast<unsigned>(f.payload[1]) << 8));
-                if (f.payload.size() >= static_cast<std::size_t>(2 + ulen) && ulen > 0) {
-                    std::string mgUser(reinterpret_cast<const char*>(f.payload.data() + 2), ulen);
-                    srv_->set_session_user(sid_, mgUser, "");
-                }
-            }
-            reply.opcode = Opcode::MgConnectAck;
-            std::string ok = "mg-ok";
-            reply.payload.assign(ok.begin(), ok.end());
-            break;
-
-            }
             if (sess_conn_ || mg_connected_) {
                 reply = err("Already connected", openads::AE_ACCESS_DENIED); break;
             }
@@ -5791,7 +6149,7 @@ DispatchResult Session::dispatch(const Frame& f) {
             break;
         }
         case Opcode::MgRequest: {
-            if (srv_->daemon_hardening() && !mg_connected_) {
+            if (!mg_connected_) {
                 reply = err("Management handshake required", openads::AE_ACCESS_DENIED); break;
             }
             // Iterator-based ctor: payload.data() may be nullptr when empty,
@@ -5802,7 +6160,7 @@ DispatchResult Session::dispatch(const Frame& f) {
                 reply = err("bad mg request");
                 break;
             }
-            if (srv_->daemon_hardening() && req.value().kind != MgRequestKind::Snapshot &&
+            if (req.value().kind != MgRequestKind::Snapshot &&
                 req.value().kind != MgRequestKind::HealthJson && !mg_admin_) {
                 reply = err("Management administrator required", openads::AE_ACCESS_DENIED); break;
             }
@@ -6262,12 +6620,12 @@ DispatchResult Session::dispatch(const Frame& f) {
                     // Record the creating session so its death reaps the
                     // name (release_session in cleanup) instead of wedging
                     // every later MutexCreate until server restart.
-                    if (srv_->daemon_hardening() && created_mutexes_.size() >= 64) {
+                    if (created_mutexes_.size() >= 64) {
                         reply = err("Session mutex limit", openads::AE_ACCESS_DENIED);
                         break;
                     }
                     bool ok = mm.create(name, owner);
-                    if (ok && srv_->daemon_hardening()) created_mutexes_.insert(name);
+                    if (ok) created_mutexes_.insert(name);
                     reply.opcode = Opcode::Mutex;
                     reply.payload = { sub_op, static_cast<std::uint8_t>(ok ? 1 : 0) };
                     break;

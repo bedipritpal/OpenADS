@@ -162,11 +162,8 @@ TEST_CASE("M12.3 server unknown opcode returns Error frame") {
     Socket cs = cli.value();
 
     Frame req;
-    // Pick a value outside every defined op so the server's
-    // default-case path is what answers. 0xFE was claimed by the
-    // Mutex service (M12.32); 0x0F sits in a gap between FindRecordAck
-    // (0x0E) and Connect (0x10) with nothing defined.
-    req.opcode = static_cast<Opcode>(0x0F);   // truly unknown
+    // 0x0F is now FileLockOp. 0x00 remains unassigned.
+    req.opcode = static_cast<Opcode>(0x00);
     REQUIRE(write_frame(cs, req).has_value());
     auto reply = read_frame(cs);
     REQUIRE(reply.has_value());
@@ -1697,7 +1694,6 @@ TEST_CASE("Enterprise pool: Data Dictionary connection + DD-resolved SQL over th
 
 TEST_CASE("Network login throttling survives reconnect and isolates IP/account counters") {
     Server server;
-    server.set_daemon_hardening(true);
     CHECK(server.login_allowed("192.0.2.1", "alice"));
     server.login_failed("192.0.2.1", "alice", 1);
     CHECK_FALSE(server.login_allowed("192.0.2.1", "alice"));
@@ -1711,7 +1707,6 @@ TEST_CASE("Network login throttling survives reconnect and isolates IP/account c
 
 TEST_CASE("Network requires Connect before mutex or DD operations") {
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.start("127.0.0.1", 0));
     for (auto opcode : {Opcode::Mutex, Opcode::DDCreateUser, Opcode::ExecuteSQL, Opcode::MgRequest}) {
         auto connection = connect_tcp("127.0.0.1", server.port());
@@ -1730,7 +1725,6 @@ TEST_CASE("Network requires Connect before mutex or DD operations") {
 
 TEST_CASE("Network management session cannot switch to database operations") {
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.start("127.0.0.1", 0));
     auto connection = connect_tcp("127.0.0.1", server.port());
     REQUIRE(connection);
@@ -1752,7 +1746,6 @@ TEST_CASE("Network management session cannot switch to database operations") {
 
 TEST_CASE("Network failed Connect does not authorize a coalesced management mutator") {
     Server server;
-    server.set_daemon_hardening(true);
     server.add_credential("admin", "secret");
     REQUIRE(server.start("127.0.0.1", 0));
     auto connection = connect_tcp("127.0.0.1", server.port());
@@ -1937,7 +1930,6 @@ TEST_CASE("native TLS listener validates config and serves encrypted Hello") {
     server_config.cert_pem = tls_test_cert;
     server_config.key_pem = tls_test_key;
     Server server;
-    server.set_daemon_hardening(true);
     openads::network::TlsConfig invalid;
     CHECK_FALSE(server.set_tls(invalid).has_value());
     invalid.cert_pem = tls_test_cert;
@@ -1970,7 +1962,6 @@ TEST_CASE("native TLS single-worker pool serves a client while another handshake
     config.cert_pem = tls_test_cert;
     config.key_pem = tls_test_key;
     Server server;
-    server.set_daemon_hardening(true);
     REQUIRE(server.set_tls(config).has_value());
     openads::network::WorkerPool pool(server, 1);
     pool.start();
@@ -2019,7 +2010,7 @@ TEST_CASE("mtfix41 daemon TLS established idle resumes in dedicated and reactor"
     std::error_code ec; fs::create_directories(dir,ec);
     for(bool reactor : {false,true}) {
         tls_idle_offset.store(0);
-        Server server; server.set_daemon_hardening(true); server.set_session_clock(tls_idle_now);
+        Server server; server.set_session_clock(tls_idle_now);
         openads::network::TlsConfig sc; sc.cert_pem=tls_test_cert; sc.key_pem=tls_test_key;
         REQUIRE(server.set_tls(sc));
         std::unique_ptr<openads::network::WorkerPool> pool;
@@ -2058,7 +2049,6 @@ TEST_CASE("daemon policy preserves AdsConnect60 authenticated table reads") {
     m12_write_dbf(dir / "data.dbf", {"AAAA", "BBBB"});
 
     Server srv;
-    srv.set_daemon_hardening(true);
     srv.add_credential("reader", "secret");
     REQUIRE(srv.start("127.0.0.1", 0).has_value());
 

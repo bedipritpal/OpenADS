@@ -39,7 +39,6 @@ struct IdleFixture {
         REQUIRE(AdsCreateTable(c,name,nullptr,ADS_CDX,ADS_ANSI,0,0,0,def,&t)==0);
         REQUIRE(AdsAppendRecord(t)==0); REQUIRE(AdsSetDouble(t,qty,100)==0);
         REQUIRE(AdsWriteRecord(t)==0); REQUIRE(AdsCloseTable(t)==0); REQUIRE(AdsDisconnect(c)==0);
-        server.set_daemon_hardening(true);
         server.set_established_session_idle_seconds(idle_seconds);
         if(fake) server.set_session_clock(idle_now);
         if(reactor) {
@@ -98,14 +97,14 @@ TEST_CASE("mtfix41 daemon real clock idle soak" * doctest::skip(std::getenv("OPE
     idle_replay(false,false,std::chrono::seconds(310));
 }
 TEST_CASE("mtfix41 daemon expiry keeps handshake management and partial clocks") {
-    Server s; s.set_daemon_hardening(true); s.set_session_clock(idle_now); idle_offset.store(0);
+    Server s; s.set_session_clock(idle_now); idle_offset.store(0);
     const auto before=idle_now();
     Session handshake(s,Socket{},"",0);
     CHECK_FALSE(handshake.expired_at(before+std::chrono::seconds(29)));
     CHECK(handshake.expired_at(before+std::chrono::seconds(31)));
-    // Embedded/local policy remains unchanged even after hours of silence.
+    // Upstream applies unfinished-handshake timeout to embedded listeners too.
     Server local; Session embedded(local,Socket{},"",0);
-    CHECK_FALSE(embedded.expired_at(Clock::now()+std::chrono::hours(24)));
+    CHECK(embedded.expired_at(Clock::now()+std::chrono::hours(24)));
 }
 
 TEST_CASE("mtfix41 daemon management idle limit retained") {
@@ -113,7 +112,7 @@ TEST_CASE("mtfix41 daemon management idle limit retained") {
     auto port=socket_local_port(listener.value()); REQUIRE(port);
     auto client=connect_tcp("127.0.0.1",port.value()); REQUIRE(client);
     auto peer=accept_one(listener.value()); REQUIRE(peer);
-    Server srv; srv.set_daemon_hardening(true); srv.set_session_clock(idle_now); idle_offset.store(0);
+    Server srv; srv.set_session_clock(idle_now); idle_offset.store(0);
     {
         Session session(srv,peer.value(),"",0);
         Frame mg; mg.opcode=Opcode::MgConnect;

@@ -28,9 +28,8 @@ no TLS-enabled static kit is claimed by this change.
 compiler. It changes only BigObj containers, not machine code. The executable
 TLS-exit bridge records the callback before CRT startup and registers cleanup
 in the normal CRT constructor phase, avoiding the old CRT exit-lock deadlock.
-It must not be reused for DLLs or unrelated toolchains. The owner passed the
-v3 kit on B_BIG with threads enabled; that is approval of the tested legacy
-kit, not approval of every later archive or permission to merge.
+It must not be reused for DLLs or unrelated toolchains. The matching-toolchain release smoke does not exercise this legacy profile.
+Qualify it separately on the exact compiler pair and application before use.
 
 The legacy profile also needs the exact compiler-distribution runtime notices
 under `share/licenses`. Missing notices stop packaging; do not substitute a

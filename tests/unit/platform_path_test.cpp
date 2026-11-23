@@ -149,3 +149,11 @@ TEST_CASE("resolve_under_root self-directory retains canonical containment") {
     CHECK_FALSE(openads::platform::resolve_under_root(root.string(), (root.parent_path() / "outside").string()).has_value());
     fs::remove_all(root);
 }
+
+TEST_CASE("path_has_prefix folds case only when asked") {
+    using openads::platform::path_has_prefix;
+    CHECK_FALSE(path_has_prefix("C:/Data/x.dbf", "c:/data"));
+    CHECK(path_has_prefix("C:/Data/x.dbf", "c:/data", true));
+    CHECK(path_has_prefix("C:/Data", "c:/data", true));
+    CHECK_FALSE(path_has_prefix("C:/DataX/x.dbf", "c:/data", true));
+}

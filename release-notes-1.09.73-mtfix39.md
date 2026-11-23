@@ -1,5 +1,7 @@
 # OpenADS 1.09.73-mtfix39: locked-row fresh-read test build
 
+> Historical fork test-build notes. This document describes the original bedipritpal/OpenADS build, not validation or packaging of the upstream port. See docs/upstream-mtfix39-41-port.md for port scope and validation.
+
 Prepared for Pritpal Bedi's bedipritpal/OpenADS fork, based on FiveTechSoft/OpenADS. Thanks to Pritpal for the 50-line invoice stock update log that pinned this regression. No private application source, traces or business data are included.
 
 This test branch is fix/mtfix39-lock-row. It is not a merge to fork main and not an upstream submission. Pritpal's billing-counter checks are required before a main merge.

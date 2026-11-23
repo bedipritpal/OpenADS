@@ -103,6 +103,49 @@ UNSIGNED32 ENTRYPOINT AdsCheckExistence(ADSHANDLE  hConnect, UNSIGNED8* pucName,
 UNSIGNED32 ENTRYPOINT AdsDeleteFile    (ADSHANDLE  hConnect, UNSIGNED8* pucName);
 UNSIGNED32 ENTRYPOINT AdsRenameFile    (ADSHANDLE  hConnect, UNSIGNED8* pucOld,
                               UNSIGNED8* pucNew);
+UNSIGNED32 ENTRYPOINT AdsCopyFile      (ADSHANDLE  hConnect, UNSIGNED8* pucSrc,
+                              UNSIGNED8* pucDst);
+// Whole-file load (hb_vfLoad). *pulBufLen carries the buffer capacity in
+// and the file size out; AE_INSUFFICIENT_BUFFER when capacity is short.
+UNSIGNED32 ENTRYPOINT AdsLoadFile      (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              void* pBuf, UNSIGNED32* pulBufLen);
+// Whole-file save (hb_vfSave): creates or truncates.
+UNSIGNED32 ENTRYPOINT AdsSaveFile      (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              const void* pBuf, UNSIGNED32 ulLen);
+// Allocated exact-vf transport reply. Exactly one request is executed; there
+// is no size-query/replay contract for operations that create or change files.
+UNSIGNED32 ENTRYPOINT AdsVfRequest(ADSHANDLE hConnect, const void* pRequest,
+                                  UNSIGNED32 ulRequestLen, void** ppReply,
+                                  UNSIGNED32* pulReplyLen);
+void ENTRYPOINT AdsVfFree(void* pReply);
+UNSIGNED32 ENTRYPOINT AdsFReadAt       (ADSHANDLE  hFile, UNSIGNED64 ullOffset,
+                              void* pBuf, UNSIGNED32 ulLen,
+                              UNSIGNED32* pulRead);
+UNSIGNED32 ENTRYPOINT AdsFWriteAt      (ADSHANDLE  hFile, UNSIGNED64 ullOffset,
+                              const void* pBuf, UNSIGNED32 ulLen,
+                              UNSIGNED32* pulWritten);
+UNSIGNED32 ENTRYPOINT AdsFFlush        (ADSHANDLE  hFile);
+UNSIGNED32 ENTRYPOINT AdsFEof          (ADSHANDLE  hFile, UNSIGNED16* pbEof);
+// hb_vf group 3 - metadata batch.
+UNSIGNED32 ENTRYPOINT AdsSetFileAttr   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              UNSIGNED32 ulAttr);
+UNSIGNED32 ENTRYPOINT AdsSetFileTime   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                              UNSIGNED16 usYear, UNSIGNED8 ucMon,
+                              UNSIGNED8 ucDay, UNSIGNED8 ucHour,
+                              UNSIGNED8 ucMin, UNSIGNED8 ucSec);
+UNSIGNED32 ENTRYPOINT AdsFLock(ADSHANDLE hFile, UNSIGNED64 ullStart, UNSIGNED64 ullLen, UNSIGNED16 usType);
+UNSIGNED32 ENTRYPOINT AdsFUnlock(ADSHANDLE hFile, UNSIGNED64 ullStart, UNSIGNED64 ullLen);
+UNSIGNED32 ENTRYPOINT AdsFLockTest(ADSHANDLE hFile, UNSIGNED64 ullStart, UNSIGNED64 ullLen, UNSIGNED16 usType, SIGNED32* plResult);
+UNSIGNED32 ENTRYPOINT AdsFTrunc        (ADSHANDLE  hFile,
+                              UNSIGNED64 ullSize);
+// Creates an empty uniquely named file under pucDir; the name lands in
+// pucName (capacity *pusNameLen in, length out, not NUL-padded).
+UNSIGNED32 ENTRYPOINT AdsTempFile      (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                              UNSIGNED8* pucPrefix, UNSIGNED8* pucName,
+                              UNSIGNED16* pusNameLen);
+// ucType: 0 = available, 1 = free, 2 = used, 3 = total.
+UNSIGNED32 ENTRYPOINT AdsDirSpace      (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                              UNSIGNED8 ucType, UNSIGNED64* pullBytes);
 UNSIGNED32 ENTRYPOINT AdsGetFileSize   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                               UNSIGNED32* pulSize);
 UNSIGNED32 ENTRYPOINT AdsGetFileTime   (ADSHANDLE  hConnect, UNSIGNED8* pucName,
@@ -180,9 +223,41 @@ UNSIGNED32 OADSAPI oads_FSeek       (ADSHANDLE hFile, SIGNED32 lOffset,
                                UNSIGNED16 usOrigin, UNSIGNED32* pulPos);
 UNSIGNED32 OADSAPI oads_CheckExistence (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                                 UNSIGNED16* pbExists);
+UNSIGNED32 OADSAPI oads_IsLiveConnection (ADSHANDLE  hConnect,
+                                UNSIGNED16* pbLive);
 UNSIGNED32 OADSAPI oads_DeleteFile     (ADSHANDLE  hConnect, UNSIGNED8* pucName);
 UNSIGNED32 OADSAPI oads_RenameFile     (ADSHANDLE  hConnect, UNSIGNED8* pucOld,
                                 UNSIGNED8* pucNew);
+UNSIGNED32 OADSAPI oads_CopyFile       (ADSHANDLE  hConnect, UNSIGNED8* pucSrc,
+                                UNSIGNED8* pucDst);
+UNSIGNED32 OADSAPI oads_LoadFile       (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                                void* pBuf, UNSIGNED32* pulBufLen);
+UNSIGNED32 OADSAPI oads_SaveFile       (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                                const void* pBuf, UNSIGNED32 ulLen);
+UNSIGNED32 OADSAPI oads_FReadAt        (ADSHANDLE  hFile, UNSIGNED64 ullOffset,
+                                void* pBuf, UNSIGNED32 ulLen,
+                                UNSIGNED32* pulRead);
+UNSIGNED32 OADSAPI oads_FWriteAt       (ADSHANDLE  hFile, UNSIGNED64 ullOffset,
+                                const void* pBuf, UNSIGNED32 ulLen,
+                                UNSIGNED32* pulWritten);
+UNSIGNED32 OADSAPI oads_FFlush         (ADSHANDLE  hFile);
+UNSIGNED32 OADSAPI oads_FEof           (ADSHANDLE  hFile, UNSIGNED16* pbEof);
+UNSIGNED32 OADSAPI oads_SetFileAttr    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                                UNSIGNED32 ulAttr);
+UNSIGNED32 OADSAPI oads_SetFileTime    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
+                                UNSIGNED16 usYear, UNSIGNED8 ucMon,
+                                UNSIGNED8 ucDay, UNSIGNED8 ucHour,
+                                UNSIGNED8 ucMin, UNSIGNED8 ucSec);
+UNSIGNED32 OADSAPI oads_FLock(ADSHANDLE hFile, UNSIGNED64 ullStart, UNSIGNED64 ullLen, UNSIGNED16 usType);
+UNSIGNED32 OADSAPI oads_FUnlock(ADSHANDLE hFile, UNSIGNED64 ullStart, UNSIGNED64 ullLen);
+UNSIGNED32 OADSAPI oads_FLockTest(ADSHANDLE hFile, UNSIGNED64 ullStart, UNSIGNED64 ullLen, UNSIGNED16 usType, SIGNED32* plResult);
+UNSIGNED32 OADSAPI oads_FTrunc         (ADSHANDLE  hFile,
+                                UNSIGNED64 ullSize);
+UNSIGNED32 OADSAPI oads_TempFile       (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                                UNSIGNED8* pucPrefix, UNSIGNED8* pucName,
+                                UNSIGNED16* pusNameLen);
+UNSIGNED32 OADSAPI oads_DirSpace       (ADSHANDLE  hConnect, UNSIGNED8* pucDir,
+                                UNSIGNED8 ucType, UNSIGNED64* pullBytes);
 UNSIGNED32 OADSAPI oads_GetFileSize    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
                                 UNSIGNED32* pulSize);
 UNSIGNED32 OADSAPI oads_GetFileTime    (ADSHANDLE  hConnect, UNSIGNED8* pucName,
@@ -320,6 +395,9 @@ UNSIGNED32 ENTRYPOINT AdsGetServerVersion (ADSHANDLE   hConnect,
 
 UNSIGNED32 ENTRYPOINT AdsAppendRecord  (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsWriteRecord   (ADSHANDLE hTable);
+/* OpenADS extension: drain pending field assignments only. No commit,
+ * navigation or unlock. New RDD users require the matching OpenADS DLL. */
+UNSIGNED32 ENTRYPOINT AdsFlushPendingFields(ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsDeleteRecord  (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsRecallRecord  (ADSHANDLE hTable);
 UNSIGNED32 ENTRYPOINT AdsIsRecordDeleted(ADSHANDLE hTable, UNSIGNED16* pbDeleted);
@@ -863,9 +941,17 @@ UNSIGNED32 ENTRYPOINT AdsExecuteSQLDirectW  (ADSHANDLE hStatement, UNSIGNED16* p
 #define ADS_OEM            2
 
 // Filter / scope flags.
-#define ADS_RESPECTSCOPES   1
-#define ADS_RESPECTFILTERS  2
-#define ADS_IGNOREFILTERS   3
+// SAP ACE / Harbour ads.ch numbering. An earlier OpenADS header numbered
+// these 1/2/3 in a different order, so a client compiled against the SAP
+// values (rddads) was read with the wrong meaning (its RESPECTSCOPES 3
+// arrived as our "ignore filters"). The value never crosses the wire, so
+// this only aligns the in-process meaning between the app and the DLL.
+// Supported behavior: the SAP values are the contract. A caller compiled
+// against the old OpenADS numbering for these three options must rebuild;
+// nothing else in the exported ABI changes.
+#define ADS_RESPECTFILTERS  1
+#define ADS_IGNOREFILTERS   2
+#define ADS_RESPECTSCOPES   3
 #define ADS_IGNORERIGHTS    4
 // ADS_HARDSEEK is the OPPOSITE of ADS_SOFTSEEK (defined at line 320 as 1).
 // rddads passes one or the other to AdsSeek* etc. as a single bit-flag.
@@ -1496,6 +1582,8 @@ UNSIGNED32 ENTRYPOINT AdsGetTableConnection(ADSHANDLE hTable,
                                              ADSHANDLE* phConnect);
 UNSIGNED32 ENTRYPOINT AdsIsConnectionAlive (ADSHANDLE hConnect,
                                              UNSIGNED16* pbAlive);
+UNSIGNED32 ENTRYPOINT OAdsIsLiveConnection (ADSHANDLE hConnect,
+                                            UNSIGNED16* pbLive);
 UNSIGNED32 ENTRYPOINT AdsIsEmpty           (ADSHANDLE hTable,
                                              UNSIGNED8* pucField,
                                              UNSIGNED16* pbEmpty);
@@ -1572,6 +1660,12 @@ UNSIGNED32 ENTRYPOINT OAdsCompleteAuth(ADSHANDLE pending, const UNSIGNED8* blob,
 UNSIGNED32 ENTRYPOINT OAdsBeginMutualAuth(const char* url,const char* selector,ADSHANDLE* pending,UNSIGNED8* challenge32,UNSIGNED8* binding32,UNSIGNED8* proof,UNSIGNED32* proofBytes);
 UNSIGNED32 ENTRYPOINT OAdsCancelAuth(ADSHANDLE pending);
 UNSIGNED32 ENTRYPOINT OAdsSetLogging(UNSIGNED16 usOn);
+// Local wire-trace marker, no server/RDD action. 1..120 bytes, no C0/DEL/C1 control bytes.
+// AE_SUCCESS only when written; otherwise nonzero, last DB error unchanged.
+UNSIGNED32 ENTRYPOINT OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes);
+// Additive optional-ID bridge, each integer0..9999999999999999. No wire action.
+UNSIGNED32 ENTRYPOINT OAdsTraceMarkEx(const UNSIGNED8* label, UNSIGNED32 bytes,
+                                     UNSIGNED64 instance, UNSIGNED64 app_thread);
 // Aggregate health JSON from an AdsMgConnect handle (NOT a data connection).
 // *pulLen is buffer capacity incl. NUL; out is required size incl. NUL.
 // NULL/short buffer: AE_INSUFFICIENT_BUFFER, no partial JSON written.

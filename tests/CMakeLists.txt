@@ -35,6 +35,8 @@ add_executable(openads_unit_tests
     unit/platform_path_test.cpp
     unit/fs_sandbox_test.cpp
     unit/server_fs_test.cpp
+    unit/vf_codec_test.cpp
+    unit/vf_guard_test.cpp
     unit/abi_server_fs_test.cpp
     unit/abi_remote_file_wait_test.cpp
     unit/platform_time_test.cpp
@@ -110,6 +112,12 @@ add_executable(openads_unit_tests
     unit/abi_adt_dat_extension_test.cpp
     unit/abi_create_outside_datadir_test.cpp
     unit/abi_remote_create_table_test.cpp
+    unit/tim_items_test.cpp
+    unit/dbf_numeric_text_write_test.cpp
+    unit/abi_index_create_settle_test.cpp
+    unit/abi_deleted_scope_test.cpp
+    unit/abi_scope_keynum_test.cpp
+    unit/abi_scope_keytype_test.cpp
     unit/abi_remote_logical_write_test.cpp
     unit/abi_create_concurrent_test.cpp
     unit/abi_remote_create_stress_test.cpp
@@ -145,6 +153,7 @@ add_executable(openads_unit_tests
     unit/abi_seek_last_partial_test.cpp
     unit/abi_aof_index_agreement_test.cpp
     unit/abi_aof_index_order_test.cpp
+    unit/abi_aof_order_refresh_test.cpp
     unit/abi_aof_empty_result_test.cpp
     unit/abi_adi_prefix_seek_multilevel_test.cpp
     unit/abi_prefix_seek_deleted_test.cpp
@@ -152,6 +161,7 @@ add_executable(openads_unit_tests
     unit/cdx_prev_empty_leaf_test.cpp
     unit/cdx_empty_tree_test.cpp
     unit/abi_ntx_numeric_edge_test.cpp
+    unit/abi_remote_memo_position_test.cpp
     unit/abi_memo_large_test.cpp
     unit/abi_ordsetfocus_test.cpp
     unit/abi_seek_empty_test.cpp
@@ -339,6 +349,10 @@ add_executable(openads_unit_tests
     unit/network_client_test.cpp
     unit/abi_dd_invoicing_test.cpp
     unit/abi_fetch_where_test.cpp
+    unit/abi_wire_caller_test.cpp
+    unit/abi_dirty_key_skip_test.cpp
+    unit/abi_remote_bottom_keycount_test.cpp
+    unit/abi_remote_setfields_commit_test.cpp
     unit/network_setfields_test.cpp
     unit/network_open_warm_test.cpp
     unit/network_version_test.cpp
@@ -348,6 +362,8 @@ add_executable(openads_unit_tests
     unit/network_empty_window_test.cpp
     unit/network_remote_reindex_test.cpp
     unit/network_frame_trace_test.cpp
+    unit/abi_remote_recno_bound_test.cpp
+    unit/abi_remote_append_meta_test.cpp
     unit/network_boundary_pair_test.cpp
     unit/network_commit_slimming_test.cpp
     unit/network_teardown_batch_test.cpp
@@ -358,6 +374,7 @@ add_executable(openads_unit_tests
     unit/abi_remote_locked_row_test.cpp
     unit/abi_remote_lock_introspection_test.cpp
     unit/network_exclusive_open_test.cpp
+    unit/network_append_lock_ledger_test.cpp
     unit/backend_tier1_test.cpp
     unit/abi_oads_file_funcs_test.cpp
     unit/abi_create_index_path_test.cpp
@@ -596,10 +613,57 @@ target_link_libraries(oads_imac_test PRIVATE openads_ace)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_test(NAME mingw_import_parser COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/mingw_import_parser_test.py)
-    add_test(NAME portal_health_contract COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_contract_test.py)
+    add_test(NAME static_client_packaging COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/static_client_packaging_test.py)
 endif()
 
-find_program(OPENADS_NODE_EXECUTABLE node)
-if(OPENADS_NODE_EXECUTABLE)
-    add_test(NAME portal_health_js COMMAND ${OPENADS_NODE_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/portal_health_js_test.js)
+# The security default must be tested in new processes, not after a unit test
+# has already called the app's opt-in API.
+add_executable(openads_trace_gate_probe trace_gate_probe.cpp)
+target_link_libraries(openads_trace_gate_probe PRIVATE openads_core)
+target_include_directories(openads_trace_gate_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(OPENADS_WITH_SQLITE)
+    target_link_libraries(openads_trace_gate_probe PRIVATE openads_sqlite3)
 endif()
+if(OPENADS_WITH_HARBOUR_UDF)
+    target_link_libraries(openads_trace_gate_probe PRIVATE ${HARBOUR_LINK_LIBRARIES})
+endif()
+add_dependencies(openads_unit_tests openads_trace_gate_probe)
+if(Python3_Interpreter_FOUND AND TARGET openads_serverd)
+    add_test(NAME diagnostics_gate_contract COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/trace_gate_contract.py $<TARGET_FILE:openads_trace_gate_probe>
+        $<TARGET_FILE:openads_serverd>)
+endif()
+
+# Pure-local marker gates plus the existing remote sequence with markers inserted.
+add_executable(openads_trace_marker_probe trace_marker_probe.cpp)
+target_link_libraries(openads_trace_marker_probe PRIVATE openads_core)
+if(OPENADS_WITH_SQLITE)
+    target_link_libraries(openads_trace_marker_probe PRIVATE openads_sqlite3)
+endif()
+if(OPENADS_WITH_HARBOUR_UDF)
+    target_link_libraries(openads_trace_marker_probe PRIVATE ${HARBOUR_LINK_LIBRARIES})
+endif()
+add_dependencies(openads_unit_tests openads_trace_marker_probe)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME trace_marker_contract COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/trace_marker_contract.py
+        $<TARGET_FILE:openads_trace_marker_probe> $<TARGET_FILE:openads_trace_gate_probe>)
+endif()
+
+# Native mutual-auth proof uses a public mock HRB, not production material.
+# Windows fixture ACL setup remains a separate acceptance step.
+if(UNIX AND TARGET auth_mutual_probe)
+    add_dependencies(openads_unit_tests auth_mutual_probe)
+    add_test(NAME auth_mutual_v2 COMMAND auth_mutual_probe
+        $<TARGET_FILE:openads_auth_worker>
+        "${CMAKE_BINARY_DIR}/tools/serverd/mutual-test-only.hrb")
+    set_tests_properties(auth_mutual_v2 PROPERTIES TIMEOUT 120 RUN_SERIAL TRUE)
+endif()
+
+# mtfix85: independent-process FS byte-range lock proof, no RDD dependency.
+add_executable(openads_fs_lock85_probe fs_lock85_probe.cpp)
+target_link_libraries(openads_fs_lock85_probe PRIVATE openads_core)
+target_include_directories(openads_fs_lock85_probe PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_dependencies(openads_unit_tests openads_fs_lock85_probe)
+add_test(NAME fs_lock85_process COMMAND openads_fs_lock85_probe)
+set_tests_properties(fs_lock85_process PROPERTIES TIMEOUT 20)

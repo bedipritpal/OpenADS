@@ -2,6 +2,7 @@
 
 #include "engine/oem_collation.h"
 #include "platform/lock.h"
+#include "util/log.h"
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -43,6 +44,7 @@ bool want_fsync_() {
 // Opt-in lock diagnostics only. Set OPENADS_LOCK_DIAG to a writable file
 // path before starting the process; unset/empty means no diagnostic file.
 std::FILE* open_lock_diag_() {
+    if (!openads::util::logging_enabled()) return nullptr;
     const char* path = std::getenv("OPENADS_LOCK_DIAG");
     return path && path[0] != '\0' ? std::fopen(path, "a") : nullptr;
 }
@@ -747,7 +749,7 @@ util::Result<void> CdxIndex::ensure_write_lock_() {
         if (!slot) slot = std::make_shared<CdxWriteLockEntry>();
         e = slot;
         if (auto* f = open_lock_diag_()) {
-            std::fprintf(f, "ensure_write_lock ENTER path=%s users=%zu has_os=%d fd=%p\n", path_.c_str(), e->users, (int)(bool)e->os_lock, file_.native_handle());
+            std::fprintf(f, "ensure_write_lock ENTER path=%s users=%zu has_os=%d fd=%p\n", "[hidden]", e->users, (int)(bool)e->os_lock, file_.native_handle());
             std::fclose(f);
         }
     }
@@ -775,7 +777,7 @@ util::Result<void> CdxIndex::ensure_write_lock_() {
                 if (!l) {
                     if (auto* f = open_lock_diag_()) {
                         std::fprintf(f, "acquire_cdx_os_lock FAIL path=%s fd=%p code=%d sub=%d msg=%s\n",
-                            path_.c_str(), file_.native_handle(), l.error().code, l.error().sub_code, l.error().message.c_str());
+                            "[hidden]", file_.native_handle(), l.error().code, l.error().sub_code, "[error text hidden]");
                         std::fclose(f);
                     }
                     return l.error();
@@ -850,7 +852,7 @@ CdxIndex::open_named(const std::string& path,
     mode_  = mode;
     path_  = canonicalize_path(path);
     if (auto* f = open_lock_diag_()) {
-        std::fprintf(f, "open_named orig=%s canon=%s fd_will_open\n", path.c_str(), path_.c_str());
+        std::fprintf(f, "open_named orig=%s canon=%s fd_will_open\n", "[hidden]", "[hidden]");
         std::fclose(f);
     }
     auto fres = platform::File::open(path, map_mode(mode));
@@ -2068,6 +2070,51 @@ std::uint32_t CdxIndex::count_scoped_keys(
     current_key_ = std::move(s_key);
 
     return count;
+}
+
+std::uint32_t CdxIndex::scoped_key_number(
+    const std::string& top,
+    const std::string& bottom,
+    std::uint32_t recno,
+    const std::function<bool(std::uint32_t recno)>* include_recno) {
+    (void)reload_header_if_changed_();
+    std::uint32_t  s_leaf    = cur_leaf_;
+    std::int32_t   s_index   = cur_index_;
+    CurState       s_state   = cur_state_;
+    auto           s_decoded = cur_decoded_;
+    std::string    s_key     = current_key_;
+
+    std::uint32_t count = 0, found = 0;
+    auto r = top.empty() ? seek_first() : seek_key(top, /*soft=*/true);
+    if (r && r.value().positioned) {
+        auto cur = r.value();
+        while (cur.positioned) {
+            std::string key = current_key();
+            if (!bottom.empty()) {
+                const std::size_t bn =
+                    std::min<std::size_t>(bottom.size(), key_size_);
+                if (compare_keys_(key.data(), bottom.data(), bn) > 0) break;
+            }
+            const bool inc =
+                include_recno == nullptr || (*include_recno)(cur.recno);
+            if (inc) ++count;
+            if (cur.recno == recno) {
+                if (inc) found = count;
+                break;
+            }
+            auto nx = next();
+            if (!nx) break;
+            cur = nx.value();
+        }
+    }
+
+    cur_leaf_    = s_leaf;
+    cur_index_   = s_index;
+    cur_state_   = s_state;
+    cur_decoded_ = std::move(s_decoded);
+    current_key_ = std::move(s_key);
+
+    return found;
 }
 
 std::uint32_t CdxIndex::pos_of_recno_cached(std::uint32_t recno) {

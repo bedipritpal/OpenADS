@@ -3,6 +3,7 @@
 #include "network/tls_transport.h"
 #include "network/mutual_auth.h"
 #include "openads/ace.h"
+#include "openads_version.h"
 #include <mbedtls/md.h>
 #include <cassert>
 #include <algorithm>
@@ -19,14 +20,15 @@ std::string mac(const std::string& direction,const std::string& transcript,const
 int main(int argc,char**argv){
  assert(argc==3);auto dir=std::filesystem::current_path()/"mutual-v2-proof";std::filesystem::create_directories(dir);
  auto cfg=make_auth_tls_config();assert(cfg);auto worker=std::make_shared<AuthWorker>(argv[1],argv[2]);assert(worker->probe()&&worker->mutual_required());
- std::unique_ptr<Server> srv;auto fresh=[&]{if(srv)srv->stop();srv=std::make_unique<Server>();srv->set_daemon_hardening(true);srv->set_data_dir(dir.string());srv->add_credential("usr","pw");srv->set_auth_worker(worker);assert(srv->set_tls(cfg.value()));assert(srv->start("127.0.0.1",0));};fresh();
+ std::unique_ptr<Server> srv;auto fresh=[&]{if(srv)srv->stop();srv=std::make_unique<Server>();srv->set_data_dir(dir.string());srv->add_credential("usr","pw");srv->set_auth_worker(worker);assert(srv->set_tls(cfg.value()));assert(srv->start("127.0.0.1",0));};fresh();
  auto tls=cfg.value();tls.insecure_skip_verify=true;tls.auth_tls13_only=true;
  auto connect=[&]{auto t=connect_tls("127.0.0.1",srv->port(),tls);assert(t);return std::move(t).value();};
  const std::string path=dir.string(),firm="fixture-firm";
  std::array<std::uint8_t,32> c{},b{},lastb{};std::string prior;
  for(int mode=0;mode<8;++mode){
   fresh();std::cerr<<"mode="<<mode<<"\n";RemoteConnection client;auto proof=client.begin_mutual(connect(),path,firm,c,b);if(!proof)std::cerr<<proof.error().message<<" context="<<proof.error().context<<"\n";assert(proof);auto transcript=mutual_transcript(c,b,firm,path);assert(proof.value()==mac("server",transcript));
-  if(mode)assert(b!=lastb);lastb=b;
+  if(mode) { assert(b!=lastb); }
+  lastb=b;
   std::string response=mac("client",transcript);
   if(mode==1)response=proof.value(); // reflection
   if(mode==2)response=prior; // replay from another TLS session
@@ -47,7 +49,7 @@ int main(int argc,char**argv){
  assert(std::string(reinterpret_cast<char*>(proof),n)==mac("server",transcript));auto response=mac("client",transcript);
  assert(OAdsCompleteAuth(pending,reinterpret_cast<const unsigned char*>(response.data()),static_cast<UNSIGNED32>(response.size()),&connection)==0&&connection);
  UNSIGNED8 desc[256]{};UNSIGNED16 len=sizeof(desc);
- assert(AdsGetServerVersion(connection,desc,&len)==0&&std::string(reinterpret_cast<char*>(desc)).find("1.09.74")==0);
+ assert(AdsGetServerVersion(connection,desc,&len)==0&&std::string(reinterpret_cast<char*>(desc)).find(OPENADS_VERSION_STR)==0);
  assert(AdsDisconnect(connection)==0);
  assert(OAdsCompleteAuth(pending,reinterpret_cast<const unsigned char*>(response.data()),static_cast<UNSIGNED32>(response.size()),&connection)!=0&&connection==0);
  }

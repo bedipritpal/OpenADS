@@ -88,6 +88,8 @@ util::Result<Frame> decode_after_recv(std::uint8_t hdr[5],
     if (n > kMaxFramePayload) {
         return util::Error{5000, 0, "frame payload too large", ""};
     }
+    if (!valid_opcode(hdr[4]))
+        return util::Error{5000, 0, "unknown opcode", ""};
     Frame f;
     f.opcode = static_cast<Opcode>(hdr[4]);
     if (n > 0) {
@@ -195,7 +197,7 @@ void Server::ensure_server_id() {
 void Server::add_credential(const std::string& user,
                             const std::string& password) {
     std::lock_guard<std::mutex> lk(creds_mu_);
-    creds_[user] = daemon_hardening_ ? openads::engine::hash_password(password) : password;
+    creds_[user] = openads::engine::hash_password(password);
 }
 
 bool Server::require_auth() const noexcept {
@@ -211,7 +213,6 @@ std::string login_user_key(std::string user) {
 }
 }
 bool Server::login_allowed(const std::string& ip, const std::string& user) {
-    if (!daemon_hardening_) return true;
     std::lock_guard<std::mutex> lk(login_mu_);
     const auto now = std::chrono::steady_clock::now();
     // Expire only genuinely quiet entries. Active attacks cannot reset a
@@ -230,7 +231,6 @@ bool Server::login_allowed(const std::string& ip, const std::string& user) {
 }
 void Server::login_failed(const std::string& ip, const std::string& user,
                           std::uint32_t max_attempts) {
-    if (!daemon_hardening_) return;
     std::lock_guard<std::mutex> lk(login_mu_);
     const auto now = std::chrono::steady_clock::now();
     max_attempts = std::max<std::uint32_t>(1, std::min<std::uint32_t>(max_attempts, 100));
@@ -245,7 +245,6 @@ void Server::login_failed(const std::string& ip, const std::string& user,
     }
 }
 void Server::login_succeeded(const std::string& ip, const std::string& user) {
-    if (!daemon_hardening_) return;
     std::lock_guard<std::mutex> lk(login_mu_);
     // A valid account must not reset IP-wide failures against other users.
     (void)ip;
@@ -896,13 +895,8 @@ void Server::session_loop(Socket s, std::string default_data_dir,
                           std::uint16_t listener_port) {
     // The per-frame contract (read → dispatch → reply → telemetry) lives in
     // Session::handle_readable so the reactor WorkerPool shares it verbatim.
-    if (daemon_hardening_) (void)socket_set_nonblocking(s, true);
+    (void)socket_set_nonblocking(s, true);
     Session sess(*this, s, std::move(default_data_dir), listener_port);
-    if (!daemon_hardening_) {
-        while (sess.handle_readable()) {}
-        sock_close(s);
-        return;
-    }
     while (!sess.expired()) {
         std::vector<PollItem> ready{{s, sess.poll_events()}};
         auto polled = socket_poll(ready, 200);

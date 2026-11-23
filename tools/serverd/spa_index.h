@@ -1093,7 +1093,7 @@ function renderServerHealth(h) {
 }
 $("server-refresh").addEventListener("click", loadServerInfo);
 async function loadServerHealth() {
-  try { $("server-health").innerHTML = renderServerHealth(await api("/api/server/health")); }
+  try { $("server-health").innerHTML = renderServerHealth(await api("/api/server/health")); $("server-health").classList.remove("empty"); }
   catch (e) { $("server-health").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 

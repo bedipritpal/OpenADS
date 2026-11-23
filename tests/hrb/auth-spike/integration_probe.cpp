@@ -30,7 +30,7 @@ int main(int argc,char** argv){
 
     auto tls=make_auth_tls_config();assert(tls);
     auto w=std::make_shared<AuthWorker>(argv[1],argv[2]);assert(w->probe());
-    Server srv;srv.set_daemon_hardening(true);srv.set_data_dir(dir.string());srv.add_credential("usr","pw");srv.set_auth_worker(w);assert(srv.set_tls(tls.value()));assert(srv.start("127.0.0.1",0));
+    Server srv;srv.set_data_dir(dir.string());srv.add_credential("usr","pw");srv.set_auth_worker(w);assert(srv.set_tls(tls.value()));assert(srv.start("127.0.0.1",0));
     auto url="auth://127.0.0.1:"+std::to_string(srv.port())+"/"+ddpath;
     auto connect=[&](ADSHANDLE& h){ADSHANDLE p=0;UNSIGNED8 c[32];assert(OAdsBeginAuth(url.c_str(),&p,c)==0);std::string blob(reinterpret_cast<char*>(c),32);blob+="test-only";auto code=OAdsCompleteAuth(p,reinterpret_cast<const UNSIGNED8*>(blob.data()),static_cast<UNSIGNED32>(blob.size()),&h);if(code)std::cerr<<"CompleteAuth code="<<code<<"\n";return code;};
     ADSHANDLE a=0,b=0;assert(connect(a)==0&&a);AdsDisconnect(a);

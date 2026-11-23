@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,8 +33,17 @@ struct SeekOutcome {
 };
 
 class IIndex {
+    bool record_reanchor_pending_ = false;
 public:
     virtual ~IIndex() = default;
+
+    // GoCold key maintenance can invalidate this view's cursor. Keep the
+    // obligation with the view (including parked tags), not the table's
+    // current order. A replacement index starts with no inherited state.
+    bool record_reanchor_pending() const noexcept { return record_reanchor_pending_; }
+    void require_record_reanchor(bool pending = true) noexcept {
+        record_reanchor_pending_ = pending;
+    }
 
     virtual util::Result<void>
         open(const std::string& path, IndexOpenMode mode) = 0;
@@ -87,6 +97,15 @@ public:
     // become visible. Default no-op; CdxIndex drops clean page-cache pages
     // when the sub-tag counter / root changes. Call before navigation.
     virtual void refresh_from_disk() {}
+
+    // Content revision for caches keyed on index order (the AOF sequence
+    // cache). The driver bumps it on every content mutation it performs or
+    // detects: own writes, and peer rewrites seen via refresh_from_disk.
+    // std::nullopt = the driver cannot report one; callers must treat that
+    // as "always changed" and rebuild rather than risk a stale view.
+    virtual std::optional<std::uint64_t> content_revision() const {
+        return std::nullopt;
+    }
 
     virtual std::string current_key() const = 0;
 

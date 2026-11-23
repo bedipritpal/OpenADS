@@ -1,5 +1,7 @@
 # OpenADS 1.09.73-mtfix41 - healthy daemon idle sessions
 
+> Historical fork test-build notes. This document describes the original bedipritpal/OpenADS build, not validation or packaging of the upstream port. See docs/upstream-mtfix39-41-port.md for port scope and validation.
+
 TEST BUILD ONLY. Based on mtfix40 on an isolated branch of
 Pritpal Bedi's fork of FiveTechSoft/OpenADS. Nothing merged
 to main or upstream. Application test clearance is still required.

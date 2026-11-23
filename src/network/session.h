@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/server_fs.h"
+#include "engine/vf_service.h"
 #include "network/frame_reader.h"
 #include "network/server.h"
 #include "network/socket.h"
@@ -160,6 +161,7 @@ private:
     bool          client_open_table_mode_ok_ = false;
     bool          client_open_setup_metadata_ok_ = false;
     bool          client_locked_row_ok_ = false;
+    bool          client_append_meta_ok_ = false;
     // M12.32 — last ShowDeleted state received; abi_conn_ is created
     // lazily, so ensure_abi_conn must re-apply it or the ABI connection
     // starts with the default (show) and ordered walks leak deleted rows.
@@ -169,6 +171,7 @@ private:
     std::unordered_map<std::uint32_t,
                        std::unique_ptr<openads::engine::FsFile>> files_;
     std::uint32_t next_file_id_ = 1;
+    std::shared_ptr<openads::engine::vf::Service> vf_service_;
 
     // Resolve client path under session data dir (or server data roots).
     std::optional<std::string> resolve_fs_client_path(
@@ -301,6 +304,8 @@ private:
         UNSIGNED32 code = 0;
         bool       column_missing = false;
     };
+    util::Result<void> flush_table_record(std::uint32_t id,
+        openads::engine::Table* tbl);
     FieldWriteResult write_fields(std::uint32_t id,
         openads::engine::Table* tbl,
         const std::vector<std::pair<std::string, std::string>>& pairs);

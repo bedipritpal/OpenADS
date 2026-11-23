@@ -1,6 +1,6 @@
 // IndexKey(n)/OrdName(n) past the last tag must fail, not return tag 1.
 // Harbour rddads answers "" only when AdsGetIndexHandleByOrder fails, and
-// FiveWin's error handler runs  while !Empty(IndexKey(j))  (Tim Stone).
+// FiveWin's error handler runs  while !Empty(IndexKey(j))  (the reporting user).
 #include "doctest.h"
 #include "openads/ace.h"
 #include "network/server.h"
@@ -74,7 +74,7 @@ TEST_CASE("AdsGetIndexHandleByOrder fails past the last tag (CDX, local and remo
     srv.stop();
 }
 TEST_CASE("AdsGetIndexHandleByOrder fails past the last tag (ADT, local and remote)") {
-    OorEnv cdx_adt("OPENADS_ADT_CDX_INDEX", "1");  // CDX-format .adi bag, as Tim runs it
+    OorEnv cdx_adt("OPENADS_ADT_CDX_INDEX", "1");  // CDX-format .adi bag, as deployed with CDX-format bags
     auto dir = std::filesystem::temp_directory_path() / "openads_oor_adt";
     oor_make(dir, ADS_ADT);
     oor_check(dir.string(), ADS_LOCAL_SERVER, ADS_ADT, "oor.adt");

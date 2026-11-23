@@ -27,6 +27,11 @@ enum class Opcode : std::uint8_t {
     Connect            = 0x10,
     ConnectAck         = 0x11,
     Disconnect         = 0x12,
+    // FileEof: [u32 file_id] -> [u8 eof]. The 0xE0+ server-filesystem
+    // family and the 0x20s block around FileCopy are full; 0x1D/0x1E are
+    // the last free pair below 0x20.
+    FileEof            = 0x1D,
+    FileEofAck         = 0x1E,
     BeginAuth          = 0x3D,
     BeginAuthAck       = 0x3E,
     CompleteAuth       = 0x3F,
@@ -34,6 +39,53 @@ enum class Opcode : std::uint8_t {
     OpenTableAck       = 0x21,
     CloseTable         = 0x22,
     CloseTableAck      = 0x23,
+    // FileCopy: [u16 srcLen][src][u16 dstLen][dst] → empty ack
+    // Server-filesystem family (0xE0+) is full, so copy lives here.
+    FileCopy           = 0x24,
+    FileCopyAck        = 0x25,
+    // hb_vf group 2 - wire-efficiency batch.
+    // FileLoad:    [u16 nameLen][name] -> [u32 size][bytes]
+    //              (whole file; server caps at kMaxFsWholeFile)
+    FileLoad           = 0x26,
+    FileLoadAck        = 0x27,
+    // FileSave:    [u16 nameLen][name][u32 size][bytes] -> empty ack
+    //              (creates or truncates, like hb_vfSave)
+    FileSave           = 0x28,
+    FileSaveAck        = 0x29,
+    // FileReadAt:  [u32 file_id][u64 offset][u32 nbytes] -> [u32 nread][bytes]
+    FileReadAt         = 0x2A,
+    FileReadAtAck      = 0x2B,
+    // FileWriteAt: [u32 file_id][u64 offset][u32 nbytes][bytes]
+    //              -> [u32 nwritten]
+    FileWriteAt        = 0x2C,
+    FileWriteAtAck     = 0x2D,
+    // FileFlush:   [u32 file_id] -> empty ack (flush server buffers)
+    FileFlush          = 0x2E,
+    FileFlushAck       = 0x2F,
+    // hb_vf group 3 - metadata batch.
+    // FileSetAttr: [u16 nameLen][name][u32 attr] -> empty ack
+    //              (bit 0x01 readonly honored; other bits ignored)
+    FileSetAttr        = 0x34,
+    FileSetAttrAck     = 0x35,
+    // FileSetTime: [u16 nameLen][name][u16 year][u8 mon][u8 day]
+    //              [u8 hh][u8 mm][u8 ss] -> empty ack (local time)
+    FileSetTime        = 0x36,
+    FileSetTimeAck     = 0x37,
+    // FileTrunc:   [u32 file_id][u64 size] -> empty ack
+    // FileLockOp request: [u32 id][u64 start][u64 len][u16 type][u8 op]
+    // op=0 lock, 1 unlock, 2 conflict test. Same-opcode reply: [i32 result/PID].
+    // Server always makes ONE non-blocking OS attempt. WAIT belongs to client.
+    FileLockOp         = 0x0F,
+    FileTrunc          = 0x38,
+    FileTruncAck       = 0x39,
+    // FileTemp:    [u16 dirLen][dir][u16 prefixLen][prefix]
+    //              -> [u16 nameLen][name] (created empty, name relative)
+    FileTemp           = 0x3A,
+    FileTempAck        = 0x3B,
+    // DirSpace:    [u16 dirLen][dir][u8 type] -> [u64 bytes]
+    //              type 0 = available, 1 = free, 2 = used, 3 = total
+    DirSpace           = 0x3C,
+    DirSpaceAck        = 0x1F,  // 0x3D+ is taken; last free slot below 0x20
     ExecuteSQL         = 0x30,
     ExecuteSQLAck      = 0x31,
     Fetch              = 0x32,
@@ -685,6 +737,12 @@ inline constexpr std::uint32_t kCapFlushTableDurable = 0x00000080u;
 // new server reads as "fused, no pair" -- bit-exact with the old parse.
 inline constexpr std::uint32_t kCapNavBoundaryPair = 0x00000100u;
 
+// Fresh current row read while the real record lock is held. Request
+// LockRecord appends u8 wants_row; ack appends the existing row trailer.
+// Both peers must advertise this bit; old peers keep opcode-only locks.
+inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
+
+
 // Warm OpenTableAck sections (USE latency). After the fixed
 // `[u32 id][u16 bag_len][bag]` prefix, the ack carries
 // `[u8 section_count]` then that many TLVs:
@@ -696,12 +754,34 @@ inline constexpr std::uint32_t kCapNavBoundaryPair = 0x00000100u;
 // empty when absent) and fall back to DescribeTable + GotoTop; new
 // clients skip both round-trips. Unknown tags are skipped by length,
 // so the section list stays extensible in both directions.
+
 inline constexpr std::uint32_t kCapOpenSetupMetadata = 0x00000200u;
 
-// Fresh current row read while the real record lock is held. Request
-// LockRecord appends u8 wants_row; ack appends the existing row trailer.
-// Both peers must advertise this bit; old peers keep opcode-only locks.
-inline constexpr std::uint32_t kCapLockedRow = 0x00000400u;
+// mtfix68 - AppendBlankAck metadata trailer: when the client advertises
+// this bit, the server appends [u32 recno][u8 lock_held][u8 bof][u8 eof]
+// to the (previously empty) AppendBlankAck, so the client books the new
+// record's position and the already-taken append auto-lock without the
+// two follow-up round trips (GetRecordNum + LockRecord). Old servers send
+// the empty ack; the client length-gates and keeps the legacy path.
+// Server behavior is otherwise unchanged: the auto-lock already exists.
+inline constexpr std::uint32_t kCapAppendMetadata = 0x00000800u;
+
+// Commit-boundary SetFields extension. With this capability only, a client
+// may append one byte (1) after the ordinary SetFields body. The server
+// applies the ordered fields, stops on error, then runs the SAME FlushTable
+// work. Success is SetFieldsAck payload {1}; an empty legacy ack is NOT
+// proof of commit and must never trigger a replay. Ordinary SetFields and
+// every older peer keep their existing packet/commit sequence.
+inline constexpr std::uint32_t kCapSetFieldsCommit = 0x00001000u;
+
+// Ordinary ordered GoBottom may request same-landing key-count metadata.
+// Request flag 0x04 is sent only after this server capability is advertised.
+// Requested ACK wraps the unchanged old body with a 16-byte prefix:
+// [u32 magic BKC1][u32 count-status][u32 count][u32 table-id].
+// Nonzero count-status is not a certification: retain the legacy B0 path.
+// Explicit later count APIs remain live requests.
+inline constexpr std::uint32_t kCapBottomKeyCount = 0x00002000u;
+inline constexpr std::uint32_t kBottomKeyCountMagic = 0x31434b42u;
 
 namespace OpenTableAckSections {
     constexpr std::uint8_t kRecordLength = 3;

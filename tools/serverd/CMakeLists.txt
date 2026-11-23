@@ -56,6 +56,7 @@ if(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF)
     endforeach()
 endif()
 
+
 if(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF)
  add_executable(auth_mutual_probe ${CMAKE_SOURCE_DIR}/tests/hrb/mutual/mutual_probe.cpp)
  target_link_libraries(auth_mutual_probe PRIVATE openads_core MbedTLS::mbedcrypto)
@@ -67,13 +68,17 @@ if(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF)
  endif()
 endif()
 
-if(OPENADS_WITH_TLS AND OPENADS_WITH_HARBOUR_UDF)
- add_executable(auth_resource_probe ${CMAKE_SOURCE_DIR}/tests/hrb/mutual/resource_probe.cpp)
- target_link_libraries(auth_resource_probe PRIVATE openads_core)
- target_include_directories(auth_resource_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
- if(MSVC)
-  target_compile_options(auth_resource_probe PRIVATE /UNDEBUG)
- else()
-  target_compile_options(auth_resource_probe PRIVATE -UNDEBUG)
- endif()
+# Build the public mock only for tests. It is never installed or packaged.
+if(OPENADS_BUILD_TESTS AND TARGET auth_mutual_probe)
+    set(_mutual_hrb "${CMAKE_CURRENT_BINARY_DIR}/mutual-test-only.hrb")
+    add_custom_command(OUTPUT "${_mutual_hrb}"
+        COMMAND "${HARBOUR_COMPILER}"
+            "${CMAKE_SOURCE_DIR}/tests/hrb/mutual/auth.prg" -gh
+            "-o${_mutual_hrb}"
+        COMMAND ${CMAKE_COMMAND} "-DHRB=${_mutual_hrb}"
+            -P "${CMAKE_SOURCE_DIR}/tests/hrb/mutual/protect_fixture.cmake"
+        DEPENDS "${CMAKE_SOURCE_DIR}/tests/hrb/mutual/auth.prg"
+        VERBATIM)
+    add_custom_target(auth_mutual_test_hrb DEPENDS "${_mutual_hrb}")
+    add_dependencies(auth_mutual_probe auth_mutual_test_hrb openads_auth_worker)
 endif()

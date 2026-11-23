@@ -20,7 +20,6 @@ class FrameReader {
 public:
     util::Result<std::vector<Frame>> feed(const std::uint8_t* data,
                                           std::size_t n, std::size_t max_frames = 0);
-    void set_validate_opcodes(bool on) noexcept { validate_opcodes_ = on; }
     void set_payload_limit(std::size_t limit) noexcept { payload_limit_ = limit; }
 
     // Bytes currently held (the prefix of an incomplete frame).
@@ -28,7 +27,6 @@ public:
 
 private:
     std::vector<std::uint8_t> buf_;
-    bool validate_opcodes_ = false;
     std::size_t payload_limit_ = kMaxFramePayload;
 };
 

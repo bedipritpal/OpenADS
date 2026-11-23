@@ -1,10 +1,4 @@
-src/session/connection.cpp:generic-api-key:557
-src/session/connection.cpp:generic-api-key:1506
+src/session/connection.cpp:generic-api-key:525
+src/session/connection.cpp:generic-api-key:1457
 tests/unit/aes_test.cpp:generic-api-key:41
 third_party/tinyaes/aes.c:generic-api-key:18
-
-# Public upstream TLS loopback test fixture only; never a deployed key.
-tests/unit/network_server_test.cpp:private-key:1904
-
-# Plain roadmap prose describing verifier migration, not a credential.
-roadmap.txt:generic-api-key:331

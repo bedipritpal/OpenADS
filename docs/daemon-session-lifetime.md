@@ -8,8 +8,12 @@ With mtfix41, a successfully established database session has no
 application-inactivity deadline. Reading a screen, taking a call or leaving
 an invoice module open must not release its physical record/login locks.
 The same policy applies in the dedicated-thread and reactor-pool paths,
-including TLS. Embedded/local policy, client DLL behavior and wire format
-are unchanged.
+including TLS. This upstream port preserves upstream's unconditional
+handshake and frame safety timers rather than adding the fork's separate
+daemon-hardening gate. Established DBF inactivity is disabled for every
+network Server by default, including an embedded network listener. True
+LOCAL DBF access is not a network session. Client DLL behavior and wire
+format are unchanged by this idle-policy change.
 
 The daemon still closes unfinished handshakes after 30 seconds, stalled
 partial frames after 30 seconds, and undrained replies after 30 seconds.

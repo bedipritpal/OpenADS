@@ -19,16 +19,15 @@ extern int oads_logging_enabled(void);
 
 static void arc_log_rc(const char* name, unsigned rc, int nargs, ...) {
     static int on = -1;
-    FILE* f; int i; va_list ap;
+    FILE* f;
     if (on < 0) on = getenv("OPENADS_ARC_TRACE") != NULL;
     if (!on) return;
     if (!oads_logging_enabled()) return;   /* OAdsSetLogging(0) kill-switch */
     f = fopen("C:/OpenADS/_arc32/ace_calls.log", "a");
     if (!f) return;
     fprintf(f, "W %s rc=%u args:", name, rc);
-    va_start(ap, nargs);
-    for (i = 0; i < nargs; i++) fprintf(f, " %lx", (unsigned long)va_arg(ap, uintptr_t));
-    va_end(ap);
+    /* Never serialize argument words: pointers and packed scalars may leak. */
+    (void)nargs;
     fputc('\n', f);
     fclose(f);
 }
@@ -1797,6 +1796,18 @@ extern UNSIGNED32 ENTRYPOINT AdsFindNextTable(ADSHANDLE hConnect, ADSHANDLE hFin
 __declspec(dllexport) UNSIGNED32 __stdcall AdsFindNextTable(ADSHANDLE a0, ADSHANDLE a1, UNSIGNED8* a2, UNSIGNED16* a3) {
     UNSIGNED32 rc = oadsimpl_AdsFindNextTable(a0, a1, a2, a3);
     arc_log_rc("AdsFindNextTable", rc, 4, (uintptr_t)a0, (uintptr_t)a1, (uintptr_t)a2, (uintptr_t)a3);
+    return rc;
+}
+
+/* ---- AdsFlushPendingFields ---- */
+#define AdsFlushPendingFields oadsimpl_AdsFlushPendingFields
+extern UNSIGNED32 ENTRYPOINT AdsFlushPendingFields(ADSHANDLE hTable);
+#undef AdsFlushPendingFields
+#pragma comment(linker, "/alternatename:_oadsimpl_AdsFlushPendingFields=_AdsFlushPendingFields")
+#pragma comment(linker, "/export:AdsFlushPendingFields=_AdsFlushPendingFields")
+__declspec(dllexport) UNSIGNED32 __stdcall AdsFlushPendingFields(ADSHANDLE a0) {
+    UNSIGNED32 rc = oadsimpl_AdsFlushPendingFields(a0);
+    arc_log_rc("AdsFlushPendingFields", rc, 1, (uintptr_t)a0);
     return rc;
 }
 
@@ -6049,6 +6060,27 @@ __declspec(dllexport) UNSIGNED32 __stdcall AdsMutexDestroy(ADSHANDLE a0, UNSIGNE
     return rc;
 }
 
+/* Local marker: do not arc-log label pointers or alter database last error. */
+#define OAdsTraceMark oadsimpl_OAdsTraceMark
+extern UNSIGNED32 OAdsTraceMark(const UNSIGNED8*, UNSIGNED32);
+#undef OAdsTraceMark
+#pragma comment(linker, "/alternatename:_oadsimpl_OAdsTraceMark=_OAdsTraceMark")
+#pragma comment(linker, "/export:OAdsTraceMark=_OAdsTraceMark")
+__declspec(dllexport) UNSIGNED32 __stdcall OAdsTraceMark(const UNSIGNED8* label, UNSIGNED32 bytes) {
+    return oadsimpl_OAdsTraceMark(label, bytes);
+}
+
+/* Additive optional-ID bridge, preserving the old two-argument entry. */
+#define OAdsTraceMarkEx oadsimpl_OAdsTraceMarkEx
+extern UNSIGNED32 OAdsTraceMarkEx(const UNSIGNED8*, UNSIGNED32, UNSIGNED64, UNSIGNED64);
+#undef OAdsTraceMarkEx
+#pragma comment(linker, "/alternatename:_oadsimpl_OAdsTraceMarkEx=_OAdsTraceMarkEx")
+#pragma comment(linker, "/export:OAdsTraceMarkEx=_OAdsTraceMarkEx")
+__declspec(dllexport) UNSIGNED32 __stdcall OAdsTraceMarkEx(const UNSIGNED8* label, UNSIGNED32 bytes,
+                                                        UNSIGNED64 instance, UNSIGNED64 app_thread) {
+    return oadsimpl_OAdsTraceMarkEx(label, bytes, instance, app_thread);
+}
+
 /* ---- OAdsSetLogging ---- */
 #define OAdsSetLogging oadsimpl_OAdsSetLogging
 extern UNSIGNED32 OAdsSetLogging(UNSIGNED16 usOn);
@@ -6070,3 +6102,19 @@ extern UNSIGNED32 ENTRYPOINT OAdsGetServerStats(ADSHANDLE, UNSIGNED8*, UNSIGNED3
 __declspec(dllexport) UNSIGNED32 __stdcall OAdsGetServerStats(ADSHANDLE a0, UNSIGNED8* a1, UNSIGNED32* a2) {
     return oadsimpl_OAdsGetServerStats(a0, a1, a2);
 }
+
+/* Exact-vf additive transport ABI. */
+#define AdsVfRequest oadsimpl_AdsVfRequest
+extern UNSIGNED32 ENTRYPOINT AdsVfRequest(ADSHANDLE,const void*,UNSIGNED32,void**,UNSIGNED32*);
+#undef AdsVfRequest
+#pragma comment(linker, "/alternatename:_oadsimpl_AdsVfRequest=_AdsVfRequest")
+#pragma comment(linker, "/export:AdsVfRequest=_AdsVfRequest")
+__declspec(dllexport) UNSIGNED32 __stdcall AdsVfRequest(ADSHANDLE a,const void* b,UNSIGNED32 c,void** d,UNSIGNED32* e) {
+    return oadsimpl_AdsVfRequest(a,b,c,d,e);
+}
+#define AdsVfFree oadsimpl_AdsVfFree
+extern void ENTRYPOINT AdsVfFree(void*);
+#undef AdsVfFree
+#pragma comment(linker, "/alternatename:_oadsimpl_AdsVfFree=_AdsVfFree")
+#pragma comment(linker, "/export:AdsVfFree=_AdsVfFree")
+__declspec(dllexport) void __stdcall AdsVfFree(void* p) { oadsimpl_AdsVfFree(p); }

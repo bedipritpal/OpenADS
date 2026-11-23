@@ -37,15 +37,15 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: faf4a039a46f9a3523ee02472d646c315992ec4b
+        ref: 72bb1f65938bc13071fd79897784626e006fd7c3
         fetch-depth: 1
         persist-credentials: false
     - name: Require exact reviewed source
       shell: bash
       run: |
         set -euo pipefail
-        test "$(git rev-parse HEAD)" = "faf4a039a46f9a3523ee02472d646c315992ec4b"
-        test "$(git rev-parse HEAD^{tree})" = "4a258732d02e8de1b3d88fe700768432c3697f94"
+        test "$(git rev-parse HEAD)" = "72bb1f65938bc13071fd79897784626e006fd7c3"
+        test "$(git rev-parse HEAD^{tree})" = "cf9cf70603f32bb23601aeef25a1875881c35d8e"
     - name: Native Windows synthetic packaging regression
       if: runner.os == 'Windows'
       shell: pwsh
@@ -300,7 +300,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        printf "%s\n" "source=faf4a039a46f9a3523ee02472d646c315992ec4b" "tree=4a258732d02e8de1b3d88fe700768432c3697f94" "test-only; no release approval; no redistribution clearance" > out/SOURCE.txt
+        printf "%s\n" "source=72bb1f65938bc13071fd79897784626e006fd7c3" "tree=cf9cf70603f32bb23601aeef25a1875881c35d8e" "test-only; no release approval; no redistribution clearance" > out/SOURCE.txt
         (cd out && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
     - uses: actions/upload-artifact@v4
       with:
@@ -316,7 +316,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: faf4a039a46f9a3523ee02472d646c315992ec4b
+        ref: 72bb1f65938bc13071fd79897784626e006fd7c3
         persist-credentials: false
     - uses: actions/download-artifact@v4
       with:

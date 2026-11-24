@@ -19,6 +19,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -433,13 +434,26 @@ util::Result<void> Table::ensure_writable_() {
     // unrestricted access by definition.
     if (mode_ == OpenMode::Shared && !is_table_locked()) {
         if (recno_locks_.find(recno_) == recno_locks_.end()) {
-            // SAP ACE reference (OADS-CR-001 E06, ace32 column): a
-            // shared-mode write to an unlocked current record takes the
-            // record lock IMPLICITLY and keeps it held — AdsGetAllLocks
-            // lists the recno afterwards — instead of failing. (Harbour
-            // DBFCDX errors 1022 here; ACE-compat wins for this engine.)
-            // A failed acquire means a peer holds the record: surface
-            // the lock conflict, not "not locked".
+            // OADS-CR-001 E06 is SWITCHABLE (default OFF = historical
+            // OpenADS/DBFCDX behaviour, Pritpal's rule that ADSCDX must
+            // match Harbour DBFCDX until a divergence is proven and
+            // reviewed). Set OPENADS_E06_IMPLICIT_WRITE_LOCK=1 in the
+            // process that owns the table (the server for remote tables)
+            // to test the SAP ace32 column: a shared-mode write to an
+            // unlocked current record takes the record lock IMPLICITLY
+            // and keeps it held — AdsGetAllLocks lists the recno
+            // afterwards — instead of failing. (Harbour DBFCDX errors
+            // 1022 there.) A failed acquire means a peer holds the
+            // record: surface the lock conflict, not "not locked".
+            static const bool e06_implicit = [] {
+                const char* v = std::getenv("OPENADS_E06_IMPLICIT_WRITE_LOCK");
+                return v && *v && std::strcmp(v, "0") != 0;
+            }();
+            if (!e06_implicit) {
+                return util::Error{5035, 0,
+                    "write failed — record not locked (RLock or FLock required "
+                    "in shared mode)", ""};
+            }
             auto h = locks_.try_lock_record_excl(driver_->file(),
                                                  to_lock_type_(), locking_,
                                                  recno_);

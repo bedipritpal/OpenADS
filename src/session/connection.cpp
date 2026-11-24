@@ -423,16 +423,25 @@ std::string Connection::resolve_table_file(const std::string& relative_path,
             rel = rel.relative_path();
         }
     }
-    // OADS-CR-001 E17 (SAP ace32 column): on a local free-table
-    // connection a RELATIVE name resolves against the process current
-    // directory, not the connection path (AdsConnect("data") then
+    // OADS-CR-001 E17 is SWITCHABLE (default OFF = historical
+    // fold-onto-connection-path behaviour; the unit suite and the
+    // rddads local flows depend on it). Set
+    // OPENADS_E17_CWD_RELATIVE_NAMES=1 in the client process to test
+    // the SAP ace32 column: on a local free-table connection a
+    // RELATIVE name resolves against the process current directory,
+    // not the connection path (AdsConnect("data") then
     // dbCreate("data/rel") creates .\data\rel.dbf). Gated on existence
     // so connection-path consumers keep working: an open only takes the
     // CWD spelling when the file is actually there (SQL FROM <alias> and
     // internal reopens name files that live under data_dir_ and miss at
     // the CWD), and a create only when its parent directory exists
     // (otherwise the historical fold-and-fail behaviour is unchanged).
-    if (!remote_server_ && !dd_.has_value() && !legacy_paths_ &&
+    static const bool e17_cwd_relative = [] {
+        const char* v = std::getenv("OPENADS_E17_CWD_RELATIVE_NAMES");
+        return v && *v && std::strcmp(v, "0") != 0;
+    }();
+    if (e17_cwd_relative &&
+        !remote_server_ && !dd_.has_value() && !legacy_paths_ &&
         rel.is_relative() && !rel.has_root_directory()) {
         std::error_code cec;
         fs::path cwd_joined = fs::current_path(cec) / rel;

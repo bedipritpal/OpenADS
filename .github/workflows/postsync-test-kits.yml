@@ -147,7 +147,8 @@ jobs:
         test "$(git -C "$SRC" rev-parse HEAD)" = "$HARBOUR_REF"
         git -C "$SRC" apply --check "$PWD/patches/harbour/rddads-pending-fields.patch"
         git -C "$SRC" apply "$PWD/patches/harbour/rddads-pending-fields.patch"
-        export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_BUILD_3RDEXT=no
+        export HB_PLATFORM=win HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_BUILD_3RDEXT=no
+        if [ '${{ matrix.arch }}' = x64 ]; then export HB_COMPILER=mingw64; else export HB_COMPILER=mingw; fi
         if command -v mingw32-make >/dev/null 2>&1; then HB_MAKE=mingw32-make; else HB_MAKE=make; fi
         "$HB_MAKE" -C "$SRC" -j"$(nproc)"
     - name: Assemble librddads.a for the x86 client kit
@@ -178,9 +179,9 @@ jobs:
               -DOPENADS_WITH_HTTP=OFF \
               -DOPENADS_WITH_TLS=ON \
               -DOPENADS_WITH_HARBOUR_UDF=ON \
-              -DHARBOUR_COMPILER="$SRC/bin/win/mingw/harbour.exe" \
+              -DHARBOUR_COMPILER="$SRC/bin/win/mingw64/harbour.exe" \
               -DHARBOUR_INCLUDE_DIR="$SRC/include" \
-              -DHARBOUR_LIB_DIR="$SRC/lib/win/mingw" \
+              -DHARBOUR_LIB_DIR="$SRC/lib/win/mingw64" \
               -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
               -DOPENADS_VERSION_FORCE="${{ steps.tag.outputs.version }}" \
               -DOPENADS_WARNINGS_AS_ERRORS=OFF

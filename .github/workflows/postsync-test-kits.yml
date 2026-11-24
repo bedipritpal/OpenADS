@@ -27,15 +27,15 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 72bb1f65938bc13071fd79897784626e006fd7c3
+        ref: 6925defcdb2c8495e272a470b0e72a51d8ddce64
         fetch-depth: 1
         persist-credentials: false
     - name: Require exact reviewed source
       shell: bash
       run: |
         set -euo pipefail
-        test "$(git rev-parse HEAD)" = "72bb1f65938bc13071fd79897784626e006fd7c3"
-        test "$(git rev-parse HEAD^{tree})" = "cf9cf70603f32bb23601aeef25a1875881c35d8e"
+        test "$(git rev-parse HEAD)" = "6925defcdb2c8495e272a470b0e72a51d8ddce64"
+        test "$(git rev-parse HEAD^{tree})" = "b4ba788e1adddbd4cb369465650c238a48de8402"
     - name: Native Windows synthetic packaging regression
       if: runner.os == 'Windows'
       shell: pwsh
@@ -240,15 +240,15 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 72bb1f65938bc13071fd79897784626e006fd7c3
+        ref: 6925defcdb2c8495e272a470b0e72a51d8ddce64
         fetch-depth: 1
         persist-credentials: false
     - name: Require exact reviewed source
       shell: bash
       run: |
         set -euo pipefail
-        test "$(git rev-parse HEAD)" = "72bb1f65938bc13071fd79897784626e006fd7c3"
-        test "$(git rev-parse HEAD^{tree})" = "cf9cf70603f32bb23601aeef25a1875881c35d8e"
+        test "$(git rev-parse HEAD)" = "6925defcdb2c8495e272a470b0e72a51d8ddce64"
+        test "$(git rev-parse HEAD^{tree})" = "b4ba788e1adddbd4cb369465650c238a48de8402"
     - name: Native Windows synthetic packaging regression
       if: runner.os == 'Windows'
       shell: pwsh
@@ -504,7 +504,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        printf "%s\n" "source=72bb1f65938bc13071fd79897784626e006fd7c3" "tree=cf9cf70603f32bb23601aeef25a1875881c35d8e" "test-only; no release approval; no redistribution clearance" > out/SOURCE.txt
+        printf "%s\n" "source=6925defcdb2c8495e272a470b0e72a51d8ddce64" "tree=b4ba788e1adddbd4cb369465650c238a48de8402" "test-only; no release approval; no redistribution clearance" > out/SOURCE.txt
         (cd out && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
     - uses: actions/upload-artifact@v4
       with:
@@ -520,7 +520,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 72bb1f65938bc13071fd79897784626e006fd7c3
+        ref: 6925defcdb2c8495e272a470b0e72a51d8ddce64
         persist-credentials: false
     - uses: actions/download-artifact@v4
       with:

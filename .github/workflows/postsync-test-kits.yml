@@ -481,7 +481,7 @@ jobs:
                 assert manifest['profile'] == 'matching', 'Unexpected release static profile'
                 assert manifest['archive_sha256'] == hashlib.sha256(byname[f'libopenace{bits}.a']).hexdigest(), 'Static archive hash mismatch'
                 for name, digest in manifest['runtime_notice_sha256'].items():
-                    assert any(n.endswith('/runtime-notices/' + name) and hashlib.sha256(data).hexdigest() == digest for n, data in files.items()), f'Missing or mismatched runtime notice {name}'
+                    assert any((n == 'runtime-notices/' + name or n.endswith('/runtime-notices/' + name)) and hashlib.sha256(data).hexdigest() == digest for n, data in files.items()), f'Missing or mismatched runtime notice {name}'
                 assert len(manifest['runtime_notice_sha256']) == 4, 'Missing runtime notices'
                 binary = byname['openads_serverd.exe']
             else:

@@ -341,8 +341,8 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        printf "%s\n" "source=${GITHUB_SHA}" "conformance test kit 1.09.77-conf1 (E01-E17 from parent main; E06/E14/E17 env-switchable; f1 auth fixes); artifacts only, not a release" > out/SOURCE.txt
-        (cd out && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
+        printf "%s\n" "source=${GITHUB_SHA}" "conformance test kit 1.09.77-conf1 (E01-E17 from parent main; E05/E06/E07/E08/E14/E15/E17 env-switchable, default historical/DBFCDX; f1 auth fixes); artifacts only, not a release" > out/SOURCE.txt
+        (cd out && sha256sum $(ls *.zip *.tar.gz 2>/dev/null) > SHA256SUMS.txt)
     - uses: actions/upload-artifact@v4
       with:
         name: conf-test-verified

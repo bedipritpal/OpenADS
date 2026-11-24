@@ -108,8 +108,8 @@ jobs:
         msystem: ${{ matrix.arch == 'x64' && 'MINGW64' || 'MINGW32' }}
         release: false
         update: false
-        install: ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-make' || 'mingw-w64-i686-toolchain
-          mingw-w64-i686-cmake mingw-w64-i686-make' }} python git make
+        install: ${{ matrix.arch == 'x64' && 'mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake' || 'mingw-w64-i686-toolchain
+          mingw-w64-i686-cmake' }} python git make
     - name: Build static ACE library (MinGW)
       if: runner.os == 'Windows'
       shell: msys2 {0}
@@ -148,7 +148,8 @@ jobs:
         git -C "$SRC" apply --check "$PWD/patches/harbour/rddads-pending-fields.patch"
         git -C "$SRC" apply "$PWD/patches/harbour/rddads-pending-fields.patch"
         export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_BUILD_3RDEXT=no
-        mingw32-make -C "$SRC" -j"$(nproc)"
+        if command -v mingw32-make >/dev/null 2>&1; then HB_MAKE=mingw32-make; else HB_MAKE=make; fi
+        "$HB_MAKE" -C "$SRC" -j"$(nproc)"
     - name: Assemble librddads.a for the x86 client kit
       if: runner.os == 'Windows' && matrix.arch == 'x86'
       shell: msys2 {0}

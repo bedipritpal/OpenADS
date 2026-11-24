@@ -141,7 +141,7 @@ jobs:
       run: |
         set -euo pipefail
         for f in build/default/tools/serverd/openads_serverd build/default/tools/bench/openads_bench build/default/src/libopenace64.dylib; do
-          lipo -verify_arch arm64 x86_64 "$f"
+          lipo "$f" -verify_arch arm64 x86_64
         done
     - name: Stage release files (POSIX)
       if: success() && runner.os != 'Windows'
@@ -354,7 +354,7 @@ jobs:
       run: |
         set -euo pipefail
         for f in build/default/tools/serverd/openads_serverd build/default/tools/bench/openads_bench build/default/src/libopenace64.dylib; do
-          lipo -verify_arch arm64 x86_64 "$f"
+          lipo "$f" -verify_arch arm64 x86_64
         done
     - name: Stage release files (POSIX)
       if: success() && runner.os != 'Windows'

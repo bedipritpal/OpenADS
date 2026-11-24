@@ -37,15 +37,15 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: a417a6fd3abf8473ef70859c3b4a6e9a50e3065c
+        ref: e59aee22bc0444f747468f31e935c1f5be581eeb
         fetch-depth: 1
         persist-credentials: false
     - name: Require exact reviewed source
       shell: bash
       run: |
         set -euo pipefail
-        test "$(git rev-parse HEAD)" = "a417a6fd3abf8473ef70859c3b4a6e9a50e3065c"
-        test "$(git rev-parse HEAD^{tree})" = "37f375332767566cbeed87e11f5afc7c61eeec3b"
+        test "$(git rev-parse HEAD)" = "e59aee22bc0444f747468f31e935c1f5be581eeb"
+        test "$(git rev-parse HEAD^{tree})" = "c0af80fe9185f3d24ed4bd38d86874d0d181f237"
     - name: Native Windows synthetic packaging regression
       if: runner.os == 'Windows'
       shell: pwsh
@@ -361,7 +361,7 @@ jobs:
       shell: bash
       run: |
         set -euo pipefail
-        printf "%s\n" "source=a417a6fd3abf8473ef70859c3b4a6e9a50e3065c" "tree=37f375332767566cbeed87e11f5afc7c61eeec3b" "release 1.09.76 kits; publication authorized by owner 2026-11-23" > out/SOURCE.txt
+        printf "%s\n" "source=e59aee22bc0444f747468f31e935c1f5be581eeb" "tree=c0af80fe9185f3d24ed4bd38d86874d0d181f237" "release 1.09.76 kits; publication authorized by owner 2026-11-23" > out/SOURCE.txt
         (cd out && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
     - uses: actions/upload-artifact@v4
       with:
@@ -377,7 +377,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: a417a6fd3abf8473ef70859c3b4a6e9a50e3065c
+        ref: e59aee22bc0444f747468f31e935c1f5be581eeb
         persist-credentials: false
     - uses: actions/download-artifact@v4
       with:

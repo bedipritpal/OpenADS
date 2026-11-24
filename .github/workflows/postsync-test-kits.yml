@@ -330,16 +330,16 @@ jobs:
                 assert manifest['profile'] == 'matching', 'Unexpected release static profile'
                 assert manifest['archive_sha256'] == hashlib.sha256(byname[f'libopenace{bits}.a']).hexdigest(), 'Static archive hash mismatch'
                 for name, digest in manifest['runtime_notice_sha256'].items():
-                    assert any(n.endswith('/runtime-notices/' + name) and hashlib.sha256(data).hexdigest() == digest for n, data in files.items()), f'Missing or mismatched runtime notice {name}'
+                    assert any((n == 'runtime-notices/' + name or n.endswith('/runtime-notices/' + name)) and hashlib.sha256(data).hexdigest() == digest for n, data in files.items()), f'Missing or mismatched runtime notice {name}'
                 assert len(manifest['runtime_notice_sha256']) == 4, 'Missing runtime notices'
-                root_bins = [n for n in files if n.endswith('/openads_serverd.exe') and '/auth/' not in n]
+                root_bins = [n for n in files if (n == 'openads_serverd.exe' or n.endswith('/openads_serverd.exe')) and not (n.startswith('auth/') or '/auth/' in n)]
                 assert len(root_bins) == 1, 'Root serverd missing or ambiguous'
                 binary = files[root_bins[0]]
                 if bits == '32':
                     assert 'librddads.a' in byname and byname['librddads.a'], 'librddads.a missing from x86 kit'
                 else:
-                    auth_srv = [n for n in files if n.endswith('/auth/openads_serverd.exe')]
-                    auth_wrk = [n for n in files if n.endswith('/auth/openads_auth_worker.exe')]
+                    auth_srv = [n for n in files if n == 'auth/openads_serverd.exe' or n.endswith('/auth/openads_serverd.exe')]
+                    auth_wrk = [n for n in files if n == 'auth/openads_auth_worker.exe' or n.endswith('/auth/openads_auth_worker.exe')]
                     assert auth_srv and auth_wrk, 'auth serverd/worker missing from x64 kit'
                     assert version.encode() in files[auth_srv[0]], 'auth serverd version stamp absent'
 
@@ -351,8 +351,8 @@ jobs:
             for name in required:
                 assert name in byname and byname[name], f'{path}: missing/empty {name}'
             for header in ['ace','error','openads_sql','platform','version']:
-                assert any(n.endswith(f'include/openads/{header}.h') for n in files), f'Missing header {header}'
-            assert any(n.endswith('include/ace.h') and data for n, data in files.items()), 'Missing include/ace.h'
+                assert any(n == f'include/openads/{header}.h' or n.endswith(f'include/openads/{header}.h') for n in files), f'Missing header {header}'
+            assert any((n == 'include/ace.h' or n.endswith('include/ace.h')) and data for n, data in files.items()), 'Missing include/ace.h'
             assert version.encode() in binary, f'{path}: server version stamp absent'
             assert version.encode() in byname[('openace'+bits+'.dll') if windows else ('libopenace64.'+ext)], f'{path}: ACE version stamp absent'
             if '-macos-' in path.name:

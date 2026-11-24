@@ -16135,11 +16135,18 @@ UNSIGNED32 ENTRYPOINT AdsLockTable(ADSHANDLE hTable) {
     Table* t = get_table(hTable);
     if (!t) return fail(openads::AE_INTERNAL_ERROR, "unknown table");
     return lock_with_retry([t]() {
-        const auto held = t->held_record_locks();   // FLock releases them (SAP ace32)
+        const auto held = t->held_record_locks();
         auto r = t->try_lock_table_excl();
         if (r) {
             auto& reg = openads::mgmt::LockRegistry::instance();
-            for (std::uint32_t lrec : held) reg.remove_record_lock(t, lrec);
+            // E08 (OPENADS_E08_FLOCK_RELEASES=1, default OFF): drop the
+            // caller's record-lock registry entries too (SAP ace32).
+            static const bool e08_flock_releases = [] {
+                const char* v = std::getenv("OPENADS_E08_FLOCK_RELEASES");
+                return v && *v && std::strcmp(v, "0") != 0;
+            }();
+            if (e08_flock_releases)
+                for (std::uint32_t lrec : held) reg.remove_record_lock(t, lrec);
             reg.add_table_lock(t, t->path());
         }
         return r;
@@ -22201,11 +22208,19 @@ static UNSIGNED32 ads_seek_local(ADSHANDLE hIndex,
     auto r = t->seek_key(key, soft, find_last);
     if (!r) return fail(r.error());
     bool found = r.value();
-    // SAP-ACE: the AdsSeek OUT param for a SOFT seek reports "positioned on
-    // a record", not "exact key hit" (AdsIsFound keeps the exact flag).
-    // rddads' seek-last retry chain (soft AdsSeek + AdsSkip(-1) after a
-    // hard AdsSeekLast miss) only runs when this reports positioned.
-    if (soft && !found && t->positioned()) found = true;
+    // OADS-CR-001 E05 is SWITCHABLE (default OFF = DBFCDX behaviour: the
+    // AdsSeek OUT param keeps the exact-match flag, so a soft landing on
+    // a neighbour reports found=FALSE). Set OPENADS_E05_SOFTSEEK_FOUND=1
+    // in the client process to test the SAP ace32 column: the OUT param
+    // for a SOFT seek reports "positioned on a record" instead
+    // (AdsIsFound keeps the exact flag; rddads' seek-last retry chain
+    // only runs when this reports positioned).
+    static const bool e05_softseek_found = [] {
+        const char* v = std::getenv("OPENADS_E05_SOFTSEEK_FOUND");
+        return v && *v && std::strcmp(v, "0") != 0;
+    }();
+    if (e05_softseek_found && soft && !found && t->positioned())
+        found = true;
     if (pbFound != nullptr) *pbFound = found ? 1 : 0;
     snapshot_ri_pks(t);
     apply_relations_for_table(t);

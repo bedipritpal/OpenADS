@@ -1169,14 +1169,23 @@ util::Result<void> Table::skip(std::int32_t delta) {
         n = driver_->record_count();
     }
     if (n == 0) {
-        // Skip on empty (OADS-CR-001 E15, ace32 column): SAP ACE keeps the
-        // BOF+EOF phantom for every delta — Skip(1), Skip(-1) and Skip(0)
-        // all leave AdsAtBOF and AdsAtEOF true. Preserve Limbo at the ACE
-        // API. Harbour's rddads never reaches this call on an empty table
-        // (its not-positioned branch forces the single direction flag
-        // client-side, matching dbf1.c for rddtst), so the Harbour RDD
-        // layer keeps DBFCDX semantics — see docs/en/rddads-compat.md.
-        state_ = State::Limbo;
+        // OADS-CR-001 E15 is SWITCHABLE (default OFF = historical
+        // behaviour: skip+1 on empty lands Eof-only, skip-1 lands
+        // Bof-only, skip 0 preserves state). Set
+        // OPENADS_E15_SKIP_EMPTY_PHANTOM=1 in the owning process to test
+        // the SAP ace32 column: skip on empty keeps the BOF+EOF phantom
+        // for every delta. Harbour's rddads never reaches this call on an
+        // empty table (its not-positioned branch forces the single
+        // direction flag client-side, matching dbf1.c for rddtst), so the
+        // Harbour RDD layer keeps DBFCDX semantics either way — see
+        // docs/en/rddads-compat.md.
+        static const bool e15_keep_phantom = [] {
+            const char* v = std::getenv("OPENADS_E15_SKIP_EMPTY_PHANTOM");
+            return v && *v && std::strcmp(v, "0") != 0;
+        }();
+        if (e15_keep_phantom) state_ = State::Limbo;
+        else if (delta > 0) state_ = State::Eof;
+        else if (delta < 0) state_ = State::Bof;
         recno_ = 0; return {};
     }
     // Rows the cursor must not land on: deleted rows when SET DELETED
@@ -2102,11 +2111,18 @@ util::Result<void> Table::try_lock_record_excl(std::uint32_t recno) {
         return load_record_(recno);
     if (owner_ && owner_->remote_server() && recno_locks_.size() >= 4096)
         return util::Error{openads::AE_ACCESS_DENIED, 0, "remote table record-lock limit", path_};
-    // Locking a record other than the current one must NOT move the
-    // record pointer: SAP ACE leaves the cursor where it was (dbRLock(n)
-    // keeps RecNo() unchanged). Only a lock of the current record reloads
-    // it (dirty-buffer flush / refresh).
-    const bool cur = (recno == recno_);
+    // OADS-CR-001 E07 is SWITCHABLE (default OFF = historical behaviour:
+    // a successful lock reloads the record, which also refreshes stale
+    // read-ahead copies - the mtfix39 guarantee). Set
+    // OPENADS_E07_LOCK_KEEP_CURSOR=1 in the owning process to test the
+    // SAP ace32 column: locking a record other than the current one does
+    // NOT move the record pointer; only a lock of the current record
+    // reloads it (dirty-buffer flush / refresh).
+    static const bool e07_keep_cursor = [] {
+        const char* v = std::getenv("OPENADS_E07_LOCK_KEEP_CURSOR");
+        return v && *v && std::strcmp(v, "0") != 0;
+    }();
+    const bool cur = !e07_keep_cursor || (recno == recno_);
     if (table_lock_) {
         recno_locks_.emplace(recno, LockHandle{});
         return cur ? load_record_(recno) : util::Result<void>{};
@@ -2182,13 +2198,20 @@ util::Result<void> Table::lock_table_excl() {
         return h.error();
     }
     table_lock_ = std::move(h).value();
-    // SAP ACE reference (comparison report OADS-CR-001, ace32 column): a
-    // successful FLock RELEASES the caller's own record locks outright —
-    // dbRLockList() is empty after it; the locks are NOT restored by a
-    // later UnlockTable. The OS bytes were already freed by
+    // OADS-CR-001 E08 is SWITCHABLE (default OFF = historical behaviour:
+    // the caller's record locks stay registered across a successful FLock
+    // and are re-asserted after UnlockTable). Set
+    // OPENADS_E08_FLOCK_RELEASES=1 in the owning process to test the SAP
+    // ace32 column: a successful FLock RELEASES the caller's own record
+    // locks outright — dbRLockList() is empty after it; the locks are NOT
+    // restored by a later UnlockTable. The OS bytes were already freed by
     // suspend_own_record_locks_() above; drop the registrations too.
     // (Only the FLock FAILURE path re-asserts them.)
-    recno_locks_.clear();
+    static const bool e08_flock_releases = [] {
+        const char* v = std::getenv("OPENADS_E08_FLOCK_RELEASES");
+        return v && *v && std::strcmp(v, "0") != 0;
+    }();
+    if (e08_flock_releases) recno_locks_.clear();
     return {};
 }
 
@@ -2229,13 +2252,20 @@ util::Result<void> Table::try_lock_table_excl() {
         return h.error();
     }
     table_lock_ = std::move(h).value();
-    // SAP ACE reference (comparison report OADS-CR-001, ace32 column): a
-    // successful FLock RELEASES the caller's own record locks outright —
-    // dbRLockList() is empty after it; the locks are NOT restored by a
-    // later UnlockTable. The OS bytes were already freed by
+    // OADS-CR-001 E08 is SWITCHABLE (default OFF = historical behaviour:
+    // the caller's record locks stay registered across a successful FLock
+    // and are re-asserted after UnlockTable). Set
+    // OPENADS_E08_FLOCK_RELEASES=1 in the owning process to test the SAP
+    // ace32 column: a successful FLock RELEASES the caller's own record
+    // locks outright — dbRLockList() is empty after it; the locks are NOT
+    // restored by a later UnlockTable. The OS bytes were already freed by
     // suspend_own_record_locks_() above; drop the registrations too.
     // (Only the FLock FAILURE path re-asserts them.)
-    recno_locks_.clear();
+    static const bool e08_flock_releases = [] {
+        const char* v = std::getenv("OPENADS_E08_FLOCK_RELEASES");
+        return v && *v && std::strcmp(v, "0") != 0;
+    }();
+    if (e08_flock_releases) recno_locks_.clear();
     return {};
 }
 

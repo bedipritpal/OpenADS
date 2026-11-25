@@ -1,7 +1,11 @@
 # Credit: Pritpal Bedi
 # One-off repack: real 1.09.76 Windows build files (x86 client kit + x64
-# server kit, binaries untouched) combined into a single downloadable zip
-# attached to release-1.09.76. Requested by Pritpal Bedi 2026-11-25.
+# server kit, binaries untouched) combined into ONE zip with a single
+# top-level folder holding 32- and 64-bit files together, attached to
+# release-1.09.76. Requested by Pritpal Bedi 2026-11-25; layout corrected
+# same day per his message: only one folder, 32 and 64 bit files together.
+# Colliding binaries are tagged _32/_64 (his openads_serverd_32/64 pattern);
+# the 64-bit auth pair keeps its names (serverd spawns the worker by name).
 name: Repack 1.09.76 Windows kits into one client+server zip
 'on':
   workflow_dispatch: {}
@@ -33,18 +37,30 @@ jobs:
         grep -q "$X86" SHA256SUMS.txt ALL-ASSET-SHA256SUMS.txt
         grep -q "$X64" SHA256SUMS.txt ALL-ASSET-SHA256SUMS.txt
         echo 'both kits match the release checksums - binaries untouched'
-    - name: Repack into one client+server zip
+    - name: Repack into one folder with 32 and 64 bit files together
       run: |
         set -euo pipefail
-        mkdir -p pack/openads-1.09.76-windows-x86 pack/openads-1.09.76-windows-x64
-        unzip -q x86.zip -d pack/openads-1.09.76-windows-x86
-        unzip -q x64.zip -d pack/openads-1.09.76-windows-x64
-        (cd pack && zip -q -r ../openads-1.09.76-windows-client-server.zip .)
+        mkdir -p x86 x64 stage/openads-1.09.76-windows
+        unzip -q x86.zip -d x86
+        unzip -q x64.zip -d x64
+        STAGE=stage/openads-1.09.76-windows
+        # x64 tree first (adds the 64-bit auth pair), excluding the two
+        # colliding ROOT binaries (auth/openads_serverd.exe must stay)
+        (cd x64 && find . -type f ! -path './openads_serverd.exe' ! -path './openads_bench.exe' -exec cp --parents {} ../$STAGE/ \;)
+        # x86-only files (paths already staged are byte-identical shared docs)
+        (cd x86 && find . -type f ! -path './openads_serverd.exe' ! -path './openads_bench.exe' | while read -r f; do [ -f "../$STAGE/$f" ] || cp --parents "$f" ../$STAGE/; done)
+        # colliding binaries tagged _32/_64 (openads_serverd_32/64 pattern)
+        cp x86/openads_serverd.exe $STAGE/openads_serverd_32.exe
+        cp x64/openads_serverd.exe $STAGE/openads_serverd_64.exe
+        cp x86/openads_bench.exe   $STAGE/openads_bench_32.exe
+        cp x64/openads_bench.exe   $STAGE/openads_bench_64.exe
+        (cd stage && zip -q -r -X ../openads-1.09.76-windows-client-server.zip openads-1.09.76-windows)
         ls -la openads-1.09.76-windows-client-server.zip
         echo '--- combined sha256:'
         sha256sum openads-1.09.76-windows-client-server.zip
-        echo '--- file list:'
-        (cd pack && find . -type f | sort)
+        echo '--- file list (expect 50 files):'
+        (cd stage && find . -type f | sort)
+        test "$(cd stage && find . -type f | wc -l)" = 50
     - name: Attach the combined zip to release-1.09.76
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

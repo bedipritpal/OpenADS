@@ -1,0 +1,63 @@
+# Credit: Pritpal Bedi
+# One-off repack: real 1.09.76 Windows build files (x86 client kit + x64
+# server kit, binaries untouched) combined into a single downloadable zip
+# attached to release-1.09.76. Requested by Pritpal Bedi 2026-11-25.
+name: Repack 1.09.76 Windows kits into one client+server zip
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  repack:
+    name: Download, verify, repack, upload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - name: Download the real 1.09.76 Windows kits and the release checksums
+      run: |
+        set -euo pipefail
+        B=https://github.com/bedipritpal/OpenADS/releases/download/release-1.09.76
+        curl -fL -o x86.zip "$B/openads-1.09.76-windows-x86.zip"
+        curl -fL -o x64.zip "$B/openads-1.09.76-windows-x64.zip"
+        curl -fL -o SHA256SUMS.txt "$B/SHA256SUMS.txt"
+        curl -fL -o ALL-ASSET-SHA256SUMS.txt "$B/ALL-ASSET-SHA256SUMS.txt"
+        echo '--- SHA256SUMS.txt'; cat SHA256SUMS.txt
+        echo '--- ALL-ASSET-SHA256SUMS.txt'; cat ALL-ASSET-SHA256SUMS.txt
+    - name: Verify downloaded kits against the release's own published checksums
+      run: |
+        set -euo pipefail
+        X86=$(sha256sum x86.zip | cut -d' ' -f1)
+        X64=$(sha256sum x64.zip | cut -d' ' -f1)
+        echo "downloaded x86: $X86"
+        echo "downloaded x64: $X64"
+        grep -q "$X86" SHA256SUMS.txt ALL-ASSET-SHA256SUMS.txt
+        grep -q "$X64" SHA256SUMS.txt ALL-ASSET-SHA256SUMS.txt
+        echo 'both kits match the release checksums - binaries untouched'
+    - name: Repack into one client+server zip
+      run: |
+        set -euo pipefail
+        mkdir -p pack/openads-1.09.76-windows-x86 pack/openads-1.09.76-windows-x64
+        unzip -q x86.zip -d pack/openads-1.09.76-windows-x86
+        unzip -q x64.zip -d pack/openads-1.09.76-windows-x64
+        (cd pack && zip -q -r ../openads-1.09.76-windows-client-server.zip .)
+        ls -la openads-1.09.76-windows-client-server.zip
+        echo '--- combined sha256:'
+        sha256sum openads-1.09.76-windows-client-server.zip
+        echo '--- file list:'
+        (cd pack && find . -type f | sort)
+    - name: Attach the combined zip to release-1.09.76
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        gh release upload release-1.09.76 openads-1.09.76-windows-client-server.zip --repo bedipritpal/OpenADS --clobber
+    - name: Verify the uploaded asset downloads byte-identical
+      run: |
+        set -euo pipefail
+        sleep 5
+        curl -fL -o check.zip https://github.com/bedipritpal/OpenADS/releases/download/release-1.09.76/openads-1.09.76-windows-client-server.zip
+        A=$(sha256sum openads-1.09.76-windows-client-server.zip | cut -d' ' -f1)
+        B=$(sha256sum check.zip | cut -d' ' -f1)
+        echo "uploaded: $A"; echo "served:   $B"
+        test "$A" = "$B"
+        echo 'ASSET VERIFIED'

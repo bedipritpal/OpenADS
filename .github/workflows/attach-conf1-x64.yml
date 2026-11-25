@@ -1,0 +1,35 @@
+name: Attach conf1 x64 kit to test pre-release
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  attach:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: conf-test-Windows-x64
+        run-id: 45564923529
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - name: Verify checksum and attach to the pre-release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euxo pipefail
+        ls -la
+        echo 'd6dd3ada1089876b682231e2a03dc7f63ec9a9368074a4539f86d3e799c1b2ee  openads-1.09.77-conf1-windows-x64.zip' | sha256sum -c -
+        cat > RELEASE_NOTES.md <<'NOTES'
+        Conformance test kit for Pritpal's Vouch stock-update test. x86 MinGW client files (ace32.dll/openace32.dll, libace32.a, librddads.a) plus headers, import libs, serverd and bench. Now with the x64 kit attached too: openads-1.09.77-conf1-windows-x64.zip (serverd, the auth pair under auth/, bench, ace64/openace64 client DLLs and import libs, static engine archive).
+
+        Contains all 16 conformance commits E01-E17 from parent main c2ce79b plus the two f1 auth fixes. The seven SAP-divergent behaviors default OFF (historical/DBFCDX) and each is enabled by an env var set to 1: OPENADS_E05_SOFTSEEK_FOUND, OPENADS_E06_IMPLICIT_WRITE_LOCK, OPENADS_E07_LOCK_KEEP_CURSOR, OPENADS_E08_FLOCK_RELEASES, OPENADS_E14_KEYCOUNT_INCLUDE_DELETED, OPENADS_E15_SKIP_EMPTY_PHANTOM, OPENADS_E17_CWD_RELATIVE_NAMES.
+
+        Auth note (x64): run the auth pair from the auth/ folder. openads_serverd.exe spawns openads_auth_worker.exe by its literal file name, so keep both files together with their original names.
+
+        sha256 of openads-1.09.77-conf1-windows-x86.zip: 004f56e7b9aa2b552a5bf2881e8a1e8b717a11e0e393fa59ba788d1cc5033872 (matches the CI verification line). sha256 of openads-1.09.77-conf1-windows-x64.zip: d6dd3ada1089876b682231e2a03dc7f63ec9a9368074a4539f86d3e799c1b2ee (from verified run 45564923529, source 85fea1b; matches its SHA256SUMS.txt). Test artifacts only, not a release.
+        NOTES
+        gh release upload test-1.09.77-conf1 openads-1.09.77-conf1-windows-x64.zip --repo bedipritpal/OpenADS --clobber
+        gh release edit test-1.09.77-conf1 --repo bedipritpal/OpenADS --title 'Conformance TEST kit 1.09.77-conf1 (x86 + x64)' --notes-file RELEASE_NOTES.md --prerelease

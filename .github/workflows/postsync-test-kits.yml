@@ -15,6 +15,11 @@ jobs:
       matrix:
         include:
         - os: windows-2022
+          arch: x64
+          preset: msvc-x64
+          artifact_ext: zip
+          cmake_extra: ''
+        - os: windows-2022
           arch: x86
           preset: msvc-x86
           artifact_ext: zip
@@ -271,13 +276,14 @@ jobs:
         pattern: conf-test-*
         path: out
         merge-multiple: true
-    - name: Require the x86 kit
+    - name: Require both Windows kits
       shell: bash
       run: |
         set -euo pipefail
         V=1.09.77-conf1
         test -s "out/openads-$V-windows-x86.zip"
-        test "$(find out -maxdepth 1 -type f | wc -l)" -eq 1
+        test -s "out/openads-$V-windows-x64.zip"
+        test "$(find out -maxdepth 1 -type f | wc -l)" -eq 2
     - name: Inspect archives, hashes, notices and version stamps
       env:
         RELEASE_VERSION: 1.09.77-conf1

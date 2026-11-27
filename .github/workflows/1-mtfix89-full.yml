@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 env:
   KIT_VERSION: 1.09.75-mtfix89-tables-test
-  PINNED_SOURCE: 127f0bbb866a150c5f65a21cef6f9a3c35a76744
+  PINNED_SOURCE: 6ee79164814b091aa1433e2730820c34c4697a5c
 jobs:
   x64pair:
     runs-on: windows-2022
@@ -28,8 +28,8 @@ jobs:
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor 127f0bbb866a150c5f65a21cef6f9a3c35a76744 HEAD
-        test -z "$(git diff --name-only 127f0bbb866a150c5f65a21cef6f9a3c35a76744 HEAD -- . ':!.github/workflows')"
+        git merge-base --is-ancestor "$PINNED_SOURCE" HEAD
+        test -z "$(git diff --name-only "$PINNED_SOURCE" HEAD -- . ':!.github/workflows')"
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |
@@ -364,9 +364,10 @@ jobs:
         with restart-on-failure, opens TCP 6262 and prints a summary.
 
         Source: fork branch release/mtfix70-full, commit
-        127f0bbb866a150c5f65a21cef6f9a3c35a76744. The apply-patch gate ran
-        the full build and test suite (incl. the new session_table_limit
-        unit tests) before the commit landed.
+        6ee79164814b091aa1433e2730820c34c4697a5c (the mtfix89 patch plus a
+        test-only MSVC warning fix in fs_lock85_probe; no runtime code
+        changed after the apply-patch gate ran the full build and test
+        suite, incl. the new session_table_limit unit tests).
         NOTES
         gh release delete -R bedipritpal/OpenADS "v${KIT_VERSION}" --yes --cleanup-tag || true
         gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"

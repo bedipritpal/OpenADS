@@ -1,0 +1,367 @@
+name: mtfix89 session-table-limit kit (x64 server pair, pritpal layout)
+permissions:
+  contents: write
+concurrency:
+  group: mtfix89-tables-kit
+  cancel-in-progress: false
+on:
+  workflow_dispatch:
+env:
+  KIT_VERSION: 1.09.75-mtfix89-tables-test
+  PINNED_SOURCE: 127f0bbb866a150c5f65a21cef6f9a3c35a76744
+jobs:
+  x64pair:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix70-full
+    - name: Verify candidate pin and workflow-only build recipe
+      shell: bash
+      run: |
+        set -euxo pipefail
+        test "$GITHUB_REF" = refs/heads/release/mtfix70-full
+        git merge-base --is-ancestor 127f0bbb866a150c5f65a21cef6f9a3c35a76744 HEAD
+        test -z "$(git diff --name-only 127f0bbb866a150c5f65a21cef6f9a3c35a76744 HEAD -- . ':!.github/workflows')"
+    - name: Prefetch identical hash-pinned dependency archives via alternate transport
+      shell: bash
+      run: |
+        set -euo pipefail
+        python - <<'PYDEPS'
+        import hashlib,pathlib,tarfile,urllib.request,time
+        items=[('zlib','https://zlib.net/fossils/zlib-1.3.1.tar.gz','9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23'),('nlohmann_json','https://codeload.github.com/nlohmann/json/tar.gz/refs/tags/v3.11.3','0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'),('cpp_httplib','https://codeload.github.com/yhirose/cpp-httplib/tar.gz/refs/tags/v0.18.5','731190e97acd63edce57cc3dacd496f57e7743bfc7933da7137cb3e93ec6c9a0')]
+        for name,url,sha in items:
+         for attempt in range(3):
+          try:
+           source=url if attempt==0 else url+'?openads_mtfix89_retry='+str(attempt)
+           body=urllib.request.urlopen(source,timeout=60).read();actual=hashlib.sha256(body).hexdigest()
+           if actual!=sha:raise RuntimeError(name+' hash mismatch: expected '+sha+' got '+actual+' bytes='+str(len(body)))
+           break
+          except Exception as error:
+           print(name,str(error),flush=True)
+           if attempt==2:raise
+           time.sleep(3*(attempt+1))
+         archive=pathlib.Path(name+'.tar.gz');archive.write_bytes(body)
+         dest=pathlib.Path('third_party')/name;dest.mkdir(parents=True,exist_ok=True)
+         with tarfile.open(archive) as z:
+          for member in z.getmembers():
+           parts=pathlib.PurePosixPath(member.name).parts[1:]
+           if not parts:continue
+           assert '..' not in parts
+           member.name=str(pathlib.PurePosixPath(*parts));z.extract(member,dest)
+         print(name,sha,'verified')
+        PYDEPS
+    - name: Download pinned Winlibs GCC 10.2 x86_64 (same toolchain as mtfix88)
+      env:
+        GH_TOKEN: ${{ github.token }}
+      shell: pwsh
+      run: |
+        Invoke-WebRequest -Headers @{Accept='application/octet-stream';Authorization="Bearer $env:GH_TOKEN"} 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' -OutFile "$env:RUNNER_TEMP/winlibs64.7z"
+        if((Get-FileHash "$env:RUNNER_TEMP/winlibs64.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs x64 hash mismatch'}
+        & 7z x "$env:RUNNER_TEMP/winlibs64.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
+    - name: Build Harbour (x64) and the x64 server and auth worker
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        test "$(gcc -dumpversion)" = 10.2.0
+        gcc -dumpmachine
+        git clone https://github.com/harbour/core.git "$RUNNER_TEMP/harbour-x64"
+        git -C "$RUNNER_TEMP/harbour-x64" checkout --detach 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+        export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+        mingw32-make -C "$RUNNER_TEMP/harbour-x64" -j2
+        HB="$(cygpath -m "$RUNNER_TEMP/harbour-x64")"
+        HBLIB="$RUNNER_TEMP/harbour-x64/lib/win/mingw64"
+        HBBIN="$RUNNER_TEMP/harbour-x64/bin/win/mingw64"
+        test -f "$HBBIN/harbour.exe"
+        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/third_party/nlohmann_json" -DFETCHCONTENT_SOURCE_DIR_CPP_HTTPLIB="$PWD/third_party/cpp_httplib" -S . -B build-x64 -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
+          -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+          -DOPENADS_BUILD_TESTS=ON -DOPENADS_WITH_HTTP=OFF -DOPENADS_WITH_TLS=ON \
+          -DOPENADS_VERSION_FORCE=1.09.75-mtfix89-tables-test -DOPENADS_AUTH_CAPACITY_TEST_SWITCH=OFF \
+          -DOPENADS_WITH_HARBOUR_UDF=ON -DHARBOUR_COMPILER="$(cygpath -m "$HBBIN")/harbour.exe" \
+          -DHARBOUR_INCLUDE_DIR="$HB/include" -DHARBOUR_LIB_DIR="$(cygpath -m "$HBLIB")" \
+          -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
+          -DOPENADS_WARNINGS_AS_ERRORS=OFF
+        cmake --build build-x64 --target openads_serverd openads_auth_worker -j2
+    - name: Verify the binaries are 64-bit and the server starts
+      shell: bash
+      run: |
+        set -euxo pipefail
+        export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+        mkdir -p output
+        cp build-x64/tools/serverd/openads_serverd.exe build-x64/tools/serverd/openads_auth_worker.exe output/
+        for f in output/openads_serverd.exe output/openads_auth_worker.exe; do
+          test -f "$f"
+          objdump -f "$f" | tee -a output/pe-check.txt
+          objdump -f "$f" | grep -q 'pei-x86-64'
+        done
+        output/openads_serverd.exe --help > output/serverd-help.txt 2>&1 || true
+        grep -i 'session_table_limit' output/serverd-help.txt
+        head -5 output/serverd-help.txt
+    - name: Smoke the new ini key end to end
+      shell: bash
+      run: |
+        set -euxo pipefail
+        mkdir -p smoke/data smoke/logs
+        printf 'port = 16289\ndata = smoke/data\nsession_table_limit = 7\n' > smoke/openads.ini
+        output/openads_serverd.exe --config smoke/openads.ini > smoke/console.log 2>&1 &
+        SRV=$!
+        sleep 3
+        kill $SRV 2>/dev/null || true
+        printf 'port = 16290\ndata = smoke/data\nsession_table_limit = many\n' > smoke/bad.ini
+        if output/openads_serverd.exe --config smoke/bad.ini > smoke/bad.log 2>&1 & then
+          BADPID=$!
+          sleep 3
+          if kill -0 $BADPID 2>/dev/null; then kill $BADPID; echo 'ERROR: bad session_table_limit value was accepted'; exit 1; fi
+        fi
+        grep -i 'session_table_limit' smoke/bad.log
+    - uses: actions/upload-artifact@v4
+      with:
+        name: pair-x64
+        path: output/
+  package:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    needs: x64pair
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: pair-x64
+        path: pair
+    - name: Download and verify the proven mtfix88 client binaries
+      shell: pwsh
+      run: |
+        $ErrorActionPreference='Stop'
+        $tmp = $env:RUNNER_TEMP
+        Invoke-WebRequest 'https://github.com/bedipritpal/OpenADS/releases/download/v1.09.75-mtfix88-full-test/mtfix88-full-x64.zip' -OutFile "$tmp/mt88x64.zip"
+        if((Get-FileHash "$tmp/mt88x64.zip" -Algorithm SHA256).Hash.ToLower() -ne '3ea340433fec819889be4efedadf61beb2f959fadd2f3c8e49ff6ca665259cce'){throw 'mtfix88 x64 zip hash mismatch'}
+        Invoke-WebRequest 'https://github.com/bedipritpal/OpenADS/releases/download/v1.09.75-mtfix88-full-test/mtfix88-full-qt492-x86.zip' -OutFile "$tmp/mt88x86.zip"
+        if((Get-FileHash "$tmp/mt88x86.zip" -Algorithm SHA256).Hash.ToLower() -ne 'dd54be9a7bf6bc20c1fdb0a34c8dac22a610a431fa258f9282ab4951569e6d30'){throw 'mtfix88 x86 zip hash mismatch'}
+        & 7z x "$tmp/mt88x64.zip" "-o$tmp/mt88x64" -y | Out-Null
+        & 7z x "$tmp/mt88x86.zip" "-o$tmp/mt88x86" -y | Out-Null
+    - name: Lay out the pritpal kit, generate install files, zip
+      shell: pwsh
+      run: |
+        $ErrorActionPreference='Stop'
+        $tmp = $env:RUNNER_TEMP
+        $kitname = 'openads-${{ env.KIT_VERSION }}-pritpal'
+        $root = "$PWD/$kitname"
+        New-Item -ItemType Directory -Force "$root/bin","$root/lib","$root/other","$root/install" | Out-Null
+        Copy-Item pair/openads_serverd.exe,pair/openads_auth_worker.exe "$root/bin/"
+        $ace64 = Get-ChildItem -Recurse "$tmp/mt88x64" -Filter openace64.dll | Select-Object -First 1
+        $ace32 = Get-ChildItem -Recurse "$tmp/mt88x86" -Filter openace32.dll | Select-Object -First 1
+        $imp64 = Get-ChildItem -Recurse "$tmp/mt88x64" -Filter libopenace64.dll.a | Select-Object -First 1
+        $imp32 = Get-ChildItem -Recurse "$tmp/mt88x86" -Filter libopenace32.dll.a | Select-Object -First 1
+        if(-not $ace64 -or -not $ace32 -or -not $imp64 -or -not $imp32){throw 'expected client files not found in the mtfix88 zips'}
+        Copy-Item $ace64.FullName,$ace32.FullName "$root/bin/"
+        Copy-Item $imp64.FullName,$imp32.FullName "$root/lib/"
+        $h = @{}
+        foreach($f in Get-ChildItem -Recurse "$root/bin","$root/lib"){ $h[$f.Name] = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower() }
+        '${{ env.PINNED_SOURCE }}' | Set-Content "$root/other/source-commit.txt"
+        $sums = foreach($f in Get-ChildItem -Recurse "$root/bin","$root/lib","$root/other"){ '{0}  {1}' -f (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower(), ($f.FullName.Substring($root.Length+1) -replace '\\','/') }
+        $sums | Set-Content "$root/other/SHA256SUMS"
+        Set-Content "$root/other/openads.ini.sample" -Value @('##','#','host                = 0.0.0.0','port                = 6262','data                = C:/OpenADS-Data/','enableFileFunc      = 1','legacy_paths        = 1','max_sessions        = 2000','backlog             = 512','session_table_limit = 1024','auth_user           = user:pass','#','##')
+        $me = @'
+        # OpenADS ${{ env.KIT_VERSION }} - Pritpal kit
+
+        One-stop server-side kit. Windows x64 server, 32-bit and 64-bit client pieces.
+
+        Layout:
+          bin/      openads_serverd.exe + openads_auth_worker.exe (this kit's new build),
+                    openace32.dll + openace64.dll (proven mtfix88 clients, byte-identical)
+          lib/      libopenace32.dll.a + libopenace64.dll.a (import libraries)
+          other/    openads.ini.sample, SHA256SUMS, source-commit.txt
+          install/  install-openads-mtfix89.cmd + this file
+
+        Install on a fresh Windows server:
+          1. Extract this zip where you want the server to live, e.g. C:\OpenADS-Server\
+          2. Copy your openads_vouch_auth.hrb to C:\OpenADS-Server\config\
+          3. Run install\install-openads-mtfix89.cmd as administrator.
+             It verifies the binary hashes, writes the ini (production format,
+             session_table_limit = 1024), registers the service, opens TCP 6262
+             and prints a summary. Then set auth_user and restart the service.
+
+        What changed vs mtfix88: only the server pair. The server now reads
+        session_table_limit from the ini (default 256, 0 = unlimited); this kit's
+        sample sets 1024. Everything else is byte-identical to the proven mtfix88
+        build. The server pair keeps its canonical 64-bit-only names because the
+        server spawns the worker by name.
+
+        Source: fork release/mtfix70-full @ ${{ env.PINNED_SOURCE }}
+        '@
+        $me | Set-Content "$root/install/install.me.txt"
+        $cmd = @'
+        @echo off
+        rem install-openads-mtfix89.cmd - production install, mtfix89 x64 auth pair
+        rem Pinned: verifies the kit binaries are byte-identical to this kit's build.
+        rem Run as administrator. Touches only OpenADS files, the openads_serverd
+        rem service, and one firewall rule for TCP 6262.
+        setlocal
+        set "KITPAIR=%~dp0..\bin"
+        set "CONFIG=C:\OpenADS-Server\config"
+        set "DATA=C:\OpenADS-Data"
+        set "LOGS=C:\OpenADS-Server\logs"
+        set "HRB=%CONFIG%\openads_vouch_auth.hrb"
+        set "NEEDINIEDIT="
+
+        set "H_SERVERD=__H_SERVERD__"
+        set "H_WORKER=__H_WORKER__"
+        set "H_ACE64=__H_ACE64__"
+        set "H_ACE32=__H_ACE32__"
+
+        if not exist "%KITPAIR%\openads_serverd.exe" goto nofiles
+        if not exist "%KITPAIR%\openads_auth_worker.exe" goto nofiles
+        if not exist "%HRB%" goto nohrb
+
+        call :checkhash "%KITPAIR%\openads_serverd.exe" %H_SERVERD% || goto hashfail
+        call :checkhash "%KITPAIR%\openads_auth_worker.exe" %H_WORKER% || goto hashfail
+        call :checkhash "%KITPAIR%\openace64.dll" %H_ACE64% || goto hashfail
+        call :checkhash "%KITPAIR%\openace32.dll" %H_ACE32% || goto hashfail
+
+        if not exist "%CONFIG%" mkdir "%CONFIG%"
+        if not exist "%DATA%" mkdir "%DATA%"
+        if not exist "%LOGS%" mkdir "%LOGS%"
+
+        icacls "%HRB%" /inheritance:r /grant "SYSTEM:R" /grant "Administrators:R"
+
+        if exist "%CONFIG%\openads.ini" goto haveini
+        set "NEEDINIEDIT=1"
+        > "%CONFIG%\openads.ini" (
+        echo ##
+        echo #
+        echo host                = 0.0.0.0
+        echo port                = 6262
+        echo data                = C:/OpenADS-Data/
+        echo enableFileFunc      = 1
+        echo legacy_paths        = 1
+        echo max_sessions        = 2000
+        echo backlog             = 512
+        echo session_table_limit = 1024
+        echo auth_user           = vouch:change-me-now
+        echo #
+        echo ##
+        )
+        :haveini
+
+        sc.exe query openads_serverd >nul 2>&1
+        if not errorlevel 1 (
+          net stop openads_serverd >nul 2>&1
+          taskkill /f /im openads_serverd.exe >nul 2>&1
+          sc.exe delete openads_serverd
+        )
+        for %%I in ("%KITPAIR%") do set "KITPAIR_ABS=%%~fI"
+        "%KITPAIR_ABS%\openads_serverd.exe" --install-service --config "%CONFIG%\openads.ini" --auth_module "%HRB%"
+        sc.exe failure openads_serverd reset= 86400 actions= restart/60000/restart/60000/restart/60000
+        sc.exe description openads_serverd "OpenADS mtfix89 auth server (port 6262)"
+
+        netsh advfirewall firewall delete rule name="OpenADS auth 6262" >nul 2>&1
+        netsh advfirewall firewall add rule name="OpenADS auth 6262" dir=in action=allow protocol=TCP localport=6262
+
+        net start openads_serverd
+        timeout /t 3 >nul
+
+        echo.
+        echo ================= OpenADS mtfix89 install summary =================
+        sc.exe qc openads_serverd | findstr "BINARY_PATH_NAME"
+        sc.exe query openads_serverd | findstr "STATE"
+        echo INI:        %CONFIG%\openads.ini
+        icacls "%HRB%"
+        echo Data:       %DATA%
+        netstat -ano -p tcp | findstr "6262" | findstr "LISTENING"
+        echo ==================================================================
+        echo.
+        echo LISTENING on 6262 plus STATE: 4 RUNNING means mtfix89 is serving.
+        if defined NEEDINIEDIT (
+          echo.
+          echo LAST STEP: edit %CONFIG%\openads.ini, set auth_user to the same
+          echo user:password as the other servers, then: net stop openads_serverd
+          echo and net start openads_serverd.
+        )
+        goto end
+
+        :checkhash
+        set "GOT="
+        for /f "delims=" %%H in ('certutil -hashfile "%~1" SHA256 ^| findstr /r /c:"^[0-9a-fA-F][0-9a-fA-F]*$"') do set "GOT=%%H"
+        if /i "%GOT%"=="%~2" (
+          echo OK: %~nx1 matches pinned hash
+          exit /b 0
+        )
+        echo MISMATCH: %~1
+        echo   got      %GOT%
+        echo   expected %~2
+        exit /b 1
+
+        :hashfail
+        echo.
+        echo STOPPED: kit binaries differ from this kit's pinned hashes.
+        echo Nothing was installed. Re-extract the kit and run again.
+        goto end
+
+        :nofiles
+        echo MISSING: %KITPAIR%\openads_serverd.exe or openads_auth_worker.exe
+        echo Run this script from the kit's install folder without moving files.
+        goto end
+
+        :nohrb
+        echo MISSING: %HRB%
+        echo Copy your openads_vouch_auth.hrb into %CONFIG% first, then run again.
+        goto end
+
+        :end
+        endlocal
+        '@
+        $cmd = $cmd.Replace('__H_SERVERD__', $h['openads_serverd.exe']).Replace('__H_WORKER__', $h['openads_auth_worker.exe']).Replace('__H_ACE64__', $h['openace64.dll']).Replace('__H_ACE32__', $h['openace32.dll'])
+        $cmd | Set-Content "$root/install/install-openads-mtfix89.cmd"
+        & 7z a -tzip "$kitname.zip" "./$kitname/*" | Out-Null
+        (Get-FileHash "$kitname.zip" -Algorithm SHA256).Hash.ToLower() + "  $kitname.zip" | Set-Content "$kitname.zip.sha256"
+        Get-Content "$kitname.zip.sha256"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: kit-pritpal
+        path: |
+          openads-${{ env.KIT_VERSION }}-pritpal.zip
+          openads-${{ env.KIT_VERSION }}-pritpal.zip.sha256
+    - name: Create prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        cat > RELEASE_NOTES.md <<'NOTES'
+        # OpenADS 1.09.75-mtfix89-tables-test - Pritpal kit
+        Pritpal Bedi
+        2026-11-27
+
+        mtfix89 = mtfix88 plus one server change: the per-session table cap
+        is no longer a hard-coded 256. The server reads
+        session_table_limit from the ini (or --session_table_limit),
+        default stays 256, 0 = unlimited. This kit's sample ini sets 1024,
+        approved after the ADSCDX/7079 "Session table limit" error during
+        the multi-window Vouch stress test.
+
+        Only the Windows x64 server pair is rebuilt. The client DLLs and
+        import libraries are byte-identical to the proven mtfix88 release
+        (hash-verified at pack time). Delhi, Airtel and the LAN box keep
+        working; nothing else in the kit changed.
+
+        Zip layout (one folder at the root):
+          bin/      openads_serverd.exe + openads_auth_worker.exe (new),
+                    openace32.dll + openace64.dll (mtfix88, unchanged)
+          lib/      libopenace32.dll.a + libopenace64.dll.a
+          other/    openads.ini.sample, SHA256SUMS, source-commit.txt
+          install/  install-openads-mtfix89.cmd + install.me.txt
+
+        The install script verifies every binary hash before touching
+        anything, writes the production ini format, registers the service
+        with restart-on-failure, opens TCP 6262 and prints a summary.
+
+        Source: fork branch release/mtfix70-full, commit
+        127f0bbb866a150c5f65a21cef6f9a3c35a76744. The apply-patch gate ran
+        the full build and test suite (incl. the new session_table_limit
+        unit tests) before the commit landed.
+        NOTES
+        gh release create "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"
+        gh release view "v${KIT_VERSION}" --json tagName,isPrerelease,url,assets

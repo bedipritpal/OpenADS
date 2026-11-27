@@ -320,7 +320,7 @@ jobs:
         '@
         $cmd = $cmd.Replace('__H_SERVERD__', $h['openads_serverd.exe']).Replace('__H_WORKER__', $h['openads_auth_worker.exe']).Replace('__H_ACE64__', $h['openace64.dll']).Replace('__H_ACE32__', $h['openace32.dll'])
         $cmd | Set-Content "$root/install/install-openads-mtfix89.cmd"
-        & 7z a -tzip "$kitname.zip" "./$kitname/*" | Out-Null
+        & 7z a -tzip "$kitname.zip" "$kitname" | Out-Null
         (Get-FileHash "$kitname.zip" -Algorithm SHA256).Hash.ToLower() + "  $kitname.zip" | Set-Content "$kitname.zip.sha256"
         Get-Content "$kitname.zip.sha256"
     - uses: actions/upload-artifact@v4
@@ -368,5 +368,6 @@ jobs:
         the full build and test suite (incl. the new session_table_limit
         unit tests) before the commit landed.
         NOTES
+        gh release delete -R bedipritpal/OpenADS "v${KIT_VERSION}" --yes --cleanup-tag || true
         gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"
         gh release view -R bedipritpal/OpenADS "v${KIT_VERSION}" --json tagName,isPrerelease,url,assets

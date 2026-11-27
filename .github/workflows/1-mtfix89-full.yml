@@ -370,5 +370,19 @@ jobs:
         suite, incl. the new session_table_limit unit tests).
         NOTES
         gh release delete -R bedipritpal/OpenADS "v${KIT_VERSION}" --yes --cleanup-tag || true
-        gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"
+        ok=""
+        for i in 1 2 3; do
+          if gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"; then
+            ok=1
+            break
+          fi
+          echo "release create attempt $i failed; sleeping 30s before retry"
+          sleep 30
+        done
+        if [ -z "$ok" ]; then
+          echo '=== gh release create failed 3x; raw API diagnostic (expected to fail too, prints full error body) ==='
+          gh api repos/bedipritpal/OpenADS/releases -F tag_name="v${KIT_VERSION}" -F target_commitish="${PINNED_SOURCE}" -F name="diagnostic-do-not-use" -F prerelease=true || true
+          gh auth status || true
+          exit 1
+        fi
         gh release view -R bedipritpal/OpenADS "v${KIT_VERSION}" --json tagName,isPrerelease,url,assets

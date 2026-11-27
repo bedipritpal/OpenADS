@@ -1,0 +1,41 @@
+name: mtfix89 stage kit zip for manual release
+permissions:
+  contents: write
+  actions: read
+on:
+  push:
+    branches:
+    - release/mtfix70-full
+    paths:
+    - .github/workflows/1-mtfix89-stage.yml
+  workflow_dispatch:
+env:
+  KIT_VERSION: 1.09.75-mtfix89-tables-test
+  KIT_RUN: "46058325490"
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        ref: release/mtfix70-full
+    - name: Download the kit artifact and stage it on a branch from main
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: bash
+      run: |
+        set -euxo pipefail
+        gh run download "$KIT_RUN" -R bedipritpal/OpenADS -n kit-pritpal -D staged
+        ls -la staged
+        test -f "staged/openads-${KIT_VERSION}-pritpal.zip"
+        sha256sum "staged/openads-${KIT_VERSION}-pritpal.zip" "staged/openads-${KIT_VERSION}-pritpal.zip.sha256"
+        cat "staged/openads-${KIT_VERSION}-pritpal.zip.sha256"
+        git fetch origin main
+        git checkout --detach origin/main
+        git checkout -B kit-mtfix89-staging
+        cp "staged/openads-${KIT_VERSION}-pritpal.zip" "staged/openads-${KIT_VERSION}-pritpal.zip.sha256" .
+        git add "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"
+        git -c user.name='openads-kit-stager' -c user.email='actions@localhost' commit -m "Stage mtfix89 kit zip from run ${KIT_RUN} for manual release (temporary branch)"
+        git push -f origin kit-mtfix89-staging

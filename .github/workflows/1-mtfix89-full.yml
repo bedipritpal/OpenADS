@@ -370,9 +370,10 @@ jobs:
         suite, incl. the new session_table_limit unit tests).
         NOTES
         gh release delete -R bedipritpal/OpenADS "v${KIT_VERSION}" --yes --cleanup-tag || true
+        gh api repos/bedipritpal/OpenADS/git/refs -F ref="refs/tags/v${KIT_VERSION}" -F sha="${PINNED_SOURCE}"
         ok=""
         for i in 1 2 3; do
-          if gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"; then
+          if gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"; then
             ok=1
             break
           fi

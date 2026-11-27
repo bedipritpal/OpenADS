@@ -5,6 +5,11 @@ concurrency:
   group: mtfix89-tables-kit
   cancel-in-progress: false
 on:
+  push:
+    branches:
+    - release/mtfix70-full
+    paths:
+    - .github/workflows/1-mtfix89-full.yml
   workflow_dispatch:
 env:
   KIT_VERSION: 1.09.75-mtfix89-tables-test

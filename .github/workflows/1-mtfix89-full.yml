@@ -368,5 +368,5 @@ jobs:
         the full build and test suite (incl. the new session_table_limit
         unit tests) before the commit landed.
         NOTES
-        gh release create "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"
-        gh release view "v${KIT_VERSION}" --json tagName,isPrerelease,url,assets
+        gh release create -R bedipritpal/OpenADS "v${KIT_VERSION}" --target "${PINNED_SOURCE}" --prerelease --latest=false --title "OpenADS mtfix89 session-table-limit test kit (pritpal layout)" --notes-file RELEASE_NOTES.md "openads-${KIT_VERSION}-pritpal.zip" "openads-${KIT_VERSION}-pritpal.zip.sha256"
+        gh release view -R bedipritpal/OpenADS "v${KIT_VERSION}" --json tagName,isPrerelease,url,assets

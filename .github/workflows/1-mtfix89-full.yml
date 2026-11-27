@@ -22,14 +22,14 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
-        ref: release/mtfix70-full
+        ref: ${{ env.PINNED_SOURCE }}
     - name: Verify candidate pin and workflow-only build recipe
       shell: bash
       run: |
         set -euxo pipefail
         test "$GITHUB_REF" = refs/heads/release/mtfix70-full
-        git merge-base --is-ancestor "$PINNED_SOURCE" HEAD
-        test -z "$(git diff --name-only "$PINNED_SOURCE" HEAD -- . ':!.github/workflows')"
+        test "$(git rev-parse HEAD)" = "$PINNED_SOURCE"
+        echo "Checkout is exactly the pinned commit; later branch commits do not affect this kit build."
     - name: Prefetch identical hash-pinned dependency archives via alternate transport
       shell: bash
       run: |

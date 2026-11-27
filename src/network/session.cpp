@@ -1710,7 +1710,9 @@ DispatchResult Session::dispatch(const Frame& f) {
         return {err("Management session only", openads::AE_ACCESS_DENIED), true};
     if (sess_conn_ && f.opcode == Opcode::Connect)
         return {err("Already connected", openads::AE_ACCESS_DENIED), true};
-    if ((f.opcode == Opcode::OpenTable || f.opcode == Opcode::ExecuteSQL) && tbls_.size() + cursor_tbls_.size() >= 256)
+    if ((f.opcode == Opcode::OpenTable || f.opcode == Opcode::ExecuteSQL) &&
+        srv_->session_table_limit() != 0 &&
+        tbls_.size() + cursor_tbls_.size() >= srv_->session_table_limit())
         return {err("Session table limit", openads::AE_ACCESS_DENIED), false};
     }
     // Wire table handlers can operate directly on engine handles, without

@@ -130,6 +130,28 @@ TEST_CASE("parse_ini max_sessions accepts dash alias and zero") {
     CHECK(err.find("max_sessions") != std::string::npos);
 }
 
+TEST_CASE("parse_ini session_table_limit") {
+    auto cfg = parse_ok("session_table_limit = 1024\n");
+    CHECK(cfg.has_session_table_limit);
+    CHECK(cfg.session_table_limit == 1024);
+    // dash form folds to the same key; bare alias also accepted
+    auto dash = parse_ok("session-table-limit = 512\n");
+    CHECK(dash.has_session_table_limit);
+    CHECK(dash.session_table_limit == 512);
+    auto bare = parse_ok("sessiontablelimit = 0\n");
+    CHECK(bare.has_session_table_limit);
+    CHECK(bare.session_table_limit == 0);   // 0 = unlimited (valid)
+    IniConfig bad;
+    std::string err;
+    CHECK_FALSE(parse_ini("session_table_limit = -5\n", bad, err));
+    CHECK(err.find("session_table_limit") != std::string::npos);
+    CHECK_FALSE(parse_ini("session_table_limit = many\n", bad, err));
+    // absent: flag clear, default stays 256
+    auto absent = parse_ok("port = 6262\n");
+    CHECK_FALSE(absent.has_session_table_limit);
+    CHECK(absent.session_table_limit == 256);
+}
+
 TEST_CASE("parse_ini EnableFileFunc") {
     auto cfg = parse_ok("EnableFileFunc = 1\n");
     CHECK(cfg.has_enable_file_func);

@@ -51,6 +51,12 @@ struct IniConfig {
     std::uint32_t established_session_idle_seconds = 0;
     bool          has_max_sessions = false;
     std::uint32_t max_sessions     = 0;
+    // Per-session cap on simultaneously open tables + SQL cursors
+    // (0 = unlimited). Maps to Server::set_session_table_limit; the
+    // server default is 256 when the key is absent.
+    // Keys: session_table_limit / sessiontablelimit.
+    bool          has_session_table_limit = false;
+    std::uint32_t session_table_limit = 256;
     bool          has_http_port = false;
     std::uint16_t http_port     = 0;
     bool          has_data      = false;

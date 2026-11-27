@@ -183,6 +183,15 @@ bool parse_ini(const std::string& text, IniConfig& out, std::string& error) {
             }
             out.max_sessions = static_cast<std::uint32_t>(n);
             out.has_max_sessions = true;
+        } else if (key == "session_table_limit" || key == "sessiontablelimit") {
+            unsigned long n = 0;
+            if (!parse_uint(val, 0xFFFFFFFFul, n)) {
+                error = "line " + std::to_string(lineno) +
+                        ": session_table_limit must be a non-negative integer";
+                return false;
+            }
+            out.session_table_limit = static_cast<std::uint32_t>(n);
+            out.has_session_table_limit = true;
         } else if (key == "http_port") {
             unsigned long n = 0;
             if (!parse_uint(val, 65535, n)) {

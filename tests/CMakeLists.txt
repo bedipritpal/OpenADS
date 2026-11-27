@@ -660,6 +660,7 @@ target_link_libraries(openads_case_lookup81_native PRIVATE openads_core)
 add_test(NAME case_lookup81_native COMMAND openads_case_lookup81_native 300)
 
 target_include_directories(openads_case_lookup81_native PRIVATE ${PROJECT_SOURCE_DIR}/src)
+add_dependencies(openads_unit_tests openads_case_lookup81_native)
 
 # mtfix85: independent-process FS byte-range lock proof, no RDD dependency.
 add_executable(openads_fs_lock85_probe fs_lock85_probe.cpp)

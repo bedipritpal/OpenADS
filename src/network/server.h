@@ -90,6 +90,9 @@ public:
     // Configure before registering credentials or starting any listener.
     void set_daemon_hardening(bool on) noexcept { daemon_hardening_ = on; }
     bool daemon_hardening() const noexcept { return daemon_hardening_; }
+    // Per-session cap on open tables + SQL cursors (0 = unlimited).
+    void set_session_table_limit(std::uint32_t n) noexcept { session_table_limit_ = n; }
+    std::uint32_t session_table_limit() const noexcept { return session_table_limit_; }
 
     // Daemon-only opt-in policy, configured before start. Zero never expires
     // established DBF sessions for application inactivity.
@@ -243,6 +246,7 @@ private:
     void reap_finished_threads_();
 
     bool daemon_hardening_ = false;
+    std::uint32_t session_table_limit_ = 256;
     SessionClock session_clock_ = nullptr;
     std::uint32_t established_session_idle_seconds_ = 0;
     Socket                   listener_;

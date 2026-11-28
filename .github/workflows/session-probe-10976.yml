@@ -20,6 +20,9 @@ on:
     branches:
       - 'test/10976-session-probe'
 
+permissions:
+  contents: write
+
 jobs:
   probe:
     runs-on: windows-2022
@@ -342,7 +345,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-toolchain git make
+          install: mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake git make
 
       - name: Build Harbour 6deac9cf (old Harbour) with the new MSYS2 MINGW64 compiler
         shell: msys2 {0}
@@ -718,3 +721,19 @@ jobs:
           name: openads-1.09.76-tc88-pritpal-test-x64
           path: openads-1.09.76-tc88-pritpal-test-x64.zip
           retention-days: 30
+
+      - name: Publish the test kit as a prerelease on the test tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh release delete test-10976-tc88 --yes --cleanup-tag 2>/dev/null || true
+          gh release create test-10976-tc88 \
+            --repo bedipritpal/OpenADS \
+            --target test/10976-session-probe \
+            --title "TEST kit 1.09.76-tc88 (not a release)" \
+            --notes "TEST ONLY. 1.09.76 x64 server pair (openads_serverd + openads_auth_worker) rebuilt from release-1.09.76 source with the pinned mtfix88 toolchain (winlibs GCC 10.2, mingw-w64 8, Harbour 694428e1 + rddads patch). Fixes the challenge-auth session regression (rc=5172) of the shipped 1.09.76 pair. Verified on CI: A / concurrent B / close A / C all pass as a Windows service. Production stays on mtfix88." \
+            --prerelease \
+            openads-1.09.76-tc88-pritpal-test-x64.zip
+          gh release view test-10976-tc88 --repo bedipritpal/OpenADS --json url,assets

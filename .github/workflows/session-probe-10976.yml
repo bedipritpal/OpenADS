@@ -3,9 +3,11 @@ name: session-probe-10976
 # Session regression probe for the 1.09.76 one-session bug, against the
 # SHIPPED kits (mtfix88 control vs 1.09.76), on real Windows.
 # Pattern per leg: A login, B concurrent login, close A, C login.
-# Legs 1-4 use challenge auth (auth:// + test_only.hrb, same as production).
-# Legs 5-6 use plain --auth_user TCP auth (no HRB worker) to isolate the
-# auth-worker/HRB lane from the core session lifecycle.
+# Legs 1-4 use challenge auth (auth:// + test_only.hrb, same as production),
+# with the server run as a Windows service (his production mode; also avoids
+# the runner job object constraining the auth worker's job assignment).
+# Legs 5-6 use plain --auth_user TCP auth in console mode (no HRB worker)
+# to isolate the auth-worker/HRB lane from the core session lifecycle.
 
 on:
   workflow_dispatch:
@@ -50,6 +52,17 @@ jobs:
           T=$(cygpath -u "$RUNNER_TEMP")
           echo 'wEhSQgIABAAAAFRFU1RfT05MWQAFAU9BRFNfQVVUSF9WMQABAUxFTgAAAlJFUExJQ0FURQAAAgIAAABURVNUX09OTFkAAQAAAAdPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbACAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALADAGoCAABcBAwCSG4H' | base64 -d > "$T/test_only.hrb"
           ls -la "$T/test_only.hrb"
+          sha256sum "$T/test_only.hrb"
+
+      - name: Diagnose auth worker spawn on this runner
+        run: |
+          set -x
+          T=$(cygpath -u "$RUNNER_TEMP")
+          HRBW=$(cygpath -m "$T/test_only.hrb")
+          cd "$T/kits/x88/mtfix88-x64/bin"
+          printf 'P' | ./openads_auth_worker.exe "$HRBW"; echo " worker88 rc=$?"
+          cd "$T/kits/x76/auth"
+          printf 'P' | ./openads_auth_worker.exe "$HRBW"; echo " worker76 rc=$?"
 
       - name: Build the probe clients against each kit's own import lib
         run: |
@@ -79,6 +92,15 @@ jobs:
           mkdir -p "$L"
           SUMMARY="$L/summary.txt"; : > "$SUMMARY"
 
+          wait_port () {
+            local port="$1" tries="$2" i
+            for i in $(seq 1 "$tries"); do
+              if netstat -ano | grep "TCP" | grep "LISTENING" | grep -q ":$port "; then return 0; fi
+              sleep 1
+            done
+            return 1
+          }
+
           run_leg () {
             name="$1"; srvdir="$2"; probedir="$3"; probe="$4"; dllsrc="$5"; dllname="$6"; port="$7"; mode="$8"
             work="$T/run/$name"; rm -rf "$work"; mkdir -p "$work/data"
@@ -95,31 +117,46 @@ jobs:
               url="auth://127.0.0.1:$port/$WM/data"
             fi
             echo "=== $name : server=$srvdir probe=$probe dll=$dllname($dllsrc) mode=$mode port=$port"
-            pushd "$work" > /dev/null
-            ./openads_serverd.exe $args > server.log 2>&1 &
-            SPID=$!
-            popd > /dev/null
             started=0
-            for i in $(seq 1 45); do
-              if netstat -ano | grep "TCP" | grep "LISTENING" | grep -q ":$port "; then started=1; break; fi
-              kill -0 "$SPID" 2>/dev/null || break
+            if [ "$mode" = "hrb" ]; then
+              sc stop openads_serverd > /dev/null 2>&1
+              sc delete openads_serverd > /dev/null 2>&1
               sleep 1
-            done
+              ( cd "$work" && ./openads_serverd.exe --install_service $args > install.log 2>&1 )
+              sc start openads_serverd >> "$work/install.log" 2>&1
+              wait_port "$port" 60 && started=1
+            else
+              pushd "$work" > /dev/null
+              ./openads_serverd.exe $args > server.log 2>&1 &
+              SPID=$!
+              popd > /dev/null
+              wait_port "$port" 45 && started=1
+            fi
             if [ "$started" = "1" ]; then
               ( cd "$work" && ./probe.exe "$url" > probe.log 2>&1 ); rc=$?
             else
               echo "SERVER FAILED TO START" > "$work/probe.log"; rc=3
             fi
-            taskkill //F //T //IM openads_serverd.exe > /dev/null 2>&1
-            taskkill //F //T //IM openads_auth_worker.exe > /dev/null 2>&1
-            sleep 2
+            if [ "$mode" = "hrb" ]; then
+              sc stop openads_serverd > /dev/null 2>&1
+              sleep 3
+              ( cd "$work" && ./openads_serverd.exe --uninstall_service >> install.log 2>&1 )
+              sleep 1
+              echo "--- $name install.log:"
+              cat "$work/install.log"
+              cp "$work/install.log" "$L/$name-install.log"
+            else
+              taskkill //F //T //IM openads_serverd.exe > /dev/null 2>&1
+              taskkill //F //T //IM openads_auth_worker.exe > /dev/null 2>&1
+              sleep 2
+              echo "--- $name server.log tail:"
+              tail -30 "$work/server.log"
+              cp "$work/server.log" "$L/$name-server.log"
+            fi
             tail -1 "$work/probe.log" | grep -q "ALL PASS" && verdict=ALL-PASS || verdict=FAIL-OR-INCOMPLETE
             echo "$name rc=$rc verdict=$verdict" | tee -a "$SUMMARY"
-            echo "--- $name server.log tail:"
-            tail -30 "$work/server.log"
             echo "--- $name probe.log:"
             cat "$work/probe.log"
-            cp "$work/server.log" "$L/$name-server.log"
             cp "$work/probe.log" "$L/$name-probe.log"
           }
 

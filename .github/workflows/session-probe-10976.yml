@@ -51,6 +51,9 @@ jobs:
           set -ex
           T=$(cygpath -u "$RUNNER_TEMP")
           echo 'wEhSQgIABAAAAFRFU1RfT05MWQAFAU9BRFNfQVVUSF9WMQABAUxFTgAAAlJFUExJQ0FURQAAAgIAAABURVNUX09OTFkAAQAAAAdPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbACAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALADAGoCAABcBAwCSG4H' | base64 -d > "$T/test_only.hrb"
+          HRBW=$(cygpath -m "$T/test_only.hrb")
+          icacls "$HRBW" //inheritance:r //grant:r "Administrators:F" "SYSTEM:F"
+          icacls "$HRBW"
           ls -la "$T/test_only.hrb"
           sha256sum "$T/test_only.hrb"
 

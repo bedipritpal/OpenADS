@@ -71,6 +71,7 @@ jobs:
       - name: Run the session matrix
         run: |
           set -u
+          set +e
           T=$(cygpath -u "$RUNNER_TEMP")
           K="$T/kits"
           HRB="$T/test_only.hrb"
@@ -92,8 +93,10 @@ jobs:
               url="auth://127.0.0.1:$port/$work/data"
             fi
             echo "=== $name : server=$srvdir probe=$probe dll=$dllname($dllsrc) mode=$mode port=$port"
-            ( cd "$work" && ./openads_serverd.exe $args > server.log 2>&1 & echo $! > srv.pid )
-            SPID=$(cat "$work/srv.pid")
+            pushd "$work" > /dev/null
+            ./openads_serverd.exe $args > server.log 2>&1 &
+            SPID=$!
+            popd > /dev/null
             started=0
             for i in $(seq 1 45); do
               if netstat -ano | grep "TCP" | grep "LISTENING" | grep -q ":$port "; then started=1; break; fi

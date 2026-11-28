@@ -342,7 +342,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-toolchain git
+          install: mingw-w64-x86_64-toolchain git make
 
       - name: Build Harbour 6deac9cf (old Harbour) with the new MSYS2 MINGW64 compiler
         shell: msys2 {0}
@@ -355,7 +355,8 @@ jobs:
           git -C "$RUNNER_TEMP/harbour-server" fetch -q --depth 1 origin 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
           git -C "$RUNNER_TEMP/harbour-server" checkout -q --detach FETCH_HEAD
           export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_BUILD_3RDEXT=no
-          mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
+          if command -v mingw32-make >/dev/null 2>&1; then HB_MAKE=mingw32-make; else HB_MAKE=make; fi
+          "$HB_MAKE" -C "$RUNNER_TEMP/harbour-server" -j2
 
       - name: Build 1.09.76 serverd + worker (new compiler + old Harbour)
         shell: msys2 {0}
@@ -687,10 +688,8 @@ jobs:
           tail -1 "$work/probe.log" | grep -q "ALL PASS"
           echo "TEST-KIT PAIR VERIFIED: session pattern ALL PASS"
 
-      - name: Package and publish the test kit zip to the test branch
+      - name: Package the test kit zip
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           K=openads-1.09.76-tc88-pritpal-test-x64
@@ -713,13 +712,9 @@ jobs:
           (cd kit-out && sha256sum "$K/bin/openads_serverd.exe" "$K/bin/openads_auth_worker.exe" > "$K/SHA256.txt")
           (cd kit-out && 7z a -tzip "../$K.zip" "$K" > /dev/null)
           sha256sum "$K.zip" | tee zip-sha.txt
-          git clone --depth 1 --branch test/10976-session-probe "https://x-access-token:${GH_TOKEN}@github.com/bedipritpal/OpenADS.git" "$RUNNER_TEMP/pub"
-          mkdir -p "$RUNNER_TEMP/pub/kits"
-          cp "$K.zip" "$RUNNER_TEMP/pub/kits/"
-          cd "$RUNNER_TEMP/pub"
-          git config user.name "openads-ci"
-          git config user.email "ci@localhost"
-          git add "kits/$K.zip"
-          git commit -m "Test kit: 1.09.76 auth pair built with the mtfix88 toolchain [skip ci]"
-          git push origin test/10976-session-probe
-          echo "PUBLISHED kits/$K.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openads-1.09.76-tc88-pritpal-test-x64
+          path: openads-1.09.76-tc88-pritpal-test-x64.zip
+          retention-days: 30

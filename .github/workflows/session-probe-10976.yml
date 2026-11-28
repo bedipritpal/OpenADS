@@ -342,7 +342,7 @@ jobs:
         with:
           msystem: MINGW64
           update: false
-          install: mingw-w64-x86_64-toolchain
+          install: mingw-w64-x86_64-toolchain git
 
       - name: Build Harbour 6deac9cf (old Harbour) with the new MSYS2 MINGW64 compiler
         shell: msys2 {0}

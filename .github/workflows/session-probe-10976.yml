@@ -204,7 +204,7 @@ jobs:
         with:
           ref: f31f051c457ae197709bc44106ca0b1c52aaa7d2
 
-      - name: Download pinned winlibs GCC 10.2 (the mtfix88 toolchain)
+      - name: Download pinned winlibs GCC 10.2 x86_64 (the mtfix88 x64kit toolchain, asset 32966472)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -219,29 +219,30 @@ jobs:
             catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
            }
           }
-          Download-Exact 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966370' "$env:RUNNER_TEMP/winlibs.7z"
-          if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'){throw 'Winlibs hash mismatch'}
+          Download-Exact 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' "$env:RUNNER_TEMP/winlibs.7z"
+          if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs hash mismatch'}
           & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
 
       - name: Build Harbour 6deac9cf (the mtfix88 server Harbour)
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
           test "$(gcc -dumpversion)" = 10.2.0
+          test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
           mkdir "$RUNNER_TEMP/harbour-server"
           git -C "$RUNNER_TEMP/harbour-server" init -q
           git -C "$RUNNER_TEMP/harbour-server" remote add origin https://github.com/harbour/core.git
           git -C "$RUNNER_TEMP/harbour-server" fetch -q --depth 1 origin 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
           git -C "$RUNNER_TEMP/harbour-server" checkout -q --detach FETCH_HEAD
-          export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+          export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
           mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
 
       - name: Build 1.09.76 serverd + worker with the mtfix88 toolchain
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
           HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
           cmake -S . -B build-bisect -G Ninja \
             -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
@@ -253,9 +254,9 @@ jobs:
             -DOPENADS_WITH_TLS=ON \
             -DOPENADS_VERSION_FORCE=1.09.76-bisect-tc88 \
             -DOPENADS_WITH_HARBOUR_UDF=ON \
-            -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" \
+            -DHARBOUR_COMPILER="$HB/bin/win/mingw64/harbour.exe" \
             -DHARBOUR_INCLUDE_DIR="$HB/include" \
-            -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" \
+            -DHARBOUR_LIB_DIR="$HB/lib/win/mingw64" \
             -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
             -DOPENADS_WARNINGS_AS_ERRORS=OFF
           cmake --build build-bisect --target openads_serverd openads_auth_worker -j2
@@ -274,7 +275,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
           T=$(cygpath -u "$RUNNER_TEMP")
           mkdir -p "$T/p88/include/openads" "$T/p88/lib"
           cp "$T/kits/x88/mtfix88-x64/include/ace.h" "$T/p88/include/openads/ace.h"

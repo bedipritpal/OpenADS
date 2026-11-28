@@ -6,8 +6,13 @@ name: session-probe-10976
 # Legs 1-4 use challenge auth (auth:// + test_only.hrb, same as production),
 # with the server run as a Windows service (his production mode; also avoids
 # the runner job object constraining the auth worker's job assignment).
-# Legs 5-6 use plain --auth_user TCP auth in console mode (no HRB worker)
+# Legs 5-6: same challenge auth in console mode (service-vs-console check).
+# Legs 7-8 use plain --auth_user TCP auth in console mode (no HRB worker)
 # to isolate the auth-worker/HRB lane from the core session lifecycle.
+# Job bisect-toolchain rebuilds release-1.09.76 source with the pinned
+# mtfix88 toolchain (winlibs GCC 10.2 + Harbour 6deac9cf) and runs the same
+# challenge-auth leg: PASS means the shipped 1.09.76 toolchain/Harbour is the
+# cause; FAIL means a source delta between mtfix88 and 1.09.76 is.
 
 on:
   workflow_dispatch:
@@ -54,8 +59,6 @@ jobs:
           HRBW=$(cygpath -m "$T/test_only.hrb")
           icacls "$HRBW" //inheritance:r //grant:r "Administrators:F" "SYSTEM:F"
           icacls "$HRBW"
-          ls -la "$T/test_only.hrb"
-          sha256sum "$T/test_only.hrb"
 
       - name: Diagnose auth worker spawn on this runner
         run: |
@@ -115,7 +118,7 @@ jobs:
             HRBW=$(cygpath -m "$HRB")
             args="--host 127.0.0.1 --port $port --data $WM/data --auth_user usr:pw"
             url="tcp://127.0.0.1:$port/$WM/data"
-            if [ "$mode" = "hrb" ]; then
+            if [ "$mode" != "plain" ]; then
               args="$args --auth_module $HRBW"
               url="auth://127.0.0.1:$port/$WM/data"
             fi
@@ -172,6 +175,8 @@ jobs:
           run_leg leg76-hrb-repro     "$SRV76" "$T/p76" daemon_probe.exe "$DLL76" ace64.dll     16272 hrb
           run_leg leg76-hrb-clidll88  "$SRV76" "$T/p88" daemon_probe.exe "$DLL88" openace64.dll 16273 hrb
           run_leg leg88-hrb-clidll76  "$SRV88" "$T/p76" daemon_probe.exe "$DLL76" ace64.dll     16274 hrb
+          run_leg leg88-hrb-console   "$SRV88" "$T/p88" daemon_probe.exe "$DLL88" openace64.dll 16275 hrbcon
+          run_leg leg76-hrb-console   "$SRV76" "$T/p76" daemon_probe.exe "$DLL76" ace64.dll     16276 hrbcon
           run_leg leg88-plain-control "$SRV88" "$T/p88" daemon_probe_plain.exe "$DLL88" openace64.dll 16281 plain
           run_leg leg76-plain         "$SRV76" "$T/p76" daemon_probe_plain.exe "$DLL76" ace64.dll     16282 plain
 
@@ -190,3 +195,136 @@ jobs:
           name: session-probe-logs
           path: logs/
           if-no-files-found: warn
+
+  bisect-toolchain:
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f31f051c457ae197709bc44106ca0b1c52aaa7d2
+
+      - name: Download pinned winlibs GCC 10.2 (the mtfix88 toolchain)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          function Download-Exact($url,$out) {
+           for($i=0;$i -lt 4;$i++) {
+            try {
+             $headers=@{Accept='application/octet-stream'}
+             if(([uri]$url).Host -eq 'api.github.com'){$headers.Authorization="Bearer $env:GH_TOKEN"}
+             Invoke-WebRequest -Headers $headers $url -OutFile $out; return
+            }
+            catch { if($i -eq 3){throw}; Start-Sleep -Seconds (5*($i+1)) }
+           }
+          }
+          Download-Exact 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966370' "$env:RUNNER_TEMP/winlibs.7z"
+          if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '019ee601c48069b91101a3af923bf2cdd4399c99b9a1c70b5d59da9cfbb8e907'){throw 'Winlibs hash mismatch'}
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+
+      - name: Build Harbour 6deac9cf (the mtfix88 server Harbour)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+          test "$(gcc -dumpversion)" = 10.2.0
+          mkdir "$RUNNER_TEMP/harbour-server"
+          git -C "$RUNNER_TEMP/harbour-server" init -q
+          git -C "$RUNNER_TEMP/harbour-server" remote add origin https://github.com/harbour/core.git
+          git -C "$RUNNER_TEMP/harbour-server" fetch -q --depth 1 origin 6deac9cf3ad977ae829e5bca543d553b92dd4b6d
+          git -C "$RUNNER_TEMP/harbour-server" checkout -q --detach FETCH_HEAD
+          export HB_PLATFORM=win HB_COMPILER=mingw HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no
+          mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
+
+      - name: Build 1.09.76 serverd + worker with the mtfix88 toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+          HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
+          cmake -S . -B build-bisect -G Ninja \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
+            -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+            -DOPENADS_BUILD_TESTS=OFF \
+            -DOPENADS_WITH_HTTP=OFF \
+            -DOPENADS_WITH_TLS=ON \
+            -DOPENADS_VERSION_FORCE=1.09.76-bisect-tc88 \
+            -DOPENADS_WITH_HARBOUR_UDF=ON \
+            -DHARBOUR_COMPILER="$HB/bin/win/mingw/harbour.exe" \
+            -DHARBOUR_INCLUDE_DIR="$HB/include" \
+            -DHARBOUR_LIB_DIR="$HB/lib/win/mingw" \
+            -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
+            -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build-bisect --target openads_serverd openads_auth_worker -j2
+          ls -la build-bisect/tools/serverd/openads_serverd.exe build-bisect/tools/serverd/openads_auth_worker.exe
+
+      - name: Fetch mtfix88 kit (probe import lib + client DLL)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          T=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$T/kits" && cd "$T/kits"
+          curl -fL --retry 3 -o mtfix88.zip "https://github.com/bedipritpal/OpenADS/releases/download/v1.09.75-mtfix88-full-test/mtfix88-full-x64.zip"
+          unzip -q mtfix88.zip -d x88
+
+      - name: Build probe client against the mtfix88 import lib
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs/mingw32/bin"):$PATH"
+          T=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$T/p88/include/openads" "$T/p88/lib"
+          cp "$T/kits/x88/mtfix88-x64/include/ace.h" "$T/p88/include/openads/ace.h"
+          cp "$T/kits/x88/mtfix88-x64/lib/libopenace64.dll.a" "$T/p88/lib/"
+          curl -fL -o "$T/daemon_probe.cpp" "https://raw.githubusercontent.com/bedipritpal/OpenADS/test/10976-session-probe/tests/ci/session-probe/daemon_probe.cpp"
+          g++ -O1 -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600 -I"$T/p88/include" "$T/daemon_probe.cpp" -o "$T/p88/daemon_probe.exe" -L"$T/p88/lib" -lopenace64
+
+      - name: Run challenge-auth leg against the bisect server (service mode)
+        shell: bash
+        run: |
+          set -u
+          set +e
+          T=$(cygpath -u "$RUNNER_TEMP")
+          echo 'wEhSQgIABAAAAFRFU1RfT05MWQAFAU9BRFNfQVVUSF9WMQABAUxFTgAAAlJFUExJQ0FURQAAAgIAAABURVNUX09OTFkAAQAAAAdPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbACAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALADAGoCAABcBAwCSG4H' | base64 -d > "$T/test_only.hrb"
+          HRBW=$(cygpath -m "$T/test_only.hrb")
+          icacls "$HRBW" //inheritance:r //grant:r "Administrators:F" "SYSTEM:F"
+          work="$T/run/bisect"; rm -rf "$work"; mkdir -p "$work/data"
+          WM=$(cygpath -m "$work")
+          cp "$T/p88/daemon_probe.exe" "$work/probe.exe"
+          cp "$T/kits/x88/mtfix88-x64/bin/openace64.dll" "$work/"
+          cp build-bisect/tools/serverd/openads_serverd.exe "$work/"
+          cp build-bisect/tools/serverd/openads_auth_worker.exe "$work/"
+          args="--host 127.0.0.1 --port 16291 --data $WM/data --auth_user usr:pw --auth_module $HRBW"
+          url="auth://127.0.0.1:16291/$WM/data"
+          sc stop openads_serverd > /dev/null 2>&1
+          sc delete openads_serverd > /dev/null 2>&1
+          sleep 1
+          ( cd "$work" && ./openads_serverd.exe --install_service $args > install.log 2>&1 )
+          sc start openads_serverd >> "$work/install.log" 2>&1
+          started=0
+          for i in $(seq 1 60); do
+            netstat -ano | grep "TCP" | grep "LISTENING" | grep -q ":16291 " && { started=1; break; }
+            sleep 1
+          done
+          if [ "$started" = "1" ]; then
+            ( cd "$work" && ./probe.exe "$url" > probe.log 2>&1 ); rc=$?
+          else
+            echo "SERVER FAILED TO START" > "$work/probe.log"; rc=3
+          fi
+          sc stop openads_serverd > /dev/null 2>&1
+          sleep 3
+          ( cd "$work" && ./openads_serverd.exe --uninstall_service >> install.log 2>&1 )
+          echo "--- install.log:"
+          cat "$work/install.log"
+          echo "--- probe.log:"
+          cat "$work/probe.log"
+          if tail -1 "$work/probe.log" | grep -q "ALL PASS"; then
+            verdict="BISECT PASS: 1.09.76 source + mtfix88 toolchain works -> the shipped 1.09.76 toolchain/Harbour is the cause"
+          else
+            verdict="BISECT FAIL: 1.09.76 source + mtfix88 toolchain also fails -> a source delta is the cause"
+          fi
+          echo "$verdict"
+          { echo "# Bisect result"; echo; echo "$verdict"; } >> "$GITHUB_STEP_SUMMARY"

@@ -61,7 +61,7 @@ jobs:
           cp "$K/x88/mtfix88-x64/lib/libopenace64.dll.a" "$T/p88/lib/"
           cp -r "$K/x76/include/." "$T/p76/include/"
           cp "$K/x76/lib/mingw/libace64.a" "$T/p76/lib/"
-          CXXFLAGS="-O1 -static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600"
+          CXXFLAGS="-O1 -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600"
           for src in daemon_probe daemon_probe_plain; do
             g++ $CXXFLAGS -I"$T/p88/include" "tests/ci/session-probe/$src.cpp" -o "$T/p88/$src.exe" -L"$T/p88/lib" -lopenace64
             g++ $CXXFLAGS -I"$T/p76/include" "tests/ci/session-probe/$src.cpp" -o "$T/p76/$src.exe" -L"$T/p76/lib" -lace64

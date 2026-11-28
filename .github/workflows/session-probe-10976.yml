@@ -1,0 +1,141 @@
+name: session-probe-10976
+
+# Session regression probe for the 1.09.76 one-session bug, against the
+# SHIPPED kits (mtfix88 control vs 1.09.76), on real Windows.
+# Pattern per leg: A login, B concurrent login, close A, C login.
+# Legs 1-4 use challenge auth (auth:// + test_only.hrb, same as production).
+# Legs 5-6 use plain --auth_user TCP auth (no HRB worker) to isolate the
+# auth-worker/HRB lane from the core session lifecycle.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            unzip
+
+      - name: Download and extract the shipped kits
+        run: |
+          set -ex
+          T=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$T/kits" && cd "$T/kits"
+          curl -fL --retry 3 -o mtfix88.zip "https://github.com/bedipritpal/OpenADS/releases/download/v1.09.75-mtfix88-full-test/mtfix88-full-x64.zip"
+          curl -fL --retry 3 -o 10976.zip "https://github.com/bedipritpal/OpenADS/releases/download/release-1.09.76/openads-1.09.76-windows-x64.zip"
+          sha256sum mtfix88.zip 10976.zip
+          mkdir -p x88 x76
+          unzip -q mtfix88.zip -d x88
+          unzip -q 10976.zip -d x76
+          ls -la x88/mtfix88-x64/bin x76/auth x76
+
+      - name: Write the test-only HRB auth module
+        run: |
+          set -ex
+          T=$(cygpath -u "$RUNNER_TEMP")
+          echo 'wEhSQgIABAAAAFRFU1RfT05MWQAFAU9BRFNfQVVUSF9WMQABAUxFTgAAAlJFUExJQ0FURQAAAgIAAABURVNUX09OTFkAAQAAAAdPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbACAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALADAGoCAABcBAwCSG4H' | base64 -d > "$T/test_only.hrb"
+          ls -la "$T/test_only.hrb"
+
+      - name: Build the probe clients against each kit's own import lib
+        run: |
+          set -ex
+          T=$(cygpath -u "$RUNNER_TEMP")
+          K="$T/kits"
+          mkdir -p "$T/p88/include/openads" "$T/p88/lib" "$T/p76/include" "$T/p76/lib"
+          cp "$K/x88/mtfix88-x64/include/ace.h" "$T/p88/include/openads/ace.h"
+          cp "$K/x88/mtfix88-x64/lib/libopenace64.dll.a" "$T/p88/lib/"
+          cp -r "$K/x76/include/." "$T/p76/include/"
+          cp "$K/x76/lib/mingw/libace64.a" "$T/p76/lib/"
+          CXXFLAGS="-O1 -static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600"
+          for src in daemon_probe daemon_probe_plain; do
+            g++ $CXXFLAGS -I"$T/p88/include" "tests/ci/session-probe/$src.cpp" -o "$T/p88/$src.exe" -L"$T/p88/lib" -lopenace64
+            g++ $CXXFLAGS -I"$T/p76/include" "tests/ci/session-probe/$src.cpp" -o "$T/p76/$src.exe" -L"$T/p76/lib" -lace64
+          done
+          ls -la "$T/p88" "$T/p76"
+
+      - name: Run the session matrix
+        run: |
+          set -u
+          T=$(cygpath -u "$RUNNER_TEMP")
+          K="$T/kits"
+          HRB="$T/test_only.hrb"
+          L=$(cygpath -u "$GITHUB_WORKSPACE")/logs
+          mkdir -p "$L"
+          SUMMARY="$L/summary.txt"; : > "$SUMMARY"
+
+          run_leg () {
+            name="$1"; srvdir="$2"; probedir="$3"; probe="$4"; dllsrc="$5"; dllname="$6"; port="$7"; mode="$8"
+            work="$T/run/$name"; rm -rf "$work"; mkdir -p "$work/data"
+            cp "$probedir/$probe" "$work/probe.exe"
+            cp "$dllsrc" "$work/$dllname"
+            cp "$srvdir/openads_serverd.exe" "$work/"
+            [ -f "$srvdir/openads_auth_worker.exe" ] && cp "$srvdir/openads_auth_worker.exe" "$work/"
+            args="--host 127.0.0.1 --port $port --data $work/data --auth_user usr:pw"
+            url="tcp://127.0.0.1:$port/$work/data"
+            if [ "$mode" = "hrb" ]; then
+              args="$args --auth_module $HRB"
+              url="auth://127.0.0.1:$port/$work/data"
+            fi
+            echo "=== $name : server=$srvdir probe=$probe dll=$dllname($dllsrc) mode=$mode port=$port"
+            ( cd "$work" && ./openads_serverd.exe $args > server.log 2>&1 & echo $! > srv.pid )
+            SPID=$(cat "$work/srv.pid")
+            started=0
+            for i in $(seq 1 45); do
+              if netstat -ano | grep "TCP" | grep "LISTENING" | grep -q ":$port "; then started=1; break; fi
+              kill -0 "$SPID" 2>/dev/null || break
+              sleep 1
+            done
+            if [ "$started" = "1" ]; then
+              ( cd "$work" && ./probe.exe "$url" > probe.log 2>&1 ); rc=$?
+            else
+              echo "SERVER FAILED TO START" > "$work/probe.log"; rc=3
+            fi
+            taskkill //F //T //IM openads_serverd.exe > /dev/null 2>&1
+            taskkill //F //T //IM openads_auth_worker.exe > /dev/null 2>&1
+            sleep 2
+            tail -1 "$work/probe.log" | grep -q "ALL PASS" && verdict=ALL-PASS || verdict=FAIL-OR-INCOMPLETE
+            echo "$name rc=$rc verdict=$verdict" | tee -a "$SUMMARY"
+            sed 's/^/    /' "$work/probe.log" | tee -a "$L/$name-probe.log" > /dev/null
+            cp "$work/server.log" "$L/$name-server.log"
+            cp "$work/probe.log" "$L/$name-probe.log.raw"
+          }
+
+          SRV88="$K/x88/mtfix88-x64/bin"
+          SRV76="$K/x76/auth"
+          DLL88="$K/x88/mtfix88-x64/bin/openace64.dll"
+          DLL76="$K/x76/ace64.dll"
+
+          run_leg leg88-hrb-control   "$SRV88" "$T/p88" daemon_probe.exe "$DLL88" openace64.dll 16271 hrb
+          run_leg leg76-hrb-repro     "$SRV76" "$T/p76" daemon_probe.exe "$DLL76" ace64.dll     16272 hrb
+          run_leg leg76-hrb-clidll88  "$SRV76" "$T/p88" daemon_probe.exe "$DLL88" openace64.dll 16273 hrb
+          run_leg leg88-hrb-clidll76  "$SRV88" "$T/p76" daemon_probe.exe "$DLL76" ace64.dll     16274 hrb
+          run_leg leg88-plain-control "$SRV88" "$T/p88" daemon_probe_plain.exe "$DLL88" openace64.dll 16281 plain
+          run_leg leg76-plain         "$SRV76" "$T/p76" daemon_probe_plain.exe "$DLL76" ace64.dll     16282 plain
+
+          echo "=== SUMMARY ==="
+          cat "$SUMMARY"
+
+      - name: Step summary
+        if: always()
+        run: |
+          L=$(cygpath -u "$GITHUB_WORKSPACE")/logs
+          { echo "# Session probe matrix results"; echo; echo '```'; cat "$L/summary.txt" 2>/dev/null || echo "no summary"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: session-probe-logs
+          path: logs/
+          if-no-files-found: warn

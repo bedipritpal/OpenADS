@@ -566,3 +566,160 @@ jobs:
           fi
           echo "$verdict"
           { echo "# Bisect result"; echo; echo "$verdict"; } >> "$GITHUB_STEP_SUMMARY"
+
+  package-kit:
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f31f051c457ae197709bc44106ca0b1c52aaa7d2
+
+      - name: Download pinned winlibs GCC 10.2 x86_64 (the mtfix88 x64kit toolchain, asset 32966472)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $headers=@{Accept='application/octet-stream';Authorization="Bearer $env:GH_TOKEN"}
+          Invoke-WebRequest -Headers $headers 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' -OutFile "$env:RUNNER_TEMP/winlibs.7z"
+          if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs hash mismatch'}
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
+
+      - name: Build Harbour 694428e1 (shipped-76 Harbour + rddads patch) with GCC 10.2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+          test "$(gcc -dumpversion)" = 10.2.0
+          test "$(gcc -dumpmachine)" = x86_64-w64-mingw32
+          mkdir "$RUNNER_TEMP/harbour-server"
+          git -C "$RUNNER_TEMP/harbour-server" init -q
+          git -C "$RUNNER_TEMP/harbour-server" fetch -q --depth 1 https://github.com/harbour/core.git 694428e1c12f726675b19324d62167fa77d68185
+          git -C "$RUNNER_TEMP/harbour-server" checkout -q --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/harbour-server" apply --check "$GITHUB_WORKSPACE/patches/harbour/rddads-pending-fields.patch"
+          git -C "$RUNNER_TEMP/harbour-server" apply "$GITHUB_WORKSPACE/patches/harbour/rddads-pending-fields.patch"
+          export HB_PLATFORM=win HB_COMPILER=mingw64 HB_BUILD_CONTRIBS=no HB_BUILD_DYN=no HB_BUILD_3RDEXT=no
+          mingw32-make -C "$RUNNER_TEMP/harbour-server" -j2
+
+      - name: Build the 1.09.76 server pair (test kit)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+          HB="$(cygpath -m "$RUNNER_TEMP/harbour-server")"
+          cmake -S . -B build-bisect -G Ninja \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0600 -DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0600 \
+            -DCMAKE_SHARED_LINKER_FLAGS="-static -static-libgcc -static-libstdc++" \
+            -DOPENADS_BUILD_TESTS=OFF \
+            -DOPENADS_WITH_HTTP=OFF \
+            -DOPENADS_WITH_TLS=ON \
+            -DOPENADS_VERSION_FORCE=1.09.76-tc88-test \
+            -DOPENADS_WITH_HARBOUR_UDF=ON \
+            -DHARBOUR_COMPILER="$HB/bin/win/mingw64/harbour.exe" \
+            -DHARBOUR_INCLUDE_DIR="$HB/include" \
+            -DHARBOUR_LIB_DIR="$HB/lib/win/mingw64" \
+            -DOPENADS_HARBOUR_LIBS="hbvmmt;hbrtl;hbmacro;hbpcre;hblang;hbcpage;hbrdd;rddfpt;rddntx;hbsix;hbcommon" \
+            -DOPENADS_WARNINGS_AS_ERRORS=OFF
+          cmake --build build-bisect --target openads_serverd openads_auth_worker -j2
+          ls -la build-bisect/tools/serverd/openads_serverd.exe build-bisect/tools/serverd/openads_auth_worker.exe
+
+      - name: Fetch mtfix88 kit (probe import lib + client DLL)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          T=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$T/kits" && cd "$T/kits"
+          curl -fL --retry 3 -o mtfix88.zip "https://github.com/bedipritpal/OpenADS/releases/download/v1.09.75-mtfix88-full-test/mtfix88-full-x64.zip"
+          unzip -q mtfix88.zip -d x88
+
+      - name: Build probe client against the mtfix88 import lib
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$(cygpath -u "$RUNNER_TEMP/winlibs64/mingw64/bin"):$PATH"
+          T=$(cygpath -u "$RUNNER_TEMP")
+          mkdir -p "$T/p88/include/openads" "$T/p88/lib"
+          cp "$T/kits/x88/mtfix88-x64/include/ace.h" "$T/p88/include/openads/ace.h"
+          cp "$T/kits/x88/mtfix88-x64/lib/libopenace64.dll.a" "$T/p88/lib/"
+          curl -fL -o "$T/daemon_probe.cpp" "https://raw.githubusercontent.com/bedipritpal/OpenADS/test/10976-session-probe/tests/ci/session-probe/daemon_probe.cpp"
+          g++ -O1 -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0600 -I"$T/p88/include" "$T/daemon_probe.cpp" -o "$T/p88/daemon_probe.exe" -L"$T/p88/lib" -lopenace64
+
+      - name: Verify the test-kit pair passes the session pattern (service mode)
+        shell: bash
+        run: |
+          set -euo pipefail
+          T=$(cygpath -u "$RUNNER_TEMP")
+          echo 'wEhSQgIABAAAAFRFU1RfT05MWQAFAU9BRFNfQVVUSF9WMQABAUxFTgAAAlJFUExJQ0FURQAAAgIAAABURVNUX09OTFkAAQAAAAdPQURTX0FVVEhfVjEAhgAAAA0AAyQCAF8CagVoYW5nAAgcByQDABn9JAYAXwJqCm1hbGZvcm1lZAAIHAgkBwB4bgckCQBfAl8Bagp0ZXN0LW9ubHkASAgcJbACAF8DDAF5DxwaJAoAahFPQVVUSAEBAwB1c3ICAHB3AG4HJAwAaghPQVVUSAEAALADAGoCAABcBAwCSG4H' | base64 -d > "$T/test_only.hrb"
+          HRBW=$(cygpath -m "$T/test_only.hrb")
+          icacls "$HRBW" //inheritance:r //grant:r "Administrators:F" "SYSTEM:F"
+          work="$T/run/pkg"; rm -rf "$work"; mkdir -p "$work/data"
+          WM=$(cygpath -m "$work")
+          cp "$T/p88/daemon_probe.exe" "$work/probe.exe"
+          cp "$T/kits/x88/mtfix88-x64/bin/openace64.dll" "$work/"
+          cp build-bisect/tools/serverd/openads_serverd.exe "$work/"
+          cp build-bisect/tools/serverd/openads_auth_worker.exe "$work/"
+          args="--host 127.0.0.1 --port 16294 --data $WM/data --auth_user usr:pw --auth_module $HRBW"
+          url="auth://127.0.0.1:16294/$WM/data"
+          sc stop openads_serverd > /dev/null 2>&1 || true
+          sc delete openads_serverd > /dev/null 2>&1 || true
+          sleep 1
+          ( cd "$work" && ./openads_serverd.exe --install_service $args > install.log 2>&1 )
+          sc start openads_serverd >> "$work/install.log" 2>&1
+          started=0
+          for i in $(seq 1 60); do
+            netstat -ano | grep "TCP" | grep "LISTENING" | grep -q ":16294 " && { started=1; break; }
+            sleep 1
+          done
+          if [ "$started" = "1" ]; then
+            ( cd "$work" && ./probe.exe "$url" > probe.log 2>&1 ) || true
+          else
+            echo "SERVER FAILED TO START" > "$work/probe.log"
+          fi
+          sc stop openads_serverd > /dev/null 2>&1 || true
+          sleep 3
+          ( cd "$work" && ./openads_serverd.exe --uninstall_service >> install.log 2>&1 ) || true
+          echo "--- install.log:"
+          cat "$work/install.log"
+          echo "--- probe.log:"
+          cat "$work/probe.log"
+          tail -1 "$work/probe.log" | grep -q "ALL PASS"
+          echo "TEST-KIT PAIR VERIFIED: session pattern ALL PASS"
+
+      - name: Package and publish the test kit zip to the test branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          K=openads-1.09.76-tc88-pritpal-test-x64
+          rm -rf kit-out; mkdir -p "kit-out/$K/bin"
+          cp build-bisect/tools/serverd/openads_serverd.exe "kit-out/$K/bin/"
+          cp build-bisect/tools/serverd/openads_auth_worker.exe "kit-out/$K/bin/"
+          cat > "kit-out/$K/README.txt" <<'EOT'
+          OpenADS 1.09.76 TEST server pair (x64) - NOT A RELEASE.
+          Built from release-1.09.76 source (f31f051c) with the pinned mtfix88
+          x64 toolchain: winlibs GCC 10.2 (mingw-w64 8.0.0) + Harbour 694428e1
+          with the rddads-pending-fields patch. Version stamp 1.09.76-tc88-test.
+          Reason: the shipped 1.09.76 auth pair (MSYS2 GCC 16.2 / mingw-w64 14)
+          rejects challenge-auth logins (rc=5172); this pair passes the
+          A / concurrent B / close A / C session pattern on Windows as a service.
+          Use: stop the 1.09.76 test service, replace openads_serverd.exe and
+          openads_auth_worker.exe side by side (keep your .hrb and INI), start,
+          test. Production stays on mtfix88. Report pass/fail before any rollout.
+          EOT
+          sed -i 's/^          //' "kit-out/$K/README.txt"
+          (cd kit-out && sha256sum "$K/bin/openads_serverd.exe" "$K/bin/openads_auth_worker.exe" > "$K/SHA256.txt")
+          (cd kit-out && 7z a -tzip "../$K.zip" "$K" > /dev/null)
+          sha256sum "$K.zip" | tee zip-sha.txt
+          git clone --depth 1 --branch test/10976-session-probe "https://x-access-token:${GH_TOKEN}@github.com/bedipritpal/OpenADS.git" "$RUNNER_TEMP/pub"
+          mkdir -p "$RUNNER_TEMP/pub/kits"
+          cp "$K.zip" "$RUNNER_TEMP/pub/kits/"
+          cd "$RUNNER_TEMP/pub"
+          git config user.name "openads-ci"
+          git config user.email "ci@localhost"
+          git add "kits/$K.zip"
+          git commit -m "Test kit: 1.09.76 auth pair built with the mtfix88 toolchain [skip ci]"
+          git push origin test/10976-session-probe
+          echo "PUBLISHED kits/$K.zip"

@@ -9,6 +9,9 @@ name: session-probe-10976
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - 'test/10976-session-probe'
 
 jobs:
   probe:

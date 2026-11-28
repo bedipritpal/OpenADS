@@ -221,7 +221,7 @@ jobs:
           }
           Download-Exact 'https://api.github.com/repos/brechtsanders/winlibs_mingw/releases/assets/32966472' "$env:RUNNER_TEMP/winlibs.7z"
           if((Get-FileHash "$env:RUNNER_TEMP/winlibs.7z" -Algorithm SHA256).Hash.ToLower() -ne '1e525afc8a3362a1054d7a9a44c8f496a7a652b224b79dbf4b6e5ca8c1012b74'){throw 'Winlibs hash mismatch'}
-          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs" -y
+          & 7z x "$env:RUNNER_TEMP/winlibs.7z" "-o$env:RUNNER_TEMP/winlibs64" -y
 
       - name: Build Harbour 6deac9cf (the mtfix88 server Harbour)
         shell: bash

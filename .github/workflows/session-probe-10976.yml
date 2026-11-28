@@ -86,11 +86,13 @@ jobs:
             cp "$dllsrc" "$work/$dllname"
             cp "$srvdir/openads_serverd.exe" "$work/"
             [ -f "$srvdir/openads_auth_worker.exe" ] && cp "$srvdir/openads_auth_worker.exe" "$work/"
-            args="--host 127.0.0.1 --port $port --data $work/data --auth_user usr:pw"
-            url="tcp://127.0.0.1:$port/$work/data"
+            WM=$(cygpath -m "$work")
+            HRBW=$(cygpath -m "$HRB")
+            args="--host 127.0.0.1 --port $port --data $WM/data --auth_user usr:pw"
+            url="tcp://127.0.0.1:$port/$WM/data"
             if [ "$mode" = "hrb" ]; then
-              args="$args --auth_module $HRB"
-              url="auth://127.0.0.1:$port/$work/data"
+              args="$args --auth_module $HRBW"
+              url="auth://127.0.0.1:$port/$WM/data"
             fi
             echo "=== $name : server=$srvdir probe=$probe dll=$dllname($dllsrc) mode=$mode port=$port"
             pushd "$work" > /dev/null
@@ -113,9 +115,12 @@ jobs:
             sleep 2
             tail -1 "$work/probe.log" | grep -q "ALL PASS" && verdict=ALL-PASS || verdict=FAIL-OR-INCOMPLETE
             echo "$name rc=$rc verdict=$verdict" | tee -a "$SUMMARY"
-            sed 's/^/    /' "$work/probe.log" | tee -a "$L/$name-probe.log" > /dev/null
+            echo "--- $name server.log tail:"
+            tail -30 "$work/server.log"
+            echo "--- $name probe.log:"
+            cat "$work/probe.log"
             cp "$work/server.log" "$L/$name-server.log"
-            cp "$work/probe.log" "$L/$name-probe.log.raw"
+            cp "$work/probe.log" "$L/$name-probe.log"
           }
 
           SRV88="$K/x88/mtfix88-x64/bin"
